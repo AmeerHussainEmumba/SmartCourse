@@ -1,0 +1,414 @@
+openapi: 3.0.3
+info:
+  title: SmartCourse API
+  version: "0.1.0"
+  description: >
+    Course delivery platform backend. This file is the contract (RFC §15.1)
+    and is grown module by module as they're implemented — see
+    docs/rfc/smartcourse-rfc.md §15 for conventions (keyset pagination,
+    error shape, Idempotency-Key) and docs/rfc/smartcourse-prd.md for
+    product context. Endpoints not yet built (publishing workflow status,
+    certificates, analytics, admin/audit beyond role change) are not listed
+    here — an absent path means "not built yet," not "undocumented."
+servers:
+  - url: /api/v1
+
+paths:
+  /auth/register:
+    post:
+      summary: Register a new student account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResponse' } } } }
+        '409': { description: Email already registered, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /auth/login:
+    post:
+      summary: Log in
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResponse' } } } }
+        '401': { description: Invalid credentials, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: Account suspended, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /auth/refresh:
+    post:
+      summary: Rotate a refresh token for a new access token (ADR-0015)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [refresh_token], properties: { refresh_token: { type: string } } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResponse' } } } }
+        '401': { description: Invalid, expired, or reused token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /auth/logout:
+    post:
+      summary: Revoke a refresh token (idempotent)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [refresh_token], properties: { refresh_token: { type: string } } } } }
+      responses:
+        '204': { description: No Content }
+
+  /auth/password-reset/request:
+    post:
+      summary: Request a password reset email (DR-008)
+      description: Always returns 202, whether or not the email exists (RFC §11.3 — no enumeration).
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [email], properties: { email: { type: string, format: email } } } } }
+      responses:
+        '202': { description: Accepted }
+
+  /auth/password-reset/confirm:
+    post:
+      summary: Confirm a password reset. Revokes all refresh tokens and bumps token_version on success.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, new_password]
+              properties: { token: { type: string }, new_password: { type: string, minLength: 8 } }
+      responses:
+        '204': { description: No Content }
+        '401': { description: Invalid or expired token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /auth/verify-email/resend:
+    post:
+      summary: Resend the email verification link (DR-008)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [email], properties: { email: { type: string, format: email } } } } }
+      responses:
+        '202': { description: Accepted }
+
+  /auth/verify-email/confirm:
+    get:
+      summary: Confirm email verification
+      parameters:
+        - { name: token, in: query, required: true, schema: { type: string } }
+      responses:
+        '204': { description: No Content }
+        '401': { description: Invalid or expired token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /me:
+    get:
+      summary: Get the current user's profile
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+    patch:
+      summary: Update the current user's profile
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [full_name], properties: { full_name: { type: string } } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+
+  /admin/users/{id}/role:
+    patch:
+      summary: Change a user's role/status (admin only; ADR-0015 addendum applies)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role, status]
+              properties:
+                role: { type: string, enum: [student, instructor, admin] }
+                status: { type: string, enum: [active, suspended, deleted] }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+        '401': { description: "Token stale — token_version mismatch (ADR-0015 addendum)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: Not an admin, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /courses:
+    get:
+      summary: Catalogue — published courses, keyset-paginated (RFC §13.2)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+        - { name: cursor, in: query, schema: { type: string }, description: Opaque cursor from a previous response's next_cursor }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogueResponse' } } } }
+    post:
+      summary: Create a course (instructor only) — also creates its initial draft version
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateCourseRequest' } } }
+      responses:
+        '201': { description: Created }
+        '409': { description: Slug already in use, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /courses/{slug}:
+    get:
+      summary: Published course detail — version, modules, lessons
+      parameters:
+        - { name: slug, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CourseDetail' } } } }
+        '404': { description: Not found or not published, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /courses/{id}:
+    patch:
+      summary: Update the draft version (instructor, owner only)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/UpdateDraftRequest' } } }
+      responses:
+        '200': { description: OK }
+        '403': { description: Not the owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /courses/{id}/modules:
+    post:
+      summary: Add a module to the draft (instructor, owner only)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, position]
+              properties: { title: { type: string }, position: { type: integer, minimum: 1 } }
+      responses:
+        '201': { description: Created }
+
+  /modules/{id}/lessons:
+    post:
+      summary: Add a lesson to a module in the draft (instructor, owner only)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateLessonRequest' } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Lesson' } } } }
+
+  /modules/{id}:
+    delete:
+      summary: Delete a module (instructor, owner only)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '204': { description: No Content } }
+
+  /lessons/{id}:
+    delete:
+      summary: Delete a lesson (instructor, owner only)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '204': { description: No Content } }
+
+  /courses/{id}/publish:
+    post:
+      summary: >
+        Publish the draft (instructor, owner only). Synchronous in M1 —
+        validates then atomically promotes (ADR-0010). Replaced by an
+        async Temporal-backed flow in M2; the response shape is expected
+        to change to 202 + workflow ID at that point (RFC §7.5).
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: Published, content: { application/json: { schema: { $ref: '#/components/schemas/Version' } } } }
+        '409': { description: "Validation failed (e.g. no modules), or already publishing", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /enrollments:
+    get:
+      summary: List the current student's enrollments
+      security: [{ bearerAuth: [] }]
+      responses: { '200': { description: OK } }
+    post:
+      summary: Enroll in a course (RFC §8.1, ADR-0012)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [course_id], properties: { course_id: { type: string, format: uuid } } } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Enrollment' } } } }
+        '409': { description: "already_enrolled | course_full | course_not_published | prerequisite_not_met", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /enrollments/{id}:
+    get:
+      summary: Get an enrollment (owner only)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Enrollment' } } } }
+        '403': { description: Not your enrollment, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    delete:
+      summary: Withdraw (owner only)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '204': { description: No Content } }
+
+  /enrollments/{id}/progress:
+    get:
+      summary: Get lesson-level progress for an enrollment (owner only)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: OK } }
+
+  /enrollments/{id}/lessons/{lessonKey}/complete:
+    put:
+      summary: Mark a lesson complete (idempotent, RFC §8.3). Transitions the enrollment to completed once every lesson in the current published version is done.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: lessonKey, in: path, required: true, schema: { type: string, format: uuid }, description: "lessons.lesson_key — NOT lessons.id (ADR-0011)" }
+      responses: { '204': { description: No Content } }
+
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        code: { type: string }
+        message: { type: string }
+        details: {}
+
+    RegisterRequest:
+      type: object
+      required: [email, password, full_name]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8 }
+        full_name: { type: string }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties: { email: { type: string, format: email }, password: { type: string } }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        full_name: { type: string }
+        role: { type: string, enum: [student, instructor, admin] }
+        email_verified_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    AuthResponse:
+      type: object
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        expires_in: { type: integer }
+        user: { $ref: '#/components/schemas/User' }
+
+    CreateCourseRequest:
+      type: object
+      required: [title, slug]
+      properties:
+        title: { type: string }
+        slug: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+        description: { type: string }
+        category: { type: string, nullable: true }
+        level: { type: string, enum: [beginner, intermediate, advanced], nullable: true }
+        enrollment_limit: { type: integer, nullable: true, minimum: 1 }
+
+    UpdateDraftRequest:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string }
+        description: { type: string }
+        category: { type: string, nullable: true }
+        level: { type: string, enum: [beginner, intermediate, advanced], nullable: true }
+        tags: { type: array, items: { type: string } }
+
+    CreateLessonRequest:
+      type: object
+      required: [title, position, content_type]
+      properties:
+        title: { type: string }
+        position: { type: integer, minimum: 1 }
+        content_type: { type: string, enum: [video, text, pdf, link] }
+        content: { type: object }
+        asset_key: { type: string, nullable: true }
+        duration_s: { type: integer, minimum: 0 }
+
+    Lesson:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        lesson_key: { type: string, format: uuid, description: "Stable across versions (ADR-0011) — use this, not id, for the completion endpoint" }
+        position: { type: integer }
+        title: { type: string }
+        content_type: { type: string }
+        content: { type: object }
+        duration_s: { type: integer }
+
+    Version:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        state: { type: string, enum: [draft, publishing, ready, publish_failed, superseded] }
+        title: { type: string }
+        description: { type: string }
+        category: { type: string, nullable: true }
+        level: { type: string, nullable: true }
+        tags: { type: array, items: { type: string } }
+
+    CourseDetail:
+      type: object
+      properties:
+        course: { type: object }
+        version: { $ref: '#/components/schemas/Version' }
+        modules:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              position: { type: integer }
+              title: { type: string }
+              lessons: { type: array, items: { $ref: '#/components/schemas/Lesson' } }
+
+    CatalogueResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              course_id: { type: string, format: uuid }
+              slug: { type: string }
+              title: { type: string }
+              instructor_name: { type: string }
+              category: { type: string, nullable: true }
+              level: { type: string, nullable: true }
+              enrollment_count: { type: integer }
+        next_cursor: { type: string, nullable: true }
+
+    Enrollment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        course_id: { type: string, format: uuid }
+        status: { type: string, enum: [active, completed, withdrawn] }
+        enrolled_at: { type: string, format: date-time }
+        withdrawn_at: { type: string, format: date-time, nullable: true }
