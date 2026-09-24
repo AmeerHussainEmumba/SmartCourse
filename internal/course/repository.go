@@ -228,7 +228,7 @@ func (r *Repository) ListCatalogue(ctx context.Context, limit int, afterCreatedA
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []CatalogueRow
 	for rows.Next() {

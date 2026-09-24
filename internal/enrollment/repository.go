@@ -103,12 +103,12 @@ func initializeProgress(ctx context.Context, tx *gorm.DB, enrollmentID, publishe
 	for rows.Next() {
 		var key uuid.UUID
 		if err := rows.Scan(&key); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return fmt.Errorf("scan lesson key: %w", err)
 		}
 		lessonKeys = append(lessonKeys, key)
 	}
-	rows.Close()
+	_ = rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
