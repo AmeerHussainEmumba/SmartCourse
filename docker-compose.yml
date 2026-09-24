@@ -1,0 +1,151 @@
+name: smartcourse
+
+# Compose profiles (ADR-0018): a contributor working on enrollment logic
+# starts two containers, not a dozen. Every service lists every profile tier
+# it belongs to; `make dev-core` starts only `core`, `make dev-full` starts
+# everything. See README.md and docs/rfc/smartcourse-rfc.md §17.1.
+
+x-profiles-core: &profiles-core [core, workflow, events, observability, full]
+x-profiles-workflow: &profiles-workflow [workflow, events, observability, full]
+x-profiles-events: &profiles-events [events, observability, full]
+x-profiles-observability: &profiles-observability [observability, full]
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    profiles: *profiles-core
+    environment:
+      POSTGRES_USER: smartcourse
+      POSTGRES_PASSWORD: smartcourse
+      POSTGRES_DB: smartcourse
+    # Mapped off the Postgres default (5432) to avoid colliding with other
+    # local projects' containers — the application always connects via
+    # POSTGRES_DSN (env.example), so this is a host-side convenience only.
+    ports: ["5433:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smartcourse -d smartcourse"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    profiles: *profiles-core
+    ports: ["6380:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    profiles: *profiles-core
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: smartcourse
+      MINIO_ROOT_PASSWORD: smartcourse123
+    ports:
+      - "9002:9000" # S3 API
+      - "9003:9001" # console
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:latest
+    profiles: *profiles-core
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 smartcourse smartcourse123 &&
+      mc mb -p local/smartcourse-assets &&
+      exit 0
+      "
+
+  temporal:
+    image: temporalio/auto-setup:latest
+    profiles: *profiles-workflow
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: smartcourse
+      POSTGRES_PWD: smartcourse
+      POSTGRES_SEEDS: postgres
+    ports: ["7233:7233"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  temporal-ui:
+    image: temporalio/ui:latest
+    profiles: *profiles-workflow
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+    ports: ["8088:8080"]
+    depends_on: [temporal]
+
+  kafka:
+    image: apache/kafka:3.7.0
+    profiles: *profiles-events
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports: ["29092:29092"]
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.0
+    profiles: *profiles-events
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:9092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    ports: ["8081:8081"]
+    depends_on: [kafka]
+
+  mongodb:
+    image: mongo:7
+    profiles: *profiles-events
+    ports: ["27017:27017"]
+
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: *profiles-observability
+    volumes:
+      - ./deploy/prometheus:/etc/prometheus
+    ports: ["9090:9090"]
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles: *profiles-observability
+    volumes:
+      - ./deploy/grafana:/etc/grafana/provisioning
+    ports: ["3001:3000"]
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    profiles: *profiles-observability
+    ports:
+      - "16686:16686" # UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+
+volumes:
+  pgdata:
+  miniodata:
