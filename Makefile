@@ -1,6 +1,18 @@
 SHELL := /bin/bash
 MIGRATE := go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
-DSN ?= $(shell grep -E '^POSTGRES_DSN=' .env 2>/dev/null | cut -d= -f2-)
+
+# Load .env into every recipe's environment, if it exists — plain Go has no
+# built-in dotenv support (that's a Node/Python convention, not a Go or Make
+# one), so without this, `go run` here would see none of it. `include`
+# parses KEY=value lines as Make variables; `export` re-exports every
+# variable Make knows (not just ones from this file) to child processes,
+# which is what makes `go run ./cmd/smartcourse` actually see them.
+ifneq (,$(wildcard .env))
+    include .env
+    export
+endif
+
+DSN ?= $(POSTGRES_DSN)
 
 .PHONY: dev-core dev-workflow dev-events dev-observability dev-full dev-down \
         migrate-up migrate-down migrate-create \
@@ -63,7 +75,7 @@ test-race:
 	go test -race ./...
 
 test-integration:
-	go test -race -tags=integration ./test/integration/...
+	go test -race -tags=integration ./...
 
 seed:
 	go run ./cmd/smartcourse/seed
