@@ -144,6 +144,22 @@ func (s *Service) UpdateDraft(ctx context.Context, courseID, instructorID uuid.U
 	return &resp, nil
 }
 
+// ArchiveCourse is the "delete a course" endpoint in effect — a soft
+// delete via archived_at, not a row removal: a course students have
+// enrollment/progress/certificate history against can never actually
+// disappear. ListCatalogue and enrollment.Enroll both already gate on
+// archived_at IS NULL, so this takes effect everywhere a student-facing
+// read or write touches the course, with no other change needed.
+func (s *Service) ArchiveCourse(ctx context.Context, courseID, instructorID uuid.UUID) error {
+	if _, err := s.requireOwner(ctx, courseID, instructorID); err != nil {
+		return err
+	}
+	if err := s.repo.ArchiveCourse(ctx, courseID); err != nil {
+		return apperrors.ErrInternal.Wrap(err)
+	}
+	return nil
+}
+
 // --- modules -----------------------------------------------------------------
 
 func (s *Service) AddModule(ctx context.Context, courseID, instructorID uuid.UUID, req CreateModuleRequest) (*ModuleResponse, error) {
@@ -165,6 +181,34 @@ func (s *Service) AddModule(ctx context.Context, courseID, instructorID uuid.UUI
 		return nil, apperrors.ErrInternal.Wrap(err)
 	}
 	resp := toModuleResponse(m)
+	return &resp, nil
+}
+
+// UpdateModule, like AddModule, only ever touches the draft version — a
+// published version is immutable (ADR-0010); editing it in place would let
+// a student see a course change mid-session with no publish event, no
+// outbox write, nothing. moduleID identifying a module on a non-draft
+// version is rejected the same way AddLesson rejects it.
+func (s *Service) UpdateModule(ctx context.Context, courseID, instructorID, moduleID uuid.UUID, req UpdateModuleRequest) (*ModuleResponse, error) {
+	c, err := s.requireOwner(ctx, courseID, instructorID)
+	if err != nil {
+		return nil, err
+	}
+	mod, err := s.repo.GetModuleByID(ctx, moduleID)
+	if errors.Is(err, ErrNotFound) {
+		return nil, apperrors.ErrNotFound
+	}
+	if err != nil {
+		return nil, apperrors.ErrInternal.Wrap(err)
+	}
+	if c.DraftVersionID == nil || mod.CourseVersionID != *c.DraftVersionID {
+		return nil, errNoDraft
+	}
+	if err := s.repo.UpdateModule(ctx, moduleID, req.Title); err != nil {
+		return nil, apperrors.ErrInternal.Wrap(err)
+	}
+	mod.Title = req.Title
+	resp := toModuleResponse(mod)
 	return &resp, nil
 }
 
@@ -223,6 +267,46 @@ func (s *Service) AddLesson(ctx context.Context, courseID, instructorID, moduleI
 	return &LessonResponse{
 		ID: l.ID.String(), LessonKey: l.LessonKey.String(), Position: l.Position, Title: l.Title,
 		ContentType: l.ContentType, Content: req.Content, DurationS: l.DurationS,
+	}, nil
+}
+
+// UpdateLesson is UpdateModule's sibling: draft-only, same reasoning.
+// RecomputeVersionTotals runs afterward because duration_s can change.
+func (s *Service) UpdateLesson(ctx context.Context, courseID, instructorID, lessonID uuid.UUID, req UpdateLessonRequest) (*LessonResponse, error) {
+	c, err := s.requireOwner(ctx, courseID, instructorID)
+	if err != nil {
+		return nil, err
+	}
+	lesson, err := s.repo.GetLessonByID(ctx, lessonID)
+	if errors.Is(err, ErrNotFound) {
+		return nil, apperrors.ErrNotFound
+	}
+	if err != nil {
+		return nil, apperrors.ErrInternal.Wrap(err)
+	}
+	mod, err := s.repo.GetModuleByID(ctx, lesson.ModuleID)
+	if err != nil {
+		return nil, apperrors.ErrInternal.Wrap(err)
+	}
+	if c.DraftVersionID == nil || mod.CourseVersionID != *c.DraftVersionID {
+		return nil, errNoDraft
+	}
+
+	contentJSON, err := json.Marshal(req.Content)
+	if err != nil {
+		return nil, apperrors.ErrValidation.Wrap(err)
+	}
+	if len(contentJSON) >= maxLessonContentBytes {
+		return nil, errContentTooLarge
+	}
+	if err := s.repo.UpdateLesson(ctx, lessonID, req.Title, req.ContentType, contentJSON, req.DurationS); err != nil {
+		return nil, apperrors.ErrInternal.Wrap(err)
+	}
+	_ = s.repo.RecomputeVersionTotals(ctx, *c.DraftVersionID)
+
+	return &LessonResponse{
+		ID: lesson.ID.String(), LessonKey: lesson.LessonKey.String(), Position: lesson.Position,
+		Title: req.Title, ContentType: req.ContentType, Content: req.Content, DurationS: req.DurationS,
 	}, nil
 }
 
@@ -382,7 +466,7 @@ func (s *Service) validateLessonContent(ctx context.Context, versionID uuid.UUID
 
 // --- catalogue & detail ----------------------------------------------------
 
-func (s *Service) ListCatalogue(ctx context.Context, limit int, cursor string) (*CatalogueResponse, error) {
+func (s *Service) ListCatalogue(ctx context.Context, limit int, cursor, category, level, search string) (*CatalogueResponse, error) {
 	var afterCreatedAt *time.Time
 	var afterID *uuid.UUID
 	if cursor != "" {
@@ -398,7 +482,15 @@ func (s *Service) ListCatalogue(ctx context.Context, limit int, cursor string) (
 		afterID = &id
 	}
 
-	rows, err := s.repo.ListCatalogue(ctx, limit+1, afterCreatedAt, afterID)
+	filter := CatalogueFilter{Search: search}
+	if category != "" {
+		filter.Category = &category
+	}
+	if level != "" {
+		filter.Level = &level
+	}
+
+	rows, err := s.repo.ListCatalogue(ctx, limit+1, afterCreatedAt, afterID, filter)
 	if err != nil {
 		return nil, apperrors.ErrInternal.Wrap(err)
 	}
