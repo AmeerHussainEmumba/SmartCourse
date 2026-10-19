@@ -78,4 +78,4 @@ test-integration:
 	go test -race -tags=integration ./...
 
 seed:
-	go run ./cmd/smartcourse/seed
+	go run ./cmd/seed
