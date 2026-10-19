@@ -20,15 +20,26 @@ Courses, versions, modules, lessons, and the publish lifecycle (RFC §4.3, §7).
 
 | Method & path | Auth | Notes |
 |---|---|---|
-| `GET /courses` | — | Catalogue, keyset-paginated (`?limit=&cursor=`) |
+| `GET /courses` | — | Catalogue, keyset-paginated (`?limit=&cursor=`), filterable (`?category=&level=&q=`) |
 | `GET /courses/{slug}` | — | Published detail: version + modules + lessons |
 | `POST /courses` | instructor | Creates course + initial draft |
 | `PATCH /courses/{id}` | instructor, owner | Edits the draft |
 | `POST /courses/{id}/modules` | instructor, owner | |
+| `PATCH /modules/{id}` | instructor, owner | Draft-only (same rule as `POST .../modules`) |
 | `POST /modules/{id}/lessons` | instructor, owner (resolved via module → version → course) | |
+| `PATCH /lessons/{id}` | instructor, owner (resolved via lesson → module → version → course) | Draft-only |
 | `DELETE /modules/{id}`, `DELETE /lessons/{id}` | instructor, owner | |
 | `POST /courses/{id}/publish` | instructor, owner | Synchronous in M1 — see above |
+| `POST /courses/{id}/archive` | instructor, owner | Soft delete — see below |
+
+### Why archive, not delete
+
+There's no `DELETE /courses/{id}`. Deleting a course a student has enrollment, progress, or (eventually) a certificate against would orphan every row referencing it — this is the RFC's documented soft-delete design, not a gap. `POST /courses/{id}/archive` sets `archived_at`; `ListCatalogue` and `enrollment.Service.Enroll` both already gate on `archived_at IS NULL` (the latter predates this endpoint — it was written anticipating archival), so one column takes effect everywhere a student-facing read or write touches the course. There's deliberately no "unarchive" — nothing in the brief calls for one, and adding it speculatively just to look complete isn't the goal.
+
+### Why module/lesson updates are draft-only
+
+`UpdateModule`/`UpdateLesson`, like `AddModule`/`AddLesson`, reject a module or lesson that doesn't belong to the course's current draft version. A published version is immutable by design (ADR-0010) — allowing an in-place edit to it would let a student observe a course change mid-session with no publish event and no outbox write, which is exactly the inconsistency blue-green promotion exists to prevent.
 
 ## Testing
 
-Integration tests (`service_integration_test.go`, build tag `integration`, real Postgres via `test/integration/testenv`): the full create → author → publish → catalogue → detail lifecycle; blue-green state transitions; ownership rejection; invalid-slug rejection; publish-with-no-modules rejection. Run: `make test-integration`. Full index: `docs/guides/testing.md`.
+Integration tests (`service_integration_test.go`, build tag `integration`, real Postgres via `test/integration/testenv`): the full create → author → publish → catalogue → detail lifecycle; blue-green state transitions; ownership rejection; invalid-slug rejection; publish-with-no-modules rejection; module/lesson update (including that a non-owner is rejected, and that an edited lesson's duration is reflected after publish); course archive (hidden from catalogue and detail, non-owner rejected); catalogue filtering by category, level, and title search. Run: `make test-integration`. Full index: `docs/guides/testing.md`.
