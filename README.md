@@ -24,7 +24,7 @@ That's two containers, not the dozen the full stack eventually needs (Kafka, Tem
 
 ## Architecture, in one paragraph
 
-PostgreSQL is the single system of record (everything a user can assert as fact about their own account — enrolled, completed, certified — is strongly consistent, enforced by database constraints, not application code that can race). Redis and MongoDB hold only derived, rebuildable data. State changes are recorded and their side effects (search indexing, analytics, notifications, caching) happen asynchronously via a transactional outbox, so a crash mid-request never silently loses work or desyncs a dashboard from reality — today via an in-process worker-pool relay ([ADR-0021](docs/adr/smartcourse-adr.md#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka)), migrating to Kafka in M3 without changing this guarantee. One Go binary runs in two modes — `--mode=api` for HTTP, `--mode=worker` for everything asynchronous — so API and worker code can never drift apart.
+PostgreSQL is the single system of record (everything a user can assert as fact about their own account — enrolled, completed, certified — is strongly consistent, enforced by database constraints, not application code that can race). Redis and MongoDB hold only derived, rebuildable data. State changes are recorded and their side effects (search indexing, analytics, notifications, caching) happen asynchronously via a transactional outbox, so a crash mid-request never silently loses work or desyncs a dashboard from reality — today via an in-process worker-pool relay ([ADR-0021](docs/adr/smartcourse-adr.md#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka)), migrating to Kafka in M3 without changing this guarantee. Two independently deployable services — `cmd/api` for HTTP, `cmd/worker` for everything asynchronous — share one codebase and one database (`internal/platform/bootstrap`, ADR-0022), so they scale and restart independently without API and worker code ever drifting apart on a shared domain change.
 
 ```mermaid
 flowchart TB
@@ -42,9 +42,9 @@ Full diagrams, the consistency model, and the reasoning behind every major choic
 ## Repository layout
 
 ```
-cmd/smartcourse/     Entry point; --mode=api|worker
+cmd/api/, cmd/worker/   Two entry points, two Dockerfiles, two deployable images (ADR-0022)
 internal/
-  platform/          Shared kernel: config, db, cache, auth, errors, httpx, outbox, router
+  platform/          Shared kernel: config, db, cache, auth, errors, httpx, outbox, router, bootstrap
   identity/ course/ enrollment/ progress/    Domain modules (each has its own README)
   analytics/                                 Built — outbox relay's first handler (ADR-0021)
   search/ notification/ audit/               Not yet built — same relay-handler pattern as analytics

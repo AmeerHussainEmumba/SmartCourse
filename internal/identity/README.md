@@ -14,7 +14,7 @@ Users, credentials, roles, and every token type that authenticates a request: JW
 
 **Timing-safe unknown-account handling.** `Login` compares against `auth.DummyHash` even when the email doesn't exist, so response timing doesn't leak account existence (RFC §11.3). `TestLogin_UnknownEmail_SameErrorAsWrongPassword` asserts the two failure paths return identical error codes.
 
-**Email delivery is a documented stopgap, not a gap.** `EmailSender` (`email.go`) is a consumer-declared interface; `LoggingEmailSender` just logs. Real delivery via Asynq lands in M3 (RFC §6.7/ADR-0014) — swapping the implementation at wiring time in `cmd/smartcourse` is the only change needed.
+**Email delivery is a documented stopgap, not a gap.** `EmailSender` (`email.go`) is a consumer-declared interface; `LoggingEmailSender` just logs. Real delivery via Asynq lands in M3 (RFC §6.7/ADR-0014) — swapping the implementation at wiring time in `internal/platform/bootstrap` is the only change needed.
 
 **Login is rate-limited twice, on purpose, against different attack shapes (ADR-0020, RFC §11.3).** A per-IP GCRA limit at the route level (`handler.go`) catches many guesses from one source. A separate per-account limit inside `Service.Login` itself (`ratelimit.AccountKey`, checked before the database is even touched) catches one attacker spreading guesses for one account across many IPs — a per-IP-only limit wouldn't. `TestLogin_PerAccountRateLimit_BlocksAfterThreshold` proves the account limit actually blocks the correct password once the budget is exhausted, not just that a limiter type exists.
 

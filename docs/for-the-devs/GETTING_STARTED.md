@@ -115,7 +115,7 @@ If you want to see what a real concurrency bug looks like when it's *not* caught
 
 **PostgreSQL is the single source of truth.** Redis and (eventually) MongoDB hold only derived, rebuildable data — never something a user's correctness depends on.
 
-**One Go binary, two run modes.** `--mode=api` serves HTTP. `--mode=worker` will run the outbox relay, Kafka consumers, and background jobs once those exist (see §5 — they don't yet). Because it's one build, the API and the workers can never drift apart on a shared code change.
+**Two services, one shared codebase and database (ADR-0022).** `cmd/api` serves HTTP. `cmd/worker` runs the outbox relay today, and will run Kafka consumers and background jobs once those exist (see §5 — they don't yet). They're built and deployed independently, but both import `internal/platform/bootstrap`, so a shared code change can't drift between them the way it could if each maintained its own wiring. (This used to be one binary with a `--mode` flag — see ADR-0022 if you're curious why and when that changed; it's a good example of a design decision getting revisited based on real feedback, which is worth seeing happen at least once.)
 
 **Eight domain modules, one shared kernel.** Each module (`internal/identity`, `internal/course`, `internal/enrollment`, `internal/progress`, and four not yet built) owns one business capability and follows the same internal shape: `handler.go` (HTTP), `service.go` (business logic and transactions), `repository.go` (the only file touching the database directly), `dto.go` (API request/response types), `domain.go` (entities). None of them import each other's internals directly — enforced by a lint rule, not just convention. `internal/README.md` has the full module map.
 
