@@ -10,7 +10,7 @@ Two kinds of things live here: the **shared kernel** (`platform/`) and eight **d
 |---|---|---|
 | [`identity`](identity/README.md) | Users, credentials, roles, refresh/reset/verification tokens | **Built** — see its README |
 | [`course`](course/README.md) | Courses, versions, modules, lessons, publish lifecycle | **Built** |
-| [`enrollment`](enrollment/README.md) | Enrollments, seat limits, prerequisites | **Built** |
+| [`enrollment`](enrollment/README.md) | Enrollments, seat limits, prerequisites | **Built** — also the relay's second handler (`course.course_archived` → withdraw active enrollments), alongside `analytics` |
 | [`progress`](progress/README.md) | Lesson progress, course completion | **Built** |
 | [`analytics`](analytics/README.md) | Aggregates, platform/course-level counters | **Built (partial)** — pulled forward from M3 as the outbox relay's first handler (ADR-0021); 5 of 10 FR-5 metrics live |
 | `search` | Search index (`course_search_index`) | Not started — the natural next relay handler, same pattern as `analytics` |
