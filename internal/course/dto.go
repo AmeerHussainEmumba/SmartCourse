@@ -44,6 +44,12 @@ type CreateLessonRequest struct {
 // UpdateLessonRequest mirrors repository.go's UpdateLesson column set —
 // position and asset_key aren't columns that method touches, so they
 // aren't fields here either; update doesn't silently accept and drop them.
+// Title and ContentType are always required (a PATCH that renames a lesson
+// without restating them would otherwise need partial-update semantics
+// this type doesn't have). Content is the one field service.go treats as
+// genuinely optional: nil (the field omitted, or sent as JSON null) means
+// "leave the stored content alone," not "clear it" — see the comment on
+// Service.UpdateLesson.
 type UpdateLessonRequest struct {
 	Title       string         `json:"title" binding:"required,min=1,max=200"`
 	ContentType string         `json:"content_type" binding:"required,oneof=video text pdf link"`

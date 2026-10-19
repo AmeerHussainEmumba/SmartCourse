@@ -292,12 +292,27 @@ func (s *Service) UpdateLesson(ctx context.Context, courseID, instructorID, less
 		return nil, errNoDraft
 	}
 
-	contentJSON, err := json.Marshal(req.Content)
-	if err != nil {
-		return nil, apperrors.ErrValidation.Wrap(err)
-	}
-	if len(contentJSON) >= maxLessonContentBytes {
-		return nil, errContentTooLarge
+	// req.Content is nil both when the client omits the field and when it
+	// sends an explicit JSON null — neither means "clear the content," so
+	// a nil req.Content preserves whatever is already stored. An explicit
+	// "content": {} is a real, non-nil empty map and does overwrite, same
+	// as any other value. Without this, a PATCH that only means to change
+	// title/duration_s (the normal way to call PATCH) silently destroys
+	// the lesson's real content — found by a live test against a seeded
+	// lesson's content turning into literal SQL `null`.
+	contentJSON := lesson.Content
+	respContent := req.Content
+	if req.Content != nil {
+		cj, err := json.Marshal(req.Content)
+		if err != nil {
+			return nil, apperrors.ErrValidation.Wrap(err)
+		}
+		if len(cj) >= maxLessonContentBytes {
+			return nil, errContentTooLarge
+		}
+		contentJSON = cj
+	} else {
+		_ = json.Unmarshal(lesson.Content, &respContent)
 	}
 	if err := s.repo.UpdateLesson(ctx, lessonID, req.Title, req.ContentType, contentJSON, req.DurationS); err != nil {
 		return nil, apperrors.ErrInternal.Wrap(err)
@@ -306,7 +321,7 @@ func (s *Service) UpdateLesson(ctx context.Context, courseID, instructorID, less
 
 	return &LessonResponse{
 		ID: lesson.ID.String(), LessonKey: lesson.LessonKey.String(), Position: lesson.Position,
-		Title: req.Title, ContentType: req.ContentType, Content: req.Content, DurationS: req.DurationS,
+		Title: req.Title, ContentType: req.ContentType, Content: respContent, DurationS: req.DurationS,
 	}, nil
 }
 

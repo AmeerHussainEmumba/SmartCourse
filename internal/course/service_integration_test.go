@@ -225,6 +225,71 @@ func TestUpdateLesson_UpdatesContentAndRecomputesTotals(t *testing.T) {
 	}
 }
 
+// TestUpdateLesson_OmittingContentPreservesIt is the regression test for a
+// confirmed bug: a PATCH that only means to change title/duration_s (no
+// "content" field in the request — the ordinary way to call PATCH) must
+// not wipe the lesson's existing content. It previously did: Content had
+// no required binding, so an omitted field bound to nil, which was
+// marshalled and written over the stored content as literal JSON null.
+func TestUpdateLesson_OmittingContentPreservesIt(t *testing.T) {
+	env := testenv.Setup(t)
+	svc := course.NewService(course.NewRepository(env.DB))
+	ctx := context.Background()
+	instructorID := seedInstructor(t, env)
+
+	courseResp, _, err := svc.CreateCourse(ctx, instructorID, course.CreateCourseRequest{Title: "Keep Content", Slug: "keep-content"})
+	if err != nil {
+		t.Fatalf("CreateCourse: %v", err)
+	}
+	courseID := uuid.MustParse(courseResp.ID)
+
+	mod, err := svc.AddModule(ctx, courseID, instructorID, course.CreateModuleRequest{Title: "Basics", Position: 1})
+	if err != nil {
+		t.Fatalf("AddModule: %v", err)
+	}
+	moduleID := uuid.MustParse(mod.ID)
+
+	lesson, err := svc.AddLesson(ctx, courseID, instructorID, moduleID, course.CreateLessonRequest{
+		Title: "Draft Lesson", Position: 1, ContentType: "text",
+		Content: map[string]any{"body": "important content"}, DurationS: 60,
+	})
+	if err != nil {
+		t.Fatalf("AddLesson: %v", err)
+	}
+	lessonID := uuid.MustParse(lesson.ID)
+
+	// No Content field set — simulates a client PATCHing only duration_s.
+	updated, err := svc.UpdateLesson(ctx, courseID, instructorID, lessonID, course.UpdateLessonRequest{
+		Title: "Draft Lesson", ContentType: "text", DurationS: 120,
+	})
+	if err != nil {
+		t.Fatalf("UpdateLesson: %v", err)
+	}
+	if updated.DurationS != 120 {
+		t.Fatalf("expected duration_s to be updated to 120, got %d", updated.DurationS)
+	}
+	if updated.Content["body"] != "important content" {
+		t.Fatalf("expected content to survive an update that omitted it, got %+v", updated.Content)
+	}
+
+	// Re-fetch independently of the returned response, straight from the
+	// published detail, so the assertion isn't just checking what the
+	// method happens to echo back.
+	if _, err := svc.Publish(ctx, courseID, instructorID); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	detail, err := svc.GetPublishedDetail(ctx, "keep-content")
+	if err != nil {
+		t.Fatalf("GetPublishedDetail: %v", err)
+	}
+	if len(detail.Modules) != 1 || len(detail.Modules[0].Lessons) != 1 {
+		t.Fatalf("expected 1 module with 1 lesson, got %+v", detail.Modules)
+	}
+	if detail.Modules[0].Lessons[0].Content["body"] != "important content" {
+		t.Fatalf("expected persisted content to still carry 'important content', got %+v", detail.Modules[0].Lessons[0].Content)
+	}
+}
+
 func TestArchiveCourse_HidesFromCatalogueAndDetail_RejectsNonOwner(t *testing.T) {
 	env := testenv.Setup(t)
 	svc := course.NewService(course.NewRepository(env.DB))
