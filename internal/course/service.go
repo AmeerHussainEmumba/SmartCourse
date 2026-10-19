@@ -150,11 +150,30 @@ func (s *Service) UpdateDraft(ctx context.Context, courseID, instructorID uuid.U
 // disappear. ListCatalogue and enrollment.Enroll both already gate on
 // archived_at IS NULL, so this takes effect everywhere a student-facing
 // read or write touches the course, with no other change needed.
+// ArchiveCourse writes course.course_archived in the same transaction as
+// setting archived_at (RFC §4.4/ADR-0006: that's the only channel another
+// module may react through — this module never imports enrollment's Go
+// API). enrollment.Handlers' handleCourseArchived consumes it to withdraw
+// every active enrollment: "if a course is archived, all active students
+// of it should be outrolled."
 func (s *Service) ArchiveCourse(ctx context.Context, courseID, instructorID uuid.UUID) error {
 	if _, err := s.requireOwner(ctx, courseID, instructorID); err != nil {
 		return err
 	}
-	if err := s.repo.ArchiveCourse(ctx, courseID); err != nil {
+	err := s.repo.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txRepo := s.repo.WithTx(tx)
+		if err := txRepo.ArchiveCourse(ctx, courseID); err != nil {
+			return err
+		}
+		return outbox.Write(ctx, tx, outbox.Event{
+			AggregateType: "course",
+			AggregateID:   courseID,
+			EventType:     "course.course_archived",
+			SchemaVersion: 1,
+			Payload:       map[string]any{"course_id": courseID},
+		})
+	})
+	if err != nil {
 		return apperrors.ErrInternal.Wrap(err)
 	}
 	return nil

@@ -12,14 +12,17 @@ Enrollments, seat limits, and prerequisites (RFC §4.3, §8.1). The module whose
 
 **`EnrolledAt` is set explicitly in Go, not left to the column's `DEFAULT now()`.** GORM includes every non-pointer struct field in the `INSERT` column list regardless of whether it was "set" — a zero-value `time.Time` sends `0001-01-01`, not "use the database default." This is exactly backwards from `CreatedAt`/`UpdatedAt`, which GORM *does* auto-populate by naming convention. Caught in this package's own test output (the SQL trace of a `-v` run), not by inspection — see the comment in `service.go`'s `Enroll` method before "fixing" this the other way.
 
+**Archiving a course withdraws its active students, via the outbox, not a direct call.** `handlers.go` registers `handleCourseArchived`, a relay consumer of `course.course_archived` (written by `internal/course.Service.ArchiveCourse`). It bulk-`UPDATE`s every `active` enrollment on that course to `withdrawn` and decrements `enrollment_count` by however many rows that touched — one statement, not a loop calling `Withdraw` per student, because there's no per-student rule left to apply once "the course got archived" is the only input. It still locks the course row first (`lockCourseForEnrollment`), same as `Enroll`/`Withdraw` — not because anything races against it (`Enroll` already refuses an archived course), but because this handler touches `enrollment_count` too, and that counter has exactly one lock-ordering rule, applied everywhere it's touched. `course` never imports this package to trigger it — RFC §4.4 means the outbox is the only channel, and `cmd/smartcourse/modules.go` registers `enrollment.Handlers()` into the shared relay alongside `analytics.Handlers()`.
+
 ## Testing — this module's tests are the point of the module
 
 - **`TestEnroll_SeatLimit_NeverExceededUnderConcurrency`** — 30 goroutines, 10 seats. Asserts successes == limit, rejections == contenders − limit, `courses.enrollment_count` matches actual row count. This is ADR-0012 proven, not documented.
 - **`TestEnroll_DuplicateAttempt_ExactlyOneSucceeds`** — 10 concurrent identical enrollment attempts by one student; exactly one succeeds, via the partial unique index, not application logic.
 - **`TestWithdraw_ThenReenroll_Allowed`** — proves the partial index (`WHERE status IN ('active','completed')`) permits re-enrollment after withdrawal, which a plain unique constraint would block.
 - **`TestEnroll_UnpublishedCourse_Rejected`** — a course with no `published_version_id` can't be enrolled into.
+- **`TestHandleCourseArchived_WithdrawsActiveEnrollments`** (`handlers_integration_test.go`) — end to end through the real outbox → relay → handler path, not a direct call to the unexported handler: writes `course.course_archived`, runs a real `relay.Relay` with `enrollment.Handlers()` registered, and asserts every active enrollment becomes `withdrawn` and `enrollment_count` reaches 0 — while a student withdrawn *before* the archive keeps their original `withdrawn_at`, proving the handler only touches what's still active rather than stamping every row indiscriminately.
 
-All in `service_integration_test.go` (build tag `integration`), against real Postgres via `test/integration/testenv`. Run: `make test-integration`. Full index: `docs/guides/testing.md`.
+All in `service_integration_test.go` / `handlers_integration_test.go` (build tag `integration`), against real Postgres via `test/integration/testenv`. Run: `make test-integration`. Full index: `docs/guides/testing.md`.
 
 ## Known scope limits (M1)
 

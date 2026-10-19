@@ -324,6 +324,17 @@ func TestArchiveCourse_HidesFromCatalogueAndDetail_RejectsNonOwner(t *testing.T)
 		t.Fatalf("ArchiveCourse: %v", err)
 	}
 
+	// course.course_archived must land in the outbox in the same
+	// transaction as archived_at — this is the only channel
+	// enrollment.Handlers' handleCourseArchived has to react and withdraw
+	// active students (RFC §4.4: no direct cross-module call exists).
+	var archivedEventCount int64
+	env.DB.Raw(`SELECT count(*) FROM outbox WHERE event_type = 'course.course_archived' AND aggregate_id = ?`, courseID).
+		Row().Scan(&archivedEventCount)
+	if archivedEventCount != 1 {
+		t.Fatalf("expected exactly 1 course.course_archived outbox event, got %d", archivedEventCount)
+	}
+
 	catalogue, err := svc.ListCatalogue(ctx, 20, "", "", "", "")
 	if err != nil {
 		t.Fatalf("ListCatalogue: %v", err)

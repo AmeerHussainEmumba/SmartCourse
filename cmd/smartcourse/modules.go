@@ -40,13 +40,18 @@ func registerModules(r *gin.Engine, gdb *gorm.DB, rdb *redis.Client, cfg *config
 
 // buildRelay wires every module's relay handlers into one Relay instance
 // (RFC §4.4 — this file, the composition root, is the only place allowed
-// to know every module exists). Only internal/analytics registers
-// handlers today; internal/search's search-indexer and
-// internal/notification's dispatcher are the natural next additions —
-// the relay itself doesn't change when they land, only this list grows.
+// to know every module exists). internal/analytics and internal/enrollment
+// register handlers today (the latter withdraws active enrollments when a
+// course is archived — see enrollment.handleCourseArchived);
+// internal/search's search-indexer and internal/notification's dispatcher
+// are the natural next additions — the relay itself doesn't change when
+// they land, only this list grows.
 func buildRelay(gdb *gorm.DB) *relay.Relay {
 	rl := relay.New(gdb)
 	for _, h := range analytics.Handlers() {
+		rl.Register(h)
+	}
+	for _, h := range enrollment.Handlers() {
 		rl.Register(h)
 	}
 	return rl
