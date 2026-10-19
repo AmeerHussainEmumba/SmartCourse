@@ -14,8 +14,7 @@ import (
 )
 
 type Config struct {
-	Env  string // "development" | "test" | "production"
-	Mode string // "api" | "worker" — set by CLI flag, not env; see cmd/smartcourse
+	Env string // "development" | "test" | "production"
 
 	HTTPPort int
 
@@ -66,7 +65,7 @@ type Argon2Config struct {
 
 // Load reads and validates configuration from the environment. It returns an
 // error rather than panicking so callers (including tests) can decide how to
-// fail; cmd/smartcourse treats a non-nil error as fatal at boot.
+// fail; cmd/api and cmd/worker both treat a non-nil error as fatal at boot.
 func Load() (*Config, error) {
 	var errs []string
 	req := func(key string) string {
