@@ -20,7 +20,9 @@ curl localhost:8080/health/live
 curl localhost:8080/health/ready
 ```
 
-That's two containers, not the dozen the full stack eventually needs (Kafka, Temporal, MongoDB, the observability stack). Those come up via `make dev-workflow` / `make dev-events` / `make dev-observability` / `make dev-full` as you need them — see [`docs/adr/smartcourse-adr.md` ADR-0018](docs/adr/smartcourse-adr.md#adr-0018--docker-compose-profiles-for-tiered-local-development) for why the environment is tiered instead of all-or-nothing.
+Browse and run every endpoint without writing curl by hand: **http://localhost:8089** (a Swagger UI reading `api/openapi.yaml` live, also started by `make dev-core`) — or `File → Import` that same file into Postman. See `docs/for-the-devs/GETTING_STARTED.md`'s "Browsing and running the API" section for both.
+
+That's a handful of containers, not the dozen the full stack eventually needs (Kafka, Temporal, MongoDB, the observability stack). Those come up via `make dev-workflow` / `make dev-events` / `make dev-observability` / `make dev-full` as you need them — see [`docs/adr/smartcourse-adr.md` ADR-0018](docs/adr/smartcourse-adr.md#adr-0018--docker-compose-profiles-for-tiered-local-development) for why the environment is tiered instead of all-or-nothing.
 
 ## Architecture, in one paragraph
 

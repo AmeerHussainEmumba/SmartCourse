@@ -11,7 +11,10 @@ info:
     certificates, analytics, admin/audit beyond role change) are not listed
     here — an absent path means "not built yet," not "undocumented."
 servers:
+  - url: http://localhost:8080/api/v1
+    description: Local dev (make run-api) — absolute, because a browser-hosted tool (Swagger UI) has no same-origin "relative to here" to resolve against like a server-rendered docs page would
   - url: /api/v1
+    description: Relative — correct once this spec is served from the same origin as the API itself (not the case for any local dev tool today)
 
 paths:
   /auth/register:
