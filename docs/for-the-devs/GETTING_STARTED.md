@@ -61,7 +61,14 @@ make dev-core
 # 3. Apply the schema.
 make migrate-up
 
-# 4. Run the API.
+# 4. Populate realistic data — instructors, courses at every lifecycle
+#    state, students with partial progress. Goes through the real
+#    service layer (not raw SQL), so it also proves the four core
+#    modules work together. Safe to re-run — it's a no-op the second
+#    time. See cmd/seed/README.md.
+make seed
+
+# 5. Run the API.
 make run-api
 ```
 
@@ -72,7 +79,15 @@ curl localhost:8080/health/live     # {"status":"live"}
 curl localhost:8080/health/ready    # {"status":"ready"} once Postgres/Redis are reachable
 ```
 
-Try the real thing:
+Try the real thing — log in as one of the accounts `make seed` just created (every seeded account shares the password printed at the end of that command):
+
+```bash
+curl -X POST localhost:8080/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"student1@smartcourse.dev","password":"SeedPass123!"}'
+```
+
+Or register your own account the same way that login would otherwise have nothing to authenticate:
 
 ```bash
 curl -X POST localhost:8080/api/v1/auth/register \
@@ -80,7 +95,7 @@ curl -X POST localhost:8080/api/v1/auth/register \
   -d '{"email":"you@example.com","password":"correct-horse-battery","full_name":"Your Name"}'
 ```
 
-You should get back an access token, a refresh token, and your user record. From here, `api/openapi.yaml` documents every endpoint, and each module's README (`internal/<module>/README.md`) explains the design behind it.
+Either way you should get back an access token, a refresh token, and a user record. From here, `api/openapi.yaml` documents every endpoint, and each module's README (`internal/<module>/README.md`) explains the design behind it.
 
 ### If a port is already taken
 
