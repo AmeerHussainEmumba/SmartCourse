@@ -1463,7 +1463,7 @@ The full stack is roughly a dozen containers. Starting all of them to work on an
 
 | Profile | Services | Use |
 |---|---|---|
-| `core` | Postgres, Redis, MinIO | API, CRUD, enrollment, asset upload |
+| `core` | Postgres, Redis, MinIO, Swagger UI | API, CRUD, enrollment, asset upload, browsing/running the API from a browser (`api/openapi.yaml`, live) |
 | `workflow` | `core` + Temporal, Temporal UI | Publishing |
 | `events` | `workflow` + Kafka, Schema Registry, MongoDB | Consumers, analytics, audit |
 | `observability` | + Prometheus, Grafana, Jaeger, OTel Collector | Tracing and dashboards |
@@ -1648,7 +1648,7 @@ Written for an engineer competent in another language and new to Go, or new to t
 
 ### 22.1 Day one — run it
 
-`make dev-core && make migrate-up && make seed && make run-api`, then open the OpenAPI spec and make a request. Two containers, not twelve (§17.1). Nothing is understood before something runs.
+`make dev-core && make migrate-up && make seed && make run-api`, then open **http://localhost:8089** (Swagger UI, reading `api/openapi.yaml` live — also started by `make dev-core`) and make a request. A handful of containers, not twelve (§17.1). Nothing is understood before something runs.
 
 ### 22.2 Go for experienced engineers
 
