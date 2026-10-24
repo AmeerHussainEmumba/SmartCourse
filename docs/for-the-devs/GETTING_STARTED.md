@@ -97,6 +97,13 @@ curl -X POST localhost:8080/api/v1/auth/register \
 
 Either way you should get back an access token, a refresh token, and a user record. From here, `api/openapi.yaml` documents every endpoint, and each module's README (`internal/<module>/README.md`) explains the design behind it.
 
+### Browsing and running the API without writing curl by hand
+
+Two ways to explore `api/openapi.yaml` interactively, both reading the same file — neither is a separate thing to keep in sync:
+
+- **In the browser:** `make dev-core` (step 2 above) also starts a Swagger UI container reading `api/openapi.yaml` live — **http://localhost:8089**. Every endpoint, with an "Execute" button that fires a real request against your local API (`http://localhost:8080`, selectable from the server dropdown at the top). Click "Authorize" and paste an access token from the register/login call above to call anything that needs one.
+- **In Postman:** File → Import → select `api/openapi.yaml` from this repo. Postman builds a full collection from it. Set a collection variable (or environment) for the base URL — `http://localhost:8080/api/v1` — and another for your access token, then reference it as a Bearer token on requests that need auth.
+
 ### If a port is already taken
 
 `docker-compose.yml` intentionally maps Postgres to host port **5433** (not 5432) and Redis to **6380** (not 6379), specifically to avoid colliding with other projects' containers that might already be running on your machine. If you still hit a port conflict, check `lsof -nP -iTCP:<port> -sTCP:LISTEN` for what's already bound, and either stop it or remap the port in `docker-compose.yml` and `env.example` together (they have to stay in sync).

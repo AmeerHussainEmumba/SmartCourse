@@ -12,9 +12,9 @@ Everything every domain module is allowed to depend on (RFC §4.3). Nothing in h
 | `cache` | The Redis connection. |
 | `errors` | The `*AppError` type every handler returns — stable `code`, safe `message`, internal detail kept out of the response. |
 | `httpx` | Request ID middleware, error-response writing, DTO binding, keyset-pagination cursor helpers. |
-| `auth` | argon2id hashing, JWT issue/verify, opaque single-use tokens (refresh/reset/verify), and the three-layer middleware (`RequireAuth`, `RequireRole`, `RequireFreshPrivilege`). |
+| `auth` | argon2id hashing, JWT issue/verify, opaque single-use tokens (refresh/reset/verify), and the three-layer middleware (`RequireAuth`, `RequireRole`, `RequireFreshPrivilege`). See its own README. |
 | `ratelimit` | GCRA rate limiting (ADR-0020) via `go-redis/redis_rate` — per-IP middleware and a per-identity `Allow` call for checks middleware can't express (e.g. per-account login limits). |
-| `outbox` | The only path from a state change to a published event (ADR-0006). |
+| `outbox` | The only path from a state change to a published event (ADR-0006). See its own README. |
 | `relay` | The bounded worker pool that drains `outbox` and dispatches to registered handlers (ADR-0021) — goroutines, a channel, `sync.WaitGroup`-drained shutdown, `sync.Mutex`-guarded claim tracking, `sync/atomic` counters, all against real work. See its own README. |
 | `router` | Assembles the Gin engine: middleware chain, health endpoints. |
 

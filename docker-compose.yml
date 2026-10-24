@@ -125,6 +125,25 @@ services:
       minio:
         condition: service_healthy
 
+  # Browsable, runnable view of api/openapi.yaml — a static UI container,
+  # not a build step: it reads the file read-only, so it's always showing
+  # what's actually committed, not a snapshot that can drift. Port 8089,
+  # not 8080 (the API) or 8081 (schema-registry, events profile) — picked
+  # specifically to not collide with either.
+  swagger-ui:
+    image: swaggerapi/swagger-ui:v5.32.1
+    profiles: *profiles-core
+    environment:
+      # Must match the volume mount target exactly — the image's own
+      # entrypoint script does `[[ -f "$SWAGGER_JSON" ]]` to decide whether
+      # to wire the spec in at all; a mismatch here fails that check
+      # silently and the UI falls back to the default petstore example
+      # with no error anywhere.
+      SWAGGER_JSON: /openapi.yaml
+    volumes:
+      - ./api/openapi.yaml:/openapi.yaml:ro
+    ports: ["8089:8080"]
+
   temporal:
     image: temporalio/auto-setup:latest
     profiles: *profiles-workflow
