@@ -10,6 +10,7 @@ This README is the fast path to running the system and finding your way around. 
 cp env.example .env          # fill in real values; nothing here has a working default (see env.example)
 make dev-core                # Postgres, Redis, MinIO
 make migrate-up              # apply the full schema
+make seed                    # optional — a realistic dataset to develop against, safe to re-run
 make run-api                 # http://localhost:8080
 ```
 
