@@ -21,7 +21,7 @@ The three unstarted modules are empty directories today, not abandoned work — 
 
 ## Why cross-module imports are restricted
 
-No module imports another module's `repository`, `domain`, or GORM models (RFC §4.4) — enforced by `.golangci.yml`'s `depguard` rules, not just convention. Where one module genuinely needs data another module owns *within the same database transaction* (enrollment locking the `courses` row it doesn't "own," for instance), it issues that SQL directly rather than calling into the other module's Go API — see `internal/enrollment/README.md` for why that's the correct call, not a shortcut. `cmd/smartcourse/modules.go` is the one place in the whole codebase allowed to import every module — it's the composition root.
+No module imports another module's `repository`, `domain`, or GORM models (RFC §4.4) — enforced by `.golangci.yml`'s `depguard` rules, not just convention. Where one module genuinely needs data another module owns *within the same database transaction* (enrollment locking the `courses` row it doesn't "own," for instance), it issues that SQL directly rather than calling into the other module's Go API — see `internal/enrollment/README.md` for why that's the correct call, not a shortcut. `internal/platform/bootstrap` is the one place in the whole codebase allowed to import every module — it's the composition root, imported in turn by both `cmd/api` and `cmd/worker` (ADR-0022).
 
 ## `platform/`
 
