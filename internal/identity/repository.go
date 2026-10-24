@@ -114,6 +114,27 @@ func (r *Repository) GetRefreshTokenByHash(ctx context.Context, hash []byte) (*R
 	return &t, nil
 }
 
+// GetRefreshTokenByHashForUpdate is GetRefreshTokenByHash's locking twin —
+// SELECT ... FOR UPDATE, the exact pattern ADR-0012 uses for enrollment,
+// applied here to close a concurrent-refresh race: two requests presenting
+// the same token at once would otherwise both read "not yet rotated," both
+// pass the reuse check, and both successfully mint a new token. Call this
+// within a transaction (service.go's Refresh does); the second caller
+// blocks on the row lock until the first transaction commits, then sees
+// ReplacedBy already set and correctly treats it as reuse.
+func (r *Repository) GetRefreshTokenByHashForUpdate(ctx context.Context, hash []byte) (*RefreshToken, error) {
+	var t RefreshToken
+	err := r.db.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("token_hash = ?", hash).First(&t).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
 func (r *Repository) MarkRefreshTokenReplaced(ctx context.Context, id, replacedBy uuid.UUID) error {
 	return r.db.WithContext(ctx).Model(&RefreshToken{}).Where("id = ?", id).
 		Update("replaced_by", replacedBy).Error
@@ -132,6 +153,20 @@ func (r *Repository) RevokeFamily(ctx context.Context, familyID uuid.UUID) error
 func (r *Repository) RevokeToken(ctx context.Context, id uuid.UUID) error {
 	now := time.Now().UTC()
 	return r.db.WithContext(ctx).Model(&RefreshToken{}).Where("id = ?", id).
+		Update("revoked_at", now).Error
+}
+
+// RevokeAllForUser revokes every non-revoked refresh token across every
+// family belonging to userID — unlike RevokeFamily (one family, triggered
+// by detected reuse), this is for events that should force re-authentication
+// everywhere the user is currently signed in: today, a password reset. A
+// user may hold several families (several devices/sessions); all of them
+// must stop working, not just the one tied to whichever session happened
+// to request the reset.
+func (r *Repository) RevokeAllForUser(ctx context.Context, userID uuid.UUID) error {
+	now := time.Now().UTC()
+	return r.db.WithContext(ctx).Model(&RefreshToken{}).
+		Where("user_id = ? AND revoked_at IS NULL", userID).
 		Update("revoked_at", now).Error
 }
 

@@ -196,12 +196,12 @@ The honest cost is failure isolation: a runaway goroutine in one module degrades
 
 ### 4.2 Run modes
 
-One binary, two modes, selected by flag:
+Two independently built, deployed, and scaled services (`cmd/api`, `cmd/worker` — ADR-0022), sharing one codebase and one database:
 
-- `--mode=api` — HTTP server. Stateless. Scales horizontally behind a load balancer.
-- `--mode=worker` — outbox relay, Kafka consumers, Asynq workers, Temporal worker. Scales independently.
+- **`cmd/api`** — HTTP server. Stateless. Scales horizontally behind a load balancer.
+- **`cmd/worker`** — outbox relay today; Kafka consumers, Asynq workers, and the Temporal worker land in M2/M3. Scales independently.
 
-One build and one image, so a shared domain change cannot produce a version skew between API and workers. Consumer-group and queue semantics make worker replicas safe to add.
+Both import `internal/platform/bootstrap`, the composition root (RFC §4.4), so a shared domain change still can't produce a version skew between the two the way it could if their wiring logic were maintained separately — the deployment artifacts are now independent, the wiring that builds them is not. (Until ADR-0022, this was literally one binary with a `--mode` flag; that history, and exactly what changed and why, is recorded there rather than silently edited out of existence — see the ADR's own rule about reversals.)
 
 ### 4.3 Modules
 
@@ -256,12 +256,12 @@ Enforced by `depguard` in CI, so a violation fails the build rather than relying
 flowchart TB
     Client[API clients]
 
-    subgraph API["API replicas (--mode=api)"]
+    subgraph API["cmd/api replicas"]
         GIN[Gin: routing, auth, DTOs]
         MOD[identity / course / enrollment / progress<br/>search / analytics / notification / audit]
     end
 
-    subgraph WRK["Worker replicas (--mode=worker)"]
+    subgraph WRK["cmd/worker replicas"]
         RELAY[Outbox relay]
         KC[Kafka consumers]
         AQ[Asynq worker pools]
@@ -1479,9 +1479,9 @@ MinIO sits in `core` rather than a later tier because asset upload is exercised 
 ### 17.2 Repository layout
 
 ```
-cmd/smartcourse/          Entry point; --mode=api|worker
+cmd/api/, cmd/worker/     Two entry points, two images (ADR-0022)
 internal/
-  platform/               Shared kernel
+  platform/               Shared kernel, including bootstrap (the composition root)
   identity/ course/ enrollment/ progress/
   search/ analytics/ notification/ audit/
   workflows/              Temporal definitions
@@ -1748,6 +1748,7 @@ ADRs record decisions as point-in-time events with their context intact. This RF
 | 0019 | MinIO for learning-asset object storage | §2.3 (A1), §4.7 |
 | 0020 | GCRA rate limiting over fixed-window counters | §5.7, §11.3 |
 | 0021 | In-process outbox relay with a worker pool, ahead of Kafka | §6.3, §21.0 |
+| 0022 | Separate API and worker binaries, one shared codebase and database | §4.2 |
 
 ---
 
