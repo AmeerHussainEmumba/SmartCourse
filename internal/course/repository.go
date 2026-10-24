@@ -58,6 +58,16 @@ func (r *Repository) GetCourseBySlug(ctx context.Context, slug string) (*Course,
 	return &c, nil
 }
 
+// ArchiveCourse sets archived_at rather than deleting the row (RFC's
+// documented soft-delete design) — enrollment and progress history for
+// students who took the course must survive, and ListCatalogue /
+// enrollment.Enroll both already gate on archived_at IS NULL, so archiving
+// takes effect everywhere that matters without a schema change.
+func (r *Repository) ArchiveCourse(ctx context.Context, id uuid.UUID) error {
+	return r.db.WithContext(ctx).Model(&Course{}).Where("id = ?", id).
+		Update("archived_at", time.Now().UTC()).Error
+}
+
 func (r *Repository) SetDraftVersion(ctx context.Context, courseID, versionID uuid.UUID) error {
 	return r.db.WithContext(ctx).Model(&Course{}).Where("id = ?", courseID).
 		Update("draft_version_id", versionID).Error
@@ -205,11 +215,24 @@ type CatalogueRow struct {
 	CreatedAt       time.Time
 }
 
+// CatalogueFilter narrows ListCatalogue — every field is optional (zero
+// value means "don't filter on this"). Search matches course_versions.title
+// only; filtering by instructor name would need a second ILIKE against
+// users.full_name, deliberately left out until a real need for it shows up.
+type CatalogueFilter struct {
+	Category *string
+	Level    *string
+	Search   string
+}
+
 // ListCatalogue returns published, non-archived courses ordered newest
 // first, joined against the instructor's name in one query (RFC §13.2 — "no
 // N+1"). Keyset, never OFFSET: afterCreatedAt/afterID identify the last row
-// of the previous page; a nil afterID means "first page."
-func (r *Repository) ListCatalogue(ctx context.Context, limit int, afterCreatedAt *time.Time, afterID *uuid.UUID) ([]CatalogueRow, error) {
+// of the previous page; a nil afterID means "first page." filter's
+// conditions are appended before the keyset condition, so args stay in the
+// same order they appear in the query string regardless of which filters
+// are set.
+func (r *Repository) ListCatalogue(ctx context.Context, limit int, afterCreatedAt *time.Time, afterID *uuid.UUID, filter CatalogueFilter) ([]CatalogueRow, error) {
 	q := `
 		SELECT c.id, c.slug, cv.title, u.full_name, cv.category, cv.level, c.enrollment_count, c.created_at
 		FROM courses c
@@ -217,6 +240,18 @@ func (r *Repository) ListCatalogue(ctx context.Context, limit int, afterCreatedA
 		JOIN users u ON u.id = c.instructor_id
 		WHERE c.published_version_id IS NOT NULL AND c.archived_at IS NULL`
 	args := []any{}
+	if filter.Category != nil {
+		q += ` AND cv.category = ?`
+		args = append(args, *filter.Category)
+	}
+	if filter.Level != nil {
+		q += ` AND cv.level = ?`
+		args = append(args, *filter.Level)
+	}
+	if filter.Search != "" {
+		q += ` AND cv.title ILIKE ?`
+		args = append(args, "%"+filter.Search+"%")
+	}
 	if afterID != nil && afterCreatedAt != nil {
 		q += ` AND (c.created_at, c.id) < (?, ?)`
 		args = append(args, *afterCreatedAt, *afterID)

@@ -31,6 +31,8 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-006](#dr-006--weekly-milestones-are-review-checkpoints-not-a-build-order) | Weekly milestones are review checkpoints, not a build order | Interpretation | Accepted |
 | [DR-007](#dr-007--celery-citation-correction) | Celery citation correction | Correction | Accepted |
 | [DR-008](#dr-008--password-reset-and-email-verification) | Password reset and email verification | Addition | Accepted |
+| [DR-009](#dr-009--separate-api-and-worker-binaries-per-supervisor-review) | Separate API and worker binaries, per supervisor review | Addition | Accepted |
+| [DR-010](#dr-010--per-service-table-ownership-and-liquibase-deferred-pending-discussion) | Per-service table ownership and Liquibase — deferred pending discussion | Interpretation | Proposed |
 
 ---
 
@@ -179,6 +181,42 @@ An authentication system without a password-reset path isn't a smaller version o
 ### If this turns out to be wrong
 
 Not applicable — this closes a gap rather than making a bet; no condition would make removing it correct short of dropping password-based auth entirely.
+
+---
+
+## DR-009 — Separate API and worker binaries, per supervisor review
+
+**Category:** Addition · **Date:** 2026-10-19 · **Related:** ADR-0022
+
+### What differs
+
+Supervisor review of PR #1 asked for independently deployable API and worker services, each with its own `main`, Dockerfile, and Compose entry — not what the original brief or RFC specified (one binary, `--mode` flag, RFC §4.2).
+
+### Why
+
+A fair request on its own terms: one binary with a mode flag genuinely doesn't give independent build/deploy/restart/scale, which "separate services" reasonably implies. Implemented as `cmd/api` and `cmd/worker`, both sharing the existing modular-monolith codebase and database (ADR-0001 unaffected) via a new `internal/platform/bootstrap` composition root. Full reasoning: ADR-0022.
+
+### If this turns out to be wrong
+
+Not applicable — this is a deployment-artifact change with no architectural downside identified; reversing it would mean returning to one binary, which no one has asked for.
+
+---
+
+## DR-010 — Per-service table ownership and Liquibase — deferred pending discussion
+
+**Category:** Interpretation · **Date:** 2026-10-19 · **Related:** `docs/for-the-devs/` pushback document (hosted on Claude — see that doc for the full case), ADR-0001, ADR-0012
+
+### What differs
+
+The same review asked for two further changes we have not implemented: (1) each service owning its own database tables, with no cross-service reads/writes — cited specifically against `enrollment` locking the `courses` row during enrollment; and (2) replacing `golang-migrate` with Liquibase, changelog-per-service.
+
+### Why this is logged as "proposed," not "accepted"
+
+Both reverse specific, reasoned ADRs rather than filling a gap the brief left open — (1) reverses ADR-0001's modular-monolith decision and breaks ADR-0012's row-lock mechanism for the enrollment seat-limit guarantee (proven by `TestEnroll_SeatLimit_NeverExceededUnderConcurrency`); (2) adds a JVM dependency to an all-Go stack for a capability (`golang-migrate` already has tested down-migrations for every change) we don't have a confirmed gap in. Neither the original brief nor the RFC names a technical problem these solve that our current design doesn't already address — see the pushback document for the point-by-point case, built from `docs/baseline/SmartCourse.md` and `docs/baseline/Execution Guidelines.md` directly. This is deliberately NOT resolved unilaterally: both are flagged for direct discussion with the supervisor before any implementation decision, which is why this entry's status is `Proposed`, not `Accepted` — unlike every other entry in this register, this one doesn't yet represent a settled position.
+
+### If this turns out to be wrong
+
+If the supervisor confirms either requirement after discussion (e.g., an org-wide Liquibase standard we're not aware of, or a grading rubric that specifically requires per-service databases), this entry is superseded by a new one recording the implementation, with a new ADR superseding ADR-0001/ADR-0012 as applicable.
 
 ---
 

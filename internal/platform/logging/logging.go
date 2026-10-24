@@ -50,3 +50,13 @@ func FromContext(ctx context.Context) *slog.Logger {
 	}
 	return slog.Default()
 }
+
+// LevelFromEnv reads LOG_LEVEL, defaulting to "info" — shared by every
+// binary (cmd/api, cmd/worker) so they pick up the same env var the same
+// way rather than each reimplementing this.
+func LevelFromEnv() string {
+	if v := os.Getenv("LOG_LEVEL"); v != "" {
+		return v
+	}
+	return "info"
+}

@@ -142,10 +142,13 @@ paths:
 
   /courses:
     get:
-      summary: Catalogue — published courses, keyset-paginated (RFC §13.2)
+      summary: Catalogue — published courses, keyset-paginated (RFC §13.2), filterable
       parameters:
         - { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
         - { name: cursor, in: query, schema: { type: string }, description: Opaque cursor from a previous response's next_cursor }
+        - { name: category, in: query, schema: { type: string }, description: Exact match against the course's category }
+        - { name: level, in: query, schema: { type: string, enum: [beginner, intermediate, advanced] } }
+        - { name: q, in: query, schema: { type: string }, description: Case-insensitive substring match against the course title }
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogueResponse' } } } }
     post:
@@ -207,6 +210,16 @@ paths:
         '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Lesson' } } } }
 
   /modules/{id}:
+    patch:
+      summary: Update a module's title (instructor, owner only). Draft-only — rejected if the module belongs to a non-draft version (ADR-0010).
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/UpdateModuleRequest' } } }
+      responses:
+        '200': { description: OK }
+        '409': { description: No draft, or module isn't on the draft version, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     delete:
       summary: Delete a module (instructor, owner only)
       security: [{ bearerAuth: [] }]
@@ -214,6 +227,20 @@ paths:
       responses: { '204': { description: No Content } }
 
   /lessons/{id}:
+    patch:
+      summary: >
+        Update a lesson (instructor, owner only). Draft-only, same rule
+        as modules. content is the one optional field: omitted (or sent
+        as JSON null) leaves the lesson's stored content untouched;
+        anything else, including {}, replaces it.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/UpdateLessonRequest' } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Lesson' } } } }
+        '409': { description: No draft, or lesson isn't on the draft version, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     delete:
       summary: Delete a lesson (instructor, owner only)
       security: [{ bearerAuth: [] }]
@@ -232,6 +259,21 @@ paths:
       responses:
         '200': { description: Published, content: { application/json: { schema: { $ref: '#/components/schemas/Version' } } } }
         '409': { description: "Validation failed (e.g. no modules), or already publishing", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /courses/{id}/archive:
+    post:
+      summary: >
+        Archive a course (instructor, owner only) — soft delete via
+        archived_at, not a row removal. Hides it from the catalogue and
+        from GetPublishedDetail, blocks new enrollment, and withdraws
+        every currently-active enrollment on it (internal/enrollment's
+        relay handler reacts to the course.course_archived event this
+        writes). No "unarchive" exists.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '204': { description: No Content }
+        '403': { description: Not the owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /enrollments:
     get:
@@ -351,6 +393,21 @@ components:
         content_type: { type: string, enum: [video, text, pdf, link] }
         content: { type: object }
         asset_key: { type: string, nullable: true }
+        duration_s: { type: integer, minimum: 0 }
+
+    UpdateModuleRequest:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string }
+
+    UpdateLessonRequest:
+      type: object
+      required: [title, content_type]
+      properties:
+        title: { type: string }
+        content_type: { type: string, enum: [video, text, pdf, link] }
+        content: { type: object, nullable: true, description: "Omitted or null leaves stored content unchanged; any other value, including {}, replaces it" }
         duration_s: { type: integer, minimum: 0 }
 
     Lesson:

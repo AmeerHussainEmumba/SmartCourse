@@ -10,7 +10,7 @@ Two kinds of things live here: the **shared kernel** (`platform/`) and eight **d
 |---|---|---|
 | [`identity`](identity/README.md) | Users, credentials, roles, refresh/reset/verification tokens | **Built** — see its README |
 | [`course`](course/README.md) | Courses, versions, modules, lessons, publish lifecycle | **Built** |
-| [`enrollment`](enrollment/README.md) | Enrollments, seat limits, prerequisites | **Built** |
+| [`enrollment`](enrollment/README.md) | Enrollments, seat limits, prerequisites | **Built** — also the relay's second handler (`course.course_archived` → withdraw active enrollments), alongside `analytics` |
 | [`progress`](progress/README.md) | Lesson progress, course completion | **Built** |
 | [`analytics`](analytics/README.md) | Aggregates, platform/course-level counters | **Built (partial)** — pulled forward from M3 as the outbox relay's first handler (ADR-0021); 5 of 10 FR-5 metrics live |
 | `search` | Search index (`course_search_index`) | Not started — the natural next relay handler, same pattern as `analytics` |
@@ -21,7 +21,7 @@ The three unstarted modules are empty directories today, not abandoned work — 
 
 ## Why cross-module imports are restricted
 
-No module imports another module's `repository`, `domain`, or GORM models (RFC §4.4) — enforced by `.golangci.yml`'s `depguard` rules, not just convention. Where one module genuinely needs data another module owns *within the same database transaction* (enrollment locking the `courses` row it doesn't "own," for instance), it issues that SQL directly rather than calling into the other module's Go API — see `internal/enrollment/README.md` for why that's the correct call, not a shortcut. `cmd/smartcourse/modules.go` is the one place in the whole codebase allowed to import every module — it's the composition root.
+No module imports another module's `repository`, `domain`, or GORM models (RFC §4.4) — enforced by `.golangci.yml`'s `depguard` rules, not just convention. Where one module genuinely needs data another module owns *within the same database transaction* (enrollment locking the `courses` row it doesn't "own," for instance), it issues that SQL directly rather than calling into the other module's Go API — see `internal/enrollment/README.md` for why that's the correct call, not a shortcut. `internal/platform/bootstrap` is the one place in the whole codebase allowed to import every module — it's the composition root, imported in turn by both `cmd/api` and `cmd/worker` (ADR-0022).
 
 ## `platform/`
 

@@ -30,14 +30,17 @@ func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig) {
 	instructor.PATCH("/:id", h.updateDraft)
 	instructor.POST("/:id/modules", h.addModule)
 	instructor.POST("/:id/publish", h.publish)
+	instructor.POST("/:id/archive", h.archiveCourse)
 
 	modules := r.Group("/modules")
 	modules.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"))
 	modules.POST("/:id/lessons", h.addLesson)
+	modules.PATCH("/:id", h.updateModule)
 	modules.DELETE("/:id", h.deleteModule)
 
 	lessons := r.Group("/lessons")
 	lessons.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"))
+	lessons.PATCH("/:id", h.updateLesson)
 	lessons.DELETE("/:id", h.deleteLesson)
 }
 
@@ -93,6 +96,30 @@ func (h *Handler) addModule(c *gin.Context) {
 	c.JSON(http.StatusCreated, resp)
 }
 
+func (h *Handler) updateModule(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	moduleID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(err))
+		return
+	}
+	courseID, err := h.svc.ResolveModuleCourseID(c.Request.Context(), moduleID)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	var req UpdateModuleRequest
+	if !httpx.BindJSON(c, &req) {
+		return
+	}
+	resp, err := h.svc.UpdateModule(c.Request.Context(), courseID, id.UserID, moduleID, req)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 func (h *Handler) deleteModule(c *gin.Context) {
 	id, _ := identityauth.FromContext(c.Request.Context())
 	moduleID, err := uuid.Parse(c.Param("id"))
@@ -136,6 +163,30 @@ func (h *Handler) addLesson(c *gin.Context) {
 	c.JSON(http.StatusCreated, resp)
 }
 
+func (h *Handler) updateLesson(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	lessonID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(err))
+		return
+	}
+	courseID, err := h.svc.ResolveLessonCourseID(c.Request.Context(), lessonID)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	var req UpdateLessonRequest
+	if !httpx.BindJSON(c, &req) {
+		return
+	}
+	resp, err := h.svc.UpdateLesson(c.Request.Context(), courseID, id.UserID, lessonID, req)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 func (h *Handler) deleteLesson(c *gin.Context) {
 	id, _ := identityauth.FromContext(c.Request.Context())
 	lessonID, err := uuid.Parse(c.Param("id"))
@@ -170,9 +221,23 @@ func (h *Handler) publish(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+func (h *Handler) archiveCourse(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	courseID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(err))
+		return
+	}
+	if err := h.svc.ArchiveCourse(c.Request.Context(), courseID, id.UserID); err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
 func (h *Handler) listCatalogue(c *gin.Context) {
 	limit := httpx.ClampLimit(atoiOr(c.Query("limit"), 0))
-	resp, err := h.svc.ListCatalogue(c.Request.Context(), limit, c.Query("cursor"))
+	resp, err := h.svc.ListCatalogue(c.Request.Context(), limit, c.Query("cursor"), c.Query("category"), c.Query("level"), c.Query("q"))
 	if err != nil {
 		httpx.Fail(c, err)
 		return

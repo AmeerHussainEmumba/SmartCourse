@@ -1,13 +1,13 @@
 // HTTP — read-only for now (RFC §4.3). This module's real work happens in
 // handlers.go, reacting to events; this file just exposes what's been
-// computed so far.
+// computed so far. Goes through Service, like every other module's
+// handler — see service.go's doc comment for why that wasn't true before.
 package analytics
 
 import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/auth"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
@@ -15,17 +15,17 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/httpx"
 )
 
-type Handler struct{ db *gorm.DB }
+type Handler struct{ svc *Service }
 
-func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, jwtCfg config.JWTConfig) {
-	h := &Handler{db: db}
+func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig) {
+	h := &Handler{svc: svc}
 	g := r.Group("/analytics")
 	g.Use(auth.RequireAuth(jwtCfg))
 	g.GET("/platform", h.getPlatformSnapshot)
 }
 
 func (h *Handler) getPlatformSnapshot(c *gin.Context) {
-	snap, err := GetPlatformSnapshot(c.Request.Context(), h.db)
+	snap, err := h.svc.GetPlatformSnapshot(c.Request.Context())
 	if err != nil {
 		httpx.Fail(c, apperrors.ErrInternal.Wrap(err))
 		return

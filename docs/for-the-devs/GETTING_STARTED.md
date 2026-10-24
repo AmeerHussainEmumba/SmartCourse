@@ -61,7 +61,14 @@ make dev-core
 # 3. Apply the schema.
 make migrate-up
 
-# 4. Run the API.
+# 4. Populate realistic data — instructors, courses at every lifecycle
+#    state, students with partial progress. Goes through the real
+#    service layer (not raw SQL), so it also proves the four core
+#    modules work together. Safe to re-run — it's a no-op the second
+#    time. See cmd/seed/README.md.
+make seed
+
+# 5. Run the API.
 make run-api
 ```
 
@@ -72,7 +79,15 @@ curl localhost:8080/health/live     # {"status":"live"}
 curl localhost:8080/health/ready    # {"status":"ready"} once Postgres/Redis are reachable
 ```
 
-Try the real thing:
+Try the real thing — log in as one of the accounts `make seed` just created (every seeded account shares the password printed at the end of that command):
+
+```bash
+curl -X POST localhost:8080/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"student1@smartcourse.dev","password":"SeedPass123!"}'
+```
+
+Or register your own account the same way that login would otherwise have nothing to authenticate:
 
 ```bash
 curl -X POST localhost:8080/api/v1/auth/register \
@@ -80,7 +95,7 @@ curl -X POST localhost:8080/api/v1/auth/register \
   -d '{"email":"you@example.com","password":"correct-horse-battery","full_name":"Your Name"}'
 ```
 
-You should get back an access token, a refresh token, and your user record. From here, `api/openapi.yaml` documents every endpoint, and each module's README (`internal/<module>/README.md`) explains the design behind it.
+Either way you should get back an access token, a refresh token, and a user record. From here, `api/openapi.yaml` documents every endpoint, and each module's README (`internal/<module>/README.md`) explains the design behind it.
 
 ### Browsing and running the API without writing curl by hand
 
@@ -122,9 +137,9 @@ If you want to see what a real concurrency bug looks like when it's *not* caught
 
 **PostgreSQL is the single source of truth.** Redis and (eventually) MongoDB hold only derived, rebuildable data — never something a user's correctness depends on.
 
-**One Go binary, two run modes.** `--mode=api` serves HTTP. `--mode=worker` will run the outbox relay, Kafka consumers, and background jobs once those exist (see §5 — they don't yet). Because it's one build, the API and the workers can never drift apart on a shared code change.
+**Two services, one shared codebase and database (ADR-0022).** `cmd/api` serves HTTP. `cmd/worker` runs the outbox relay today, and will run Kafka consumers and background jobs once those exist (see §5 — they don't yet). They're built and deployed independently, but both import `internal/platform/bootstrap`, so a shared code change can't drift between them the way it could if each maintained its own wiring. (This used to be one binary with a `--mode` flag — see ADR-0022 if you're curious why and when that changed; it's a good example of a design decision getting revisited based on real feedback, which is worth seeing happen at least once.)
 
-**Eight domain modules, one shared kernel.** Each module (`internal/identity`, `internal/course`, `internal/enrollment`, `internal/progress`, and four not yet built) owns one business capability and follows the same internal shape: `handler.go` (HTTP), `service.go` (business logic and transactions), `repository.go` (the only file touching the database directly), `dto.go` (API request/response types), `domain.go` (entities). None of them import each other's internals directly — enforced by a lint rule, not just convention. `internal/README.md` has the full module map.
+**Eight domain modules, one shared kernel.** Each module (`internal/identity`, `internal/course`, `internal/enrollment`, `internal/progress`, `internal/analytics`, and three not yet built — search, notification, audit) owns one business capability and follows the same internal shape: `handler.go` (HTTP), `service.go` (business logic and transactions), `repository.go` (the only file touching the database directly), `dto.go` (API request/response types), `domain.go` (entities). None of them import each other's internals directly — enforced by a lint rule, not just convention. `internal/README.md` has the full module map.
 
 **State changes now, side effects later.** A request that changes something (enrolling, publishing a course) commits to Postgres and returns immediately. Anything that doesn't need to block the caller — updating a search index, sending a notification, recalculating analytics — happens asynchronously via the outbox pattern (§1.1 above). This is *why* enrollment feels instant even though "enrolling" conceptually triggers several downstream effects.
 
