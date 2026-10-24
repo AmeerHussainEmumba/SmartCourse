@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -102,9 +103,16 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*AuthRespo
 
 	// Best-effort, outside the transaction: delivery is not yet queued
 	// (EmailSender doc comment) — its failure must not fail registration,
-	// which has already durably committed.
+	// which has already durably committed. This used to return an error
+	// here, which meant a client saw a 500 for a registration that had
+	// actually succeeded — confirmed as a real bug during review, not a
+	// theoretical one. A failed send just means the user doesn't get their
+	// verification email promptly; ResendEmailVerification exists
+	// specifically to recover from that without needing to fail the whole
+	// request.
 	if err := s.email.SendEmailVerification(ctx, user.Email, verifyRawToken); err != nil {
-		return nil, apperrors.ErrInternal.Wrap(fmt.Errorf("registration succeeded but verification email failed: %w", err))
+		slog.Error("registration succeeded but verification email failed",
+			slog.String("user_id", user.ID.String()), slog.Any("error", err))
 	}
 
 	return s.issueAuthResponse(ctx, user)
@@ -150,68 +158,98 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*AuthResponse, e
 
 // --- refresh & logout ------------------------------------------------------
 
+// Refresh runs entirely inside one transaction, locking the presented
+// token's row first (GetRefreshTokenByHashForUpdate) — the ADR-0012
+// pattern applied here to close a real concurrency bug: two requests
+// refreshing with the same token at the same moment used to both read
+// "not yet rotated" before either had committed, so both passed the reuse
+// check and both successfully minted a new token. The row lock serialises
+// them — the second caller blocks until the first commits, then sees
+// ReplacedBy already set and correctly treats it as reuse, burning the
+// family instead of also succeeding.
 func (s *Service) Refresh(ctx context.Context, req RefreshRequest) (*AuthResponse, error) {
 	hash := auth.HashOpaqueToken(req.RefreshToken)
-	stored, err := s.repo.GetRefreshTokenByHash(ctx, hash)
-	if errors.Is(err, ErrNotFound) {
-		return nil, errTokenInvalid
-	}
-	if err != nil {
-		return nil, apperrors.ErrInternal.Wrap(err)
-	}
 
-	// Reuse detection (ADR-0015): a revoked or already-rotated token being
-	// presented again means the token was stolen. Burn the whole family.
-	if stored.RevokedAt != nil || stored.ReplacedBy != nil {
-		if err := s.repo.RevokeFamily(ctx, stored.FamilyID); err != nil {
-			return nil, apperrors.ErrInternal.Wrap(err)
-		}
-		return nil, errTokenInvalid
-	}
-	if time.Now().After(stored.ExpiresAt) {
-		return nil, errTokenInvalid
-	}
-
-	user, err := s.repo.GetUserByID(ctx, stored.UserID)
-	if err != nil {
-		return nil, apperrors.ErrInternal.Wrap(err)
-	}
-	if user.Status == StatusSuspended || user.Status == StatusDeleted {
-		return nil, errAccountSuspended
-	}
-
-	newRaw, newHash, err := auth.GenerateOpaqueToken()
-	if err != nil {
-		return nil, apperrors.ErrInternal.Wrap(err)
-	}
-	newToken := &RefreshToken{
-		ID:        uuid.Must(uuid.NewV7()),
-		UserID:    user.ID,
-		TokenHash: newHash,
-		FamilyID:  stored.FamilyID,
-		ExpiresAt: time.Now().UTC().Add(s.jwtCfg.RefreshTokenTTL),
-	}
-	err = s.repo.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	var result *AuthResponse
+	// reuseDetected exists because of a subtlety easy to miss: returning a
+	// non-nil error from inside Transaction's closure rolls back everything
+	// written in it — including the RevokeFamily call below, which is
+	// exactly the side effect that must survive a rejected request. So the
+	// reuse-detected branch commits (returns nil) and signals the rejection
+	// out-of-band instead; every other rejection in this function has
+	// nothing to persist, so returning the error directly (and rolling
+	// back) is correct for those.
+	var reuseDetected bool
+	err := s.repo.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		txRepo := s.repo.WithTx(tx)
-		if err := txRepo.CreateRefreshToken(ctx, newToken); err != nil {
-			return err
+
+		stored, err := txRepo.GetRefreshTokenByHashForUpdate(ctx, hash)
+		if errors.Is(err, ErrNotFound) {
+			return errTokenInvalid
 		}
-		return txRepo.MarkRefreshTokenReplaced(ctx, stored.ID, newToken.ID)
+		if err != nil {
+			return apperrors.ErrInternal.Wrap(err)
+		}
+
+		// Reuse detection (ADR-0015): a revoked or already-rotated token
+		// being presented again means the token was stolen (or, as above,
+		// a second concurrent caller lost the race). Burn the whole family.
+		if stored.RevokedAt != nil || stored.ReplacedBy != nil {
+			if err := txRepo.RevokeFamily(ctx, stored.FamilyID); err != nil {
+				return apperrors.ErrInternal.Wrap(err)
+			}
+			reuseDetected = true
+			return nil
+		}
+		if time.Now().After(stored.ExpiresAt) {
+			return errTokenInvalid
+		}
+
+		user, err := txRepo.GetUserByID(ctx, stored.UserID)
+		if err != nil {
+			return apperrors.ErrInternal.Wrap(err)
+		}
+		if user.Status == StatusSuspended || user.Status == StatusDeleted {
+			return errAccountSuspended
+		}
+
+		newRaw, newHash, err := auth.GenerateOpaqueToken()
+		if err != nil {
+			return apperrors.ErrInternal.Wrap(err)
+		}
+		newToken := &RefreshToken{
+			ID:        uuid.Must(uuid.NewV7()),
+			UserID:    user.ID,
+			TokenHash: newHash,
+			FamilyID:  stored.FamilyID,
+			ExpiresAt: time.Now().UTC().Add(s.jwtCfg.RefreshTokenTTL),
+		}
+		if err := txRepo.CreateRefreshToken(ctx, newToken); err != nil {
+			return apperrors.ErrInternal.Wrap(err)
+		}
+		if err := txRepo.MarkRefreshTokenReplaced(ctx, stored.ID, newToken.ID); err != nil {
+			return apperrors.ErrInternal.Wrap(err)
+		}
+
+		access, err := auth.IssueAccessToken(s.jwtCfg, user.ID, string(user.Role), user.TokenVersion)
+		if err != nil {
+			return apperrors.ErrInternal.Wrap(err)
+		}
+		result = &AuthResponse{
+			AccessToken:  access,
+			RefreshToken: newRaw,
+			ExpiresIn:    int(s.jwtCfg.AccessTokenTTL.Seconds()),
+			User:         toUserResponse(user),
+		}
+		return nil
 	})
 	if err != nil {
-		return nil, apperrors.ErrInternal.Wrap(err)
+		return nil, err
 	}
-
-	access, err := auth.IssueAccessToken(s.jwtCfg, user.ID, string(user.Role), user.TokenVersion)
-	if err != nil {
-		return nil, apperrors.ErrInternal.Wrap(err)
+	if reuseDetected {
+		return nil, errTokenInvalid
 	}
-	return &AuthResponse{
-		AccessToken:  access,
-		RefreshToken: newRaw,
-		ExpiresIn:    int(s.jwtCfg.AccessTokenTTL.Seconds()),
-		User:         toUserResponse(user),
-	}, nil
+	return result, nil
 }
 
 // Logout revokes exactly the presented token. It's intentionally
@@ -323,9 +361,15 @@ func (s *Service) RequestPasswordReset(ctx context.Context, req PasswordResetReq
 	return nil
 }
 
-// ConfirmPasswordReset revokes every existing refresh token and bumps
-// token_version on success — a password reset is exactly the kind of event
-// that should force re-authentication everywhere, not just locally.
+// ConfirmPasswordReset revokes every existing refresh token (RevokeAllForUser
+// — across every family/device, not just one) and bumps token_version on
+// success — a password reset is exactly the kind of event that should
+// force re-authentication everywhere, not just locally. The revocation
+// call was missing entirely until a review caught it: token_version alone
+// only closes new *access* tokens (and only on the small set of routes
+// RequireFreshPrivilege actually guards — ADR-0015 addendum); a stolen
+// refresh token kept right on working through /auth/refresh after a
+// "successful" password reset.
 func (s *Service) ConfirmPasswordReset(ctx context.Context, req PasswordResetConfirmRequest) error {
 	hash := auth.HashOpaqueToken(req.Token)
 	stored, err := s.repo.GetPasswordResetTokenByHash(ctx, hash)
@@ -358,7 +402,7 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, req PasswordResetCon
 			return err
 		}
 		newVersion = v
-		return nil
+		return txRepo.RevokeAllForUser(ctx, stored.UserID)
 	})
 	if err != nil {
 		return apperrors.ErrInternal.Wrap(err)

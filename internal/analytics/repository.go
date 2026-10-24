@@ -104,9 +104,24 @@ type PlatformSnapshot struct {
 	AvgCoursesPerStudent  float64
 }
 
-func GetPlatformSnapshot(ctx context.Context, db *gorm.DB) (*PlatformSnapshot, error) {
+// Repository is the read side of this module — the only type the HTTP
+// handler is allowed to reach data through (via Service), matching every
+// other module's handler → service → repository shape (RFC §4.3). The
+// write-side Recompute*/Ensure*/Increment* functions above stay
+// package-level functions taking tx *gorm.DB directly, not Repository
+// methods: they run inside the relay's per-event transaction, the same
+// pattern internal/enrollment uses for lockCourseForEnrollment — a
+// Repository bound to the base connection wouldn't be the right tool for
+// work that must happen inside someone else's transaction.
+type Repository struct {
+	db *gorm.DB
+}
+
+func NewRepository(db *gorm.DB) *Repository { return &Repository{db: db} }
+
+func (r *Repository) GetPlatformSnapshot(ctx context.Context) (*PlatformSnapshot, error) {
 	var s PlatformSnapshot
-	err := db.WithContext(ctx).Raw(`
+	err := r.db.WithContext(ctx).Raw(`
 		SELECT total_students, total_instructors, total_courses_published, avg_courses_per_student
 		FROM analytics_platform_snapshot WHERE id = true
 	`).Row().Scan(&s.TotalStudents, &s.TotalInstructors, &s.TotalCoursesPublished, &s.AvgCoursesPerStudent)

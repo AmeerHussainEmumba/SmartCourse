@@ -84,7 +84,8 @@ func RegisterModules(r *gin.Engine, deps *Dependencies, cfg *config.Config) {
 	progressSvc := progress.NewService(progress.NewRepository(deps.DB))
 	progress.RegisterRoutes(api, progressSvc, cfg.JWT)
 
-	analytics.RegisterRoutes(api, deps.DB, cfg.JWT)
+	analyticsSvc := analytics.NewService(analytics.NewRepository(deps.DB))
+	analytics.RegisterRoutes(api, analyticsSvc, cfg.JWT)
 }
 
 // BuildRelay wires every module's relay handlers into one Relay instance.
