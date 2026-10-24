@@ -1,0 +1,21 @@
+# The API service (ADR-0022) — one of two independently built images, the
+# other being Dockerfile.worker. Both build from the same source tree and
+# go.mod (a modular monolith's code, ADR-0001), just packaged as separate
+# artifacts so each can be deployed, scaled, and restarted independently.
+#
+# golang:1-alpine floats to the latest Go 1.x release rather than pinning
+# an exact patch version — go.mod's own `go 1.26.5` directive is what
+# actually constrains the minimum language version; this just needs to be
+# at least that, and "latest 1.x" always is.
+FROM golang:1-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -o /out/api ./cmd/api
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates
+COPY --from=build /out/api /usr/local/bin/api
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/api"]

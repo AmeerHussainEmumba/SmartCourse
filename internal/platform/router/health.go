@@ -9,7 +9,7 @@ import (
 )
 
 // Checker is a dependency readiness probe — Postgres and Redis both
-// implement this shape via small adapter funcs in cmd/smartcourse.
+// implement this shape — see internal/platform/bootstrap.Dependencies.HealthCheckers.
 type Checker func(ctx context.Context) error
 
 // RegisterHealth wires /health/live and /health/ready (RFC §12.5).

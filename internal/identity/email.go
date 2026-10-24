@@ -10,7 +10,7 @@ import (
 // and verification emails are, per RFC §6.7/ADR-0014, ordinary Asynq
 // delivery jobs — that queue doesn't exist yet (M3 scope), so
 // LoggingEmailSender stands in until it does. Swapping it for a real
-// Asynq-backed implementation at wiring time (cmd/smartcourse) is the only
+// Asynq-backed implementation at wiring time (internal/platform/bootstrap) is the only
 // change needed; nothing in service.go changes.
 type EmailSender interface {
 	SendPasswordReset(ctx context.Context, toEmail, rawToken string) error

@@ -196,12 +196,12 @@ The honest cost is failure isolation: a runaway goroutine in one module degrades
 
 ### 4.2 Run modes
 
-One binary, two modes, selected by flag:
+Two independently built, deployed, and scaled services (`cmd/api`, `cmd/worker` — ADR-0022), sharing one codebase and one database:
 
-- `--mode=api` — HTTP server. Stateless. Scales horizontally behind a load balancer.
-- `--mode=worker` — outbox relay, Kafka consumers, Asynq workers, Temporal worker. Scales independently.
+- **`cmd/api`** — HTTP server. Stateless. Scales horizontally behind a load balancer.
+- **`cmd/worker`** — outbox relay today; Kafka consumers, Asynq workers, and the Temporal worker land in M2/M3. Scales independently.
 
-One build and one image, so a shared domain change cannot produce a version skew between API and workers. Consumer-group and queue semantics make worker replicas safe to add.
+Both import `internal/platform/bootstrap`, the composition root (RFC §4.4), so a shared domain change still can't produce a version skew between the two the way it could if their wiring logic were maintained separately — the deployment artifacts are now independent, the wiring that builds them is not. (Until ADR-0022, this was literally one binary with a `--mode` flag; that history, and exactly what changed and why, is recorded there rather than silently edited out of existence — see the ADR's own rule about reversals.)
 
 ### 4.3 Modules
 
@@ -256,12 +256,12 @@ Enforced by `depguard` in CI, so a violation fails the build rather than relying
 flowchart TB
     Client[API clients]
 
-    subgraph API["API replicas (--mode=api)"]
+    subgraph API["cmd/api replicas"]
         GIN[Gin: routing, auth, DTOs]
         MOD[identity / course / enrollment / progress<br/>search / analytics / notification / audit]
     end
 
-    subgraph WRK["Worker replicas (--mode=worker)"]
+    subgraph WRK["cmd/worker replicas"]
         RELAY[Outbox relay]
         KC[Kafka consumers]
         AQ[Asynq worker pools]
@@ -351,17 +351,19 @@ Nothing a student can observe changes until `PromoteVersion` commits. A failure 
 
 **Path 3 — Event flow (one fact, many readers)**
 
-| Event | search-indexer | analytics-aggregator | notification-dispatcher | audit-archiver | cache-invalidator |
-|---|---|---|---|---|---|
-| `UserRegistered` | — | counts | welcome job | archive | — |
-| `CoursePublished` | upsert index | published count | instructor job | archive + audit | swap outline pointer |
-| `CoursePublishFailed` | — | failure metric | instructor job | archive + audit | — |
-| `CourseArchived` | remove | counts | — | archive + audit | evict |
-| `StudentEnrolled` | count | enrollments, daily series | confirmation job | archive | — |
-| `StudentWithdrawn` | count | counts | — | archive | — |
-| `LessonCompleted` | — | progress metrics | — | archive | — |
-| `CourseCompleted` | — | completion rate, avg time | congratulation job | archive | — |
-| `CertificateIssued` | — | — | delivery job | archive + audit | — |
+| Event | search-indexer | analytics-aggregator | notification-dispatcher | audit-archiver | cache-invalidator | enrollment-course-archival |
+|---|---|---|---|---|---|---|
+| `UserRegistered` | — | counts | welcome job | archive | — | — |
+| `CoursePublished` | upsert index | published count | instructor job | archive + audit | swap outline pointer | — |
+| `CoursePublishFailed` | — | failure metric | instructor job | archive + audit | — | — |
+| `CourseArchived` | remove | counts | — | archive + audit | evict | withdraw active enrollments |
+| `StudentEnrolled` | count | enrollments, daily series | confirmation job | archive | — | — |
+| `StudentWithdrawn` | count | counts | — | archive | — | — |
+| `LessonCompleted` | — | progress metrics | — | archive | — | — |
+| `CourseCompleted` | — | completion rate, avg time | congratulation job | archive | — | — |
+| `CertificateIssued` | — | — | delivery job | archive + audit | — | — |
+
+`enrollment-course-archival` is live today, not M2/M3-planned like the other five columns (ADR-0021 pulled the relay forward; this consumer and `analytics-aggregator` are both real, running handlers against the in-process relay, not Kafka). It exists specifically because an archived course must not leave its already-enrolled students silently stranded with an active status pointing at content that's gone (`internal/course/README.md`, "Why archive, not delete"; `internal/enrollment/README.md` has the implementation reasoning).
 
 Each consumer maintains its own offset and its own `processed_events` rows. A failure in one never blocks another — the property that makes the system diagnosable and independently recoverable.
 
@@ -871,6 +873,7 @@ Partitioning by aggregate ID guarantees ordering **per aggregate**. No global or
 | `notification-dispatcher` | `enrollment.events`, `progress.events`, `course.events` | Enqueue Asynq delivery jobs |
 | `audit-archiver` | all | Write MongoDB `events` and `audit_log` |
 | `cache-invalidator` | `course.events` | Swap outline pointer, evict stale keys |
+| `enrollment-course-archival` | `CourseArchived` only | Bulk-withdraw every active enrollment on the archived course, decrement `enrollment_count` |
 
 ### 6.6 Idempotency
 
@@ -1476,9 +1479,9 @@ MinIO sits in `core` rather than a later tier because asset upload is exercised 
 ### 17.2 Repository layout
 
 ```
-cmd/smartcourse/          Entry point; --mode=api|worker
+cmd/api/, cmd/worker/     Two entry points, two images (ADR-0022)
 internal/
-  platform/               Shared kernel
+  platform/               Shared kernel, including bootstrap (the composition root)
   identity/ course/ enrollment/ progress/
   search/ analytics/ notification/ audit/
   workflows/              Temporal definitions
@@ -1600,6 +1603,8 @@ The design is one system. The milestones below are review checkpoints, not archi
 - **Concurrent publish validation** (`course.Service.runPublishChecks`) — `ValidateMetadata` gates, then lesson-content validation and totals recompute run concurrently via `errgroup`, matching RFC §7.4's own activity graph shape.
 - **The outbox relay** (`internal/platform/relay`) — a genuine bounded worker pool: goroutines, a channel for job dispatch (structural backpressure), `sync.WaitGroup`-drained graceful shutdown, `sync.Mutex`-guarded in-process claim tracking, `sync/atomic` counters. Proven, not just written: `relay_integration_test.go` asserts bounded concurrency is actually enforced, idempotency actually holds across retries, a poison event actually stops retrying after the configured max, and shutdown actually drains in-flight work's *database commit*, not just its Go function return (the second bug ADR-0021 records).
 - **`internal/analytics`**, the relay's first handler — recomputes `analytics_platform_snapshot` and `analytics_course_stats` from source on every relevant event, and `analytics_daily_enrollments` incrementally. `GET /analytics/platform` is live. This closes FR-5 from zero to five of ten metrics (platform totals, per-course enrollment/completion stats); the remaining five (search-driven popularity, failed-events) still need search and MongoDB respectively.
+
+The relay later gained a second handler, for a different reason than the concurrency pull-forward above: `internal/enrollment`'s `enrollment-course-archival` consumer, added when supervisor review of course archival (`POST /courses/{id}/archive`) surfaced that an archived course was leaving its already-enrolled students with an active status and no working access path. `course.Service.ArchiveCourse` writes `course.course_archived`; the handler bulk-withdraws every active enrollment on that course. See `internal/enrollment/README.md` for the implementation, and the §4.5/§6.5 event tables above, now updated with this consumer.
 
 Updated concurrency-primitive scorecard against SmartCourse.md §7 / Tech Stack, in running production code (not test harnesses): `context.Context` ✅, goroutines ✅ (worker pool), channels ✅ (job dispatch), `sync.WaitGroup` ✅ (shutdown drain), `sync.Mutex` ✅ (in-flight claim set), `sync/atomic` ✅ (relay counters), `errgroup` ✅ (concurrent publish checks), bounded worker pools ✅, backpressure ✅ (channel-structural), retry ✅ (attempt tracking + give-up threshold), graceful shutdown ✅. **Still genuinely absent, honestly:** `sync.RWMutex` has no forced-fit use — the one candidate pattern RFC §10.3 names (a read-heavy/write-rare in-process config cache) doesn't exist as a real need yet, and adding one only to use the primitive would be exactly the anti-pattern ADR-0021 was written to avoid.
 
@@ -1743,6 +1748,7 @@ ADRs record decisions as point-in-time events with their context intact. This RF
 | 0019 | MinIO for learning-asset object storage | §2.3 (A1), §4.7 |
 | 0020 | GCRA rate limiting over fixed-window counters | §5.7, §11.3 |
 | 0021 | In-process outbox relay with a worker pool, ahead of Kafka | §6.3, §21.0 |
+| 0022 | Separate API and worker binaries, one shared codebase and database | §4.2 |
 
 ---
 

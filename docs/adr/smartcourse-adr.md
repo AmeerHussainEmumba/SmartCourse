@@ -52,6 +52,7 @@ The distinction matters when something changes. Six months from now, a contribut
 | [0019](#adr-0019--minio-for-learning-asset-object-storage) | MinIO for learning-asset object storage | Accepted | §2.3 (A1), §4.7 |
 | [0020](#adr-0020--gcra-rate-limiting-over-fixed-window-counters) | GCRA rate limiting over fixed-window counters | Accepted | §5.7, §11.3 |
 | [0021](#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka) | In-process outbox relay with a worker pool, ahead of Kafka | Accepted | §6.3, §21.0 |
+| [0022](#adr-0022--separate-api-and-worker-binaries-one-shared-codebase-and-database) | Separate API and worker binaries, one shared codebase and database | Accepted | §4.2 |
 
 ---
 
@@ -855,6 +856,42 @@ Option A was rejected because the gap it accepts is large and the brief weights 
 ### Reversal trigger
 
 Kafka, Schema Registry, and Protobuf landing (M3) — at which point this package's poll-and-dispatch loop is replaced by a Kafka producer/consumer pair, and today's `Handler` functions are rehomed as Kafka consumer handlers largely unchanged.
+
+---
+
+## ADR-0022 — Separate API and worker binaries, one shared codebase and database
+
+**Status:** Accepted · **Date:** 2026-10-19 · **RFC:** §4.2
+
+### Context
+
+Supervisor review of PR #1 asked for "separate services... at least an API service and a separate Temporal worker service. Each should have its own main, Dockerfile and compose entry. Each service should own its own tables too, since enrollment currently writes directly to the courses table." That's two asks bundled together, of very different sizes. The second — per-service table ownership — directly reverses ADR-0001 (modular monolith) and breaks ADR-0012's row-lock mechanism for enrollment correctness; it's deferred pending a direct conversation (`docs/rfc/differences-from-requirements.md` DR-010 tracks this). This record covers only the first, narrower ask: today's single binary (`--mode=api`/`--mode=worker` flag) genuinely doesn't give the independent build, deploy, restart, and scaling that "separate services" implies, and that part is both reasonable and achievable without touching the data architecture at all.
+
+### Options
+
+**A. Leave it as one binary.** Reject the request outright.
+
+**B. Two binaries, two Dockerfiles, two Compose entries — same codebase, same database, same transactions.** Split the deployment artifact, not the architecture.
+
+**C. Full microservices** — separate codebases or at least separate databases per domain, matching the per-service-table half of the request.
+
+### Decision
+
+**Option B.** `cmd/api` and `cmd/worker` are now two independent `package main`s, each with its own `Dockerfile.*` and `docker-compose.yml` entry, both importing a new `internal/platform/bootstrap` package that holds the composition-root wiring (`RegisterModules`, `BuildRelay`, shared `Connect`) previously in `cmd/smartcourse/modules.go`. Every domain module, every table, every transaction boundary is unchanged — `enrollment` still locks `courses` in the same transaction it writes an enrollment row in, because that's what ADR-0012 requires and this record doesn't touch that requirement.
+
+Option A doesn't hold up: the review's complaint is accurate on its own terms — one binary with a mode flag does not give independent restart/scale/deploy, and "a flag" is a fair thing to push back on even where the reviewer's broader per-service-table ask goes further than the brief or our own architecture supports. Option C is the deferred half of the request — see DR-010 — and isn't rejected here, just not decided here; this record exists specifically so the uncontested part of the feedback didn't sit blocked behind the contested part.
+
+`internal/platform/bootstrap` lives under `internal/`, not `cmd/`, because Go doesn't allow one `package main` to import another, and the composition root has to be importable by both binaries.
+
+### Consequences
+
+**Positive.** `cmd/api` and `cmd/worker` can now be deployed, restarted, and scaled independently — an API replica restarting doesn't interrupt the outbox relay, and vice versa. `docker compose up` now actually starts the application (a confirmed, separate gap from the same review — previously there was no Dockerfile and no app entry in `docker-compose.yml` at all). The composition root relocating to `internal/platform/bootstrap` is a clean move, not a workaround: RFC §4.4's "one place allowed to import every module" rule is satisfied by the package, not by which directory tree it sits under.
+
+**Negative.** Two images to build and push instead of one; CI and any deploy tooling need to know about both. A shared `go.mod` means a change to one module's dependencies still triggers a rebuild of both images, even if only one binary's behavior actually changed — Option C would avoid that at the cost of everything ADR-0001 already weighed against it.
+
+### Reversal trigger
+
+None anticipated for this record specifically. If DR-010's broader per-service-table question resolves toward full microservices, this ADR is superseded by that larger change, not reversed on its own.
 
 ---
 
