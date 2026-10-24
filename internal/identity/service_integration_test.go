@@ -9,6 +9,8 @@ package identity_test
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,12 +23,44 @@ import (
 
 func newTestService(t *testing.T) (*identity.Service, *testenv.Env) {
 	t.Helper()
+	return newTestServiceWithEmail(t, identity.LoggingEmailSender{})
+}
+
+func newTestServiceWithEmail(t *testing.T, sender identity.EmailSender) (*identity.Service, *testenv.Env) {
+	t.Helper()
 	env := testenv.Setup(t)
 	repo := identity.NewRepository(env.DB)
 	jwtCfg := config.JWTConfig{SigningKey: "integration-test-signing-key-32-bytes!!", AccessTokenTTL: 15 * time.Minute, RefreshTokenTTL: 7 * 24 * time.Hour, Issuer: "smartcourse-test"}
 	argonCfg := config.Argon2Config{MemoryKiB: 8 * 1024, Iterations: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32}
-	svc := identity.NewService(repo, env.RDB, jwtCfg, argonCfg, identity.LoggingEmailSender{})
+	svc := identity.NewService(repo, env.RDB, jwtCfg, argonCfg, sender)
 	return svc, env
+}
+
+// capturingEmailSender records the raw tokens it's asked to send, so a
+// test can redeem a password-reset/verification token without a real
+// mailbox, and can optionally fail every send (failWith) to prove a
+// delivery failure doesn't break the caller.
+type capturingEmailSender struct {
+	mu                     sync.Mutex
+	lastPasswordResetToken string
+	failWith               error
+}
+
+func (s *capturingEmailSender) SendPasswordReset(ctx context.Context, toEmail, rawToken string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastPasswordResetToken = rawToken
+	return s.failWith
+}
+
+func (s *capturingEmailSender) SendEmailVerification(ctx context.Context, toEmail, rawToken string) error {
+	return s.failWith
+}
+
+func (s *capturingEmailSender) PasswordResetToken() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastPasswordResetToken
 }
 
 func TestRegister_DuplicateEmail_Rejected(t *testing.T) {
@@ -232,4 +266,130 @@ func TestUpdateUserRole_WritesTokenVersionToRedisCache(t *testing.T) {
 	}
 
 	_ = authResp // original tokens are intentionally not exercised further here
+}
+
+// TestConfirmPasswordReset_RevokesAllRefreshTokens is the regression test
+// for a real bug: ConfirmPasswordReset bumped token_version (closing new
+// access tokens) but never touched refresh_tokens at all — a stolen
+// refresh token kept working through /auth/refresh after a "successful"
+// password reset, because RequireFreshPrivilege only guards a small set
+// of admin/privilege-sensitive routes, not /auth/refresh itself.
+func TestConfirmPasswordReset_RevokesAllRefreshTokens(t *testing.T) {
+	sender := &capturingEmailSender{}
+	svc, _ := newTestServiceWithEmail(t, sender)
+	ctx := context.Background()
+
+	authResp, err := svc.Register(ctx, identity.RegisterRequest{Email: "resetme@example.com", Password: "correct-horse-battery", FullName: "User"})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	preResetRefresh := authResp.RefreshToken
+
+	if err := svc.RequestPasswordReset(ctx, identity.PasswordResetRequestDTO{Email: "resetme@example.com"}); err != nil {
+		t.Fatalf("request password reset: %v", err)
+	}
+	resetToken := sender.PasswordResetToken()
+	if resetToken == "" {
+		t.Fatal("expected a password reset token to have been generated and sent")
+	}
+
+	if err := svc.ConfirmPasswordReset(ctx, identity.PasswordResetConfirmRequest{Token: resetToken, NewPassword: "a-brand-new-password"}); err != nil {
+		t.Fatalf("confirm password reset: %v", err)
+	}
+
+	// The bug, made concrete: the refresh token issued BEFORE the reset
+	// must stop working after it.
+	if _, err := svc.Refresh(ctx, identity.RefreshRequest{RefreshToken: preResetRefresh}); err == nil {
+		t.Fatal("expected the pre-reset refresh token to be rejected after a password reset")
+	}
+
+	// And the new password must actually be the one that works now.
+	if _, err := svc.Login(ctx, identity.LoginRequest{Email: "resetme@example.com", Password: "a-brand-new-password"}); err != nil {
+		t.Fatalf("expected login with the new password to succeed: %v", err)
+	}
+}
+
+// TestRefresh_ConcurrentCalls_ExactlyOneSucceeds is the regression test for
+// a real concurrency bug: two simultaneous /auth/refresh calls presenting
+// the same token both read "not yet rotated" before either had committed,
+// so both passed the reuse check and both successfully minted a new token
+// — the exact "two refreshes at once both succeed" bug flagged in review.
+// Fixed with the same row-lock pattern ADR-0012 uses for enrollment
+// (GetRefreshTokenByHashForUpdate), serialising concurrent callers instead
+// of letting them race on a stale read.
+func TestRefresh_ConcurrentCalls_ExactlyOneSucceeds(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	authResp, err := svc.Register(ctx, identity.RegisterRequest{Email: "racer@example.com", Password: "correct-horse-battery", FullName: "User"})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	const attempts = 10
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	successes := 0
+	var winningToken string
+
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := svc.Refresh(ctx, identity.RefreshRequest{RefreshToken: authResp.RefreshToken})
+			mu.Lock()
+			defer mu.Unlock()
+			if err == nil {
+				successes++
+				winningToken = resp.RefreshToken
+			}
+		}()
+	}
+	wg.Wait()
+
+	if successes != 1 {
+		t.Fatalf("expected exactly 1 successful refresh out of %d concurrent attempts with the same token, got %d", attempts, successes)
+	}
+
+	// Every losing attempt saw what looks exactly like reuse (the token
+	// had already been rotated by the winner) and revoked the whole family
+	// in response (ADR-0015) — including the winner's own brand-new token.
+	// That's intentional, not a bug: once any reuse of a family is
+	// observed, the whole family is treated as potentially compromised
+	// rather than the system guessing which concurrent caller was
+	// legitimate.
+	if _, err := svc.Refresh(ctx, identity.RefreshRequest{RefreshToken: winningToken}); err == nil {
+		t.Fatal("expected even the winning rotation's token to be rejected, since the race triggered family-wide revocation")
+	}
+}
+
+// TestRegister_DoesNotFailWhenEmailDeliveryFails is the regression test for
+// a real bug: Register returned an error (surfaced to the client as a 500)
+// whenever the verification email failed to send — even though the user
+// row had already durably committed. A client seeing "500" after a
+// successful registration is exactly the kind of inconsistency this
+// project's architecture otherwise goes out of its way to prevent.
+func TestRegister_DoesNotFailWhenEmailDeliveryFails(t *testing.T) {
+	sender := &capturingEmailSender{failWith: errors.New("simulated email provider outage")}
+	svc, env := newTestServiceWithEmail(t, sender)
+	ctx := context.Background()
+
+	resp, err := svc.Register(ctx, identity.RegisterRequest{Email: "emailfails@example.com", Password: "correct-horse-battery", FullName: "User"})
+	if err != nil {
+		t.Fatalf("expected registration to succeed even though email delivery fails, got: %v", err)
+	}
+	if resp.AccessToken == "" {
+		t.Fatal("expected a real access token even though the verification email failed to send")
+	}
+
+	// The user must actually exist — registration genuinely succeeded, not
+	// just "the function happened not to return an error."
+	repo := identity.NewRepository(env.DB)
+	user, err := repo.GetUserByEmail(ctx, "emailfails@example.com")
+	if err != nil {
+		t.Fatalf("expected the user to exist in the database: %v", err)
+	}
+	if user.Email != "emailfails@example.com" {
+		t.Fatalf("unexpected user record: %+v", user)
+	}
 }
