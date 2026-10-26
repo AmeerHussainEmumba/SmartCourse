@@ -65,7 +65,7 @@ type Argon2Config struct {
 
 // Load reads and validates configuration from the environment. It returns an
 // error rather than panicking so callers (including tests) can decide how to
-// fail; cmd/api and cmd/worker both treat a non-nil error as fatal at boot.
+// fail; every cmd/* binary treats a non-nil error as fatal at boot.
 func Load() (*Config, error) {
 	var errs []string
 	req := func(key string) string {

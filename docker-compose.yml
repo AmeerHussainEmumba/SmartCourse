@@ -71,39 +71,17 @@ services:
       exit 0
       "
 
-  # api and worker (ADR-0022): the application itself, as two independently
-  # built/deployed services sharing one PostgreSQL database and one set of
-  # Go packages — a modular monolith's code (ADR-0001), two deployment
-  # artifacts. Environment is set directly here, not via env_file: .env —
+  # worker, identity-api, course-api, analytics-api (ADR-0022, ADR-0023):
+  # the application itself, as four independently built/deployed services
+  # sharing one PostgreSQL database and one set of Go packages — a
+  # modular monolith's code (ADR-0001), four deployment artifacts.
+  # Environment is set directly here, not via env_file: .env —
   # deliberately, so `docker compose up` works on a fresh clone before
   # anyone has copied env.example to .env, and because the in-network
   # values (service names, not localhost:<mapped-port>) are different from
   # what env.example gives a host-side `go run` anyway. Every value below
   # is a local-dev-only placeholder, same as postgres/minio's hardcoded
   # credentials above — never reuse JWT_SIGNING_KEY beyond local dev.
-  api:
-    build:
-      context: .
-      dockerfile: Dockerfile.api
-    profiles: *profiles-core
-    environment:
-      APP_ENV: development
-      HTTP_PORT: "8080"
-      POSTGRES_DSN: postgres://smartcourse:smartcourse@postgres:5432/smartcourse?sslmode=disable
-      REDIS_ADDR: redis:6379
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY_ID: smartcourse
-      MINIO_SECRET_ACCESS_KEY: smartcourse123
-      JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
-    ports: ["8080:8080"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-
   worker:
     build:
       context: .
@@ -129,9 +107,8 @@ services:
   # surface split into its own deployable image — the most self-contained
   # module in the codebase (no other module reads its tables directly;
   # everyone else reads the caller's identity off the JWT claims instead).
-  # Port 8090, picked to not collide with 8080 (api, being phased out),
-  # 8081 (schema-registry, events profile), 8088 (temporal-ui), or 8089
-  # (swagger-ui).
+  # Port 8090 — no collision with 8081 (schema-registry, events
+  # profile), 8088 (temporal-ui), or 8089 (swagger-ui).
   identity-api:
     build:
       context: .
@@ -160,9 +137,9 @@ services:
   # together in one image because enrollment locks the `courses` row in
   # the SAME transaction it writes an enrollment row in (ADR-0012's
   # seat-limit guarantee) — splitting them would force that lock into a
-  # network call. Port 8091, picked to not collide with 8080 (api, being
-  # phased out), 8081 (schema-registry, events profile), 8088
-  # (temporal-ui), or 8089 (swagger-ui).
+  # network call. Port 8091 — no collision with 8081
+  # (schema-registry, events profile), 8088 (temporal-ui), or 8089
+  # (swagger-ui).
   course-api:
     build:
       context: .
@@ -190,9 +167,9 @@ services:
   # surface split into its own deployable image — read-only, already
   # decoupled (consumes other modules' state via the relay/outbox, never a
   # direct call into another module), the lowest-risk candidate to split
-  # out of cmd/api first. Port 8092, picked to not collide with 8080
-  # (api, being phased out), 8081 (schema-registry, events profile), 8088
-  # (temporal-ui), or 8089 (swagger-ui).
+  # out of cmd/api first. Port 8092 — no collision with 8081
+  # (schema-registry, events profile), 8088 (temporal-ui), or 8089
+  # (swagger-ui).
   analytics-api:
     build:
       context: .

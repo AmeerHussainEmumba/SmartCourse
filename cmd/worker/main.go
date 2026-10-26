@@ -1,8 +1,10 @@
-// Command worker is SmartCourse's background service — one of two
-// independently built, deployed, and run binaries (ADR-0022; cmd/api is
-// the other). It runs the outbox relay (internal/platform/relay) today,
-// plus, later, Kafka consumers, Asynq pools, and the Temporal worker
-// (M2/M3 — RFC §21.0). No HTTP surface at all.
+// Command worker is SmartCourse's background service — one of four
+// independently built, deployed, and run binaries (ADR-0022; the other
+// three are the HTTP services, identity-api/course-api/analytics-api,
+// split out of what used to be one cmd/api — ADR-0023). It runs the
+// outbox relay (internal/platform/relay) today, plus, later, Kafka
+// consumers, Asynq pools, and the Temporal worker (M2/M3 — RFC §21.0).
+// No HTTP surface at all.
 package main
 
 import (

@@ -1,10 +1,10 @@
 # cmd/worker
 
-SmartCourse's background service — one of two independently built, deployed, and run binaries (ADR-0022; `cmd/api` is the other).
+SmartCourse's background service — one of four independently built, deployed, and run binaries (ADR-0022, ADR-0023; `cmd/identity-api`, `cmd/course-api`, and `cmd/analytics-api` are the other three).
 
 ```
 go run ./cmd/worker            # natively
-docker compose --profile core up -d    # or containerized, alongside api + infra
+docker compose --profile core up -d    # or containerized, alongside the api services + infra
 ```
 
 ## What's here
@@ -13,8 +13,8 @@ docker compose --profile core up -d    # or containerized, alongside api + infra
 
 ## Current state
 
-Runs the outbox relay (ADR-0021), with `internal/analytics` registered as its first handler. Kafka consumers, Asynq pools, and the Temporal worker are still M2/M3 scope (RFC §21.0) — when they land, this is where they get wired in, alongside the relay, not replacing it (the relay itself migrates to publishing-to-Kafka rather than disappearing — see ADR-0021's reversal trigger).
+Runs the outbox relay (ADR-0021), with `internal/analytics` and `internal/enrollment` registered as handlers today. Kafka consumers, Asynq pools, and the Temporal worker are still M2/M3 scope (RFC §21.0) — when they land, this is where they get wired in, alongside the relay, not replacing it (the relay itself migrates to publishing-to-Kafka rather than disappearing — see ADR-0021's reversal trigger).
 
-## Why a separate binary from the API
+## Why a separate binary from the API services
 
-See `cmd/api/README.md` — same reasoning, same ADR-0022, just the other half of the split.
+See `cmd/identity-api/README.md`, `cmd/course-api/README.md`, or `cmd/analytics-api/README.md` — same reasoning, ADR-0022 for the original api/worker split and ADR-0023 for api's further split, just the async half of it.
