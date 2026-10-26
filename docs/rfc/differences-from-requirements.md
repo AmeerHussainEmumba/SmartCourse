@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Living document |
-| Last updated | 2026-09-24 |
+| Last updated | 2026-10-26 |
 | Related | `smartcourse-rfc.md`, `smartcourse-adr.md`, `docs/baseline/SmartCourse.md`, `docs/baseline/Execution Guidelines.md` |
 
 ## Purpose
@@ -34,6 +34,7 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-009](#dr-009--separate-api-and-worker-binaries-per-supervisor-review) | Separate API and worker binaries, per supervisor review | Addition | Accepted |
 | [DR-010](#dr-010--per-service-table-ownership-and-liquibase-deferred-pending-discussion) | Per-service table ownership and Liquibase — deferred pending discussion | Interpretation | Proposed (tables half resolved — see entry's update) |
 | [DR-011](#dr-011--further-splitting-cmdapi-into-per-domain-deployable-services) | Further splitting cmd/api into per-domain deployable services | Interpretation | Accepted |
+| [DR-012](#dr-012--seed-data-created-through-the-service-layer-not-a-sql-script) | Seed data created through the service layer, not a SQL script | Interpretation | Proposed |
 
 ---
 
@@ -240,6 +241,24 @@ Unlike DR-010, this doesn't reverse any existing ADR — it's an extension of AD
 ### If this turns out to be wrong
 
 If a five-image split (splitting `enrollment` out of `course-api` too) turns out to be what's actually expected, that requires accepting a real architectural cost — the seat-limit lock becoming a network call or distributed transaction — not just another `cmd/` directory. That tradeoff isn't decided here and would need its own ADR superseding ADR-0023's grouping decision specifically, not a silent code change.
+
+---
+
+## DR-012 — Seed data created through the service layer, not a SQL script
+
+**Category:** Interpretation · **Date:** 2026-10-26 · **Related:** `cmd/seed/main.go`, DR-004
+
+### What differs
+
+Feedback received was that `cmd/seed/main.go` — the `make seed` dev-dataset generator — "needs to be done" as a SQL script. What exists instead is a Go program that creates instructors, courses, students, and progress by calling the real `identity`/`course`/`enrollment`/`progress` service layer, not raw `INSERT` statements.
+
+### Why this is logged as "proposed," not "accepted"
+
+This wasn't received as a specific, detailed ask (unlike DR-009/DR-011) — it's a short note whose exact intent (and whether it's a hard requirement, a convention preference, or a misreading of what `cmd/seed` does) isn't yet confirmed. The case for the current approach: going through the service layer means every seeded row passes the same validation and transactional invariants a real request would (e.g., Argon2 password hashing, the enrollment seat-limit check), and the sentinel-admin idempotency check makes `make seed` safe to re-run — properties a hand-written `.sql` file would have to reimplement and keep in sync by hand as the schema evolves. It also means the seed script doubles as a lightweight end-to-end smoke test of the four core modules wired together. No technical gap in the current approach has been identified; this entry exists to flag the feedback rather than resolve it unilaterally, pending direct confirmation of what was meant.
+
+### If this turns out to be wrong
+
+If a plain SQL seed script is actually required (e.g., to match a company convention, or because the service-layer approach is unacceptable for some reason not yet stated), `cmd/seed/main.go` would be replaced by a `.sql` file (or a `golang-migrate`-style seed migration) populating the same dataset directly, accepting the loss of validation-by-construction and the idempotency behavior unless reimplemented separately.
 
 ---
 
