@@ -66,14 +66,28 @@ func (d *Dependencies) HealthCheckers() map[string]router.Checker {
 	}
 }
 
-// RegisterModules wires every domain module's HTTP routes onto r. Called
-// only by cmd/api — cmd/worker has no HTTP surface.
-func RegisterModules(r *gin.Engine, deps *Dependencies, cfg *config.Config) {
+// RegisterIdentityRoutes wires internal/identity's HTTP routes onto r.
+// Called by cmd/identity-api. Fully self-contained — no other module reads
+// identity's tables directly; everyone else gets the caller's identity from
+// the JWT claims (auth.FromContext), never a lookup into `users`. See
+// ADR-0023 for why identity split out on its own first.
+func RegisterIdentityRoutes(r *gin.Engine, deps *Dependencies, cfg *config.Config) {
 	api := r.Group("/api/v1")
 
 	identityRepo := identity.NewRepository(deps.DB)
 	identitySvc := identity.NewService(identityRepo, deps.RDB, cfg.JWT, cfg.Argon, identity.LoggingEmailSender{})
 	identity.RegisterRoutes(api, identitySvc, cfg.JWT, deps.RDB)
+}
+
+// RegisterCourseRoutes wires internal/course, internal/enrollment, and
+// internal/progress's HTTP routes onto r. Called by cmd/course-api. The
+// three stay together, not split into three more binaries, because
+// enrollment locks the `courses` row in the SAME database transaction it
+// writes an enrollment row in (ADR-0012's seat-limit guarantee) — that
+// requires both to run in one process against one connection; splitting
+// them would force that lock into a network call. See ADR-0023.
+func RegisterCourseRoutes(r *gin.Engine, deps *Dependencies, cfg *config.Config) {
+	api := r.Group("/api/v1")
 
 	courseSvc := course.NewService(course.NewRepository(deps.DB))
 	course.RegisterRoutes(api, courseSvc, cfg.JWT)
@@ -83,6 +97,15 @@ func RegisterModules(r *gin.Engine, deps *Dependencies, cfg *config.Config) {
 
 	progressSvc := progress.NewService(progress.NewRepository(deps.DB))
 	progress.RegisterRoutes(api, progressSvc, cfg.JWT)
+}
+
+// RegisterAnalyticsRoutes wires internal/analytics's HTTP routes onto r.
+// Called by cmd/analytics-api. Read-only and already decoupled — analytics
+// learns about the rest of the system through the relay/outbox, never a
+// direct call into another module's service layer, which made it the
+// lowest-risk candidate to split out first (ADR-0023).
+func RegisterAnalyticsRoutes(r *gin.Engine, deps *Dependencies, cfg *config.Config) {
+	api := r.Group("/api/v1")
 
 	analyticsSvc := analytics.NewService(analytics.NewRepository(deps.DB))
 	analytics.RegisterRoutes(api, analyticsSvc, cfg.JWT)

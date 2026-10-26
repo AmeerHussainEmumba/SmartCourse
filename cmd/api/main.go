@@ -42,7 +42,9 @@ func main() {
 
 	r := router.New(cfg.Env, cfg.CORSAllowedOrigins)
 	router.RegisterHealth(r, deps.HealthCheckers())
-	bootstrap.RegisterModules(r, deps, cfg)
+	bootstrap.RegisterIdentityRoutes(r, deps, cfg)
+	bootstrap.RegisterCourseRoutes(r, deps, cfg)
+	bootstrap.RegisterAnalyticsRoutes(r, deps, cfg)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
