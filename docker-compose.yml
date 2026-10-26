@@ -155,6 +155,37 @@ services:
       minio:
         condition: service_healthy
 
+  # course-api (ADR-0023, extending ADR-0022): internal/course,
+  # internal/enrollment, and internal/progress's HTTP surface, kept
+  # together in one image because enrollment locks the `courses` row in
+  # the SAME transaction it writes an enrollment row in (ADR-0012's
+  # seat-limit guarantee) — splitting them would force that lock into a
+  # network call. Port 8091, picked to not collide with 8080 (api, being
+  # phased out), 8081 (schema-registry, events profile), 8088
+  # (temporal-ui), or 8089 (swagger-ui).
+  course-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.course-api
+    profiles: *profiles-core
+    environment:
+      APP_ENV: development
+      HTTP_PORT: "8080"
+      POSTGRES_DSN: postgres://smartcourse:smartcourse@postgres:5432/smartcourse?sslmode=disable
+      REDIS_ADDR: redis:6379
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY_ID: smartcourse
+      MINIO_SECRET_ACCESS_KEY: smartcourse123
+      JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
+    ports: ["8091:8080"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
   # analytics-api (ADR-0023, extending ADR-0022): internal/analytics's HTTP
   # surface split into its own deployable image — read-only, already
   # decoupled (consumes other modules' state via the relay/outbox, never a
