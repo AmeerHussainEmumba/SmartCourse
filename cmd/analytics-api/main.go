@@ -3,7 +3,8 @@
 // ADR-0022's two-binary split). Read-only, decoupled from every other
 // module already (it learns about the rest of the system through the
 // relay/outbox, not a direct call into another module), which is why it
-// split out first. Same shape as cmd/api/main.go — thin, no business
+// split out first. Same shape as cmd/identity-api/main.go and
+// cmd/course-api/main.go — thin, no business
 // logic — just a narrower route registration.
 package main
 

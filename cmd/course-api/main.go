@@ -4,8 +4,9 @@
 // stay together, not three more binaries, because enrollment locks the
 // `courses` row in the SAME database transaction it writes an enrollment
 // row in (ADR-0012's seat-limit guarantee) — splitting them apart would
-// force that lock into a network call. Same shape as cmd/api/main.go —
-// thin, no business logic — just a narrower route registration.
+// force that lock into a network call. Same shape as
+// cmd/identity-api/main.go and cmd/analytics-api/main.go — thin, no
+// business logic — just a narrower route registration.
 package main
 
 import (

@@ -8,17 +8,17 @@ This README is the fast path to running the system and finding your way around. 
 
 ```bash
 cp env.example .env          # fill in real values; nothing here has a working default (see env.example)
-make dev-core                # Postgres, Redis, MinIO
+make dev-core                # Postgres, Redis, MinIO — also starts identity-api/course-api/analytics-api/worker, containerized
 make migrate-up              # apply the full schema
 make seed                    # optional — a realistic dataset to develop against, safe to re-run
-make run-api                 # http://localhost:8080
 ```
 
 Check it's alive:
 
 ```bash
-curl localhost:8080/health/live
-curl localhost:8080/health/ready
+curl localhost:8090/health/ready    # identity-api
+curl localhost:8091/health/ready    # course-api
+curl localhost:8092/health/ready    # analytics-api
 ```
 
 Browse and run every endpoint without writing curl by hand: **http://localhost:8089** (a Swagger UI reading `api/openapi.yaml` live, also started by `make dev-core`) — or `File → Import` that same file into Postman. See `docs/for-the-devs/GETTING_STARTED.md`'s "Browsing and running the API" section for both.

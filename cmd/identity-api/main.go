@@ -3,8 +3,8 @@
 // ADR-0022's two-binary split). Fully self-contained: no other module
 // reads identity's tables directly, and every other module gets the
 // caller's identity from the JWT claims, never a lookup into `users`.
-// Same shape as cmd/api/main.go — thin, no business logic — just a
-// narrower route registration.
+// Same shape as cmd/course-api/main.go and cmd/analytics-api/main.go —
+// thin, no business logic — just a narrower route registration.
 package main
 
 import (
