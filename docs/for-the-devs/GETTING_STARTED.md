@@ -68,21 +68,25 @@ make migrate-up
 #    time. See cmd/seed/README.md.
 make seed
 
-# 5. Run the API.
-make run-api
+# 5. Nothing left to do — `make dev-core` (step 2) already started the
+#    application containers too (identity-api, course-api, analytics-api,
+#    worker — they're in the `core` profile, same as Postgres/Redis/MinIO).
+#    See "Running natively instead" below if you want faster iteration
+#    than a Docker rebuild on every change.
 ```
 
-Check it's alive:
+Check it's alive (each HTTP service has its own `/health/ready`):
 
 ```bash
-curl localhost:8080/health/live     # {"status":"live"}
-curl localhost:8080/health/ready    # {"status":"ready"} once Postgres/Redis are reachable
+curl localhost:8090/health/ready    # identity-api
+curl localhost:8091/health/ready    # course-api
+curl localhost:8092/health/ready    # analytics-api
 ```
 
-Try the real thing — log in as one of the accounts `make seed` just created (every seeded account shares the password printed at the end of that command):
+Try the real thing — log in as one of the accounts `make seed` just created (every seeded account shares the password printed at the end of that command). Auth lives in `identity-api`, port **8090**:
 
 ```bash
-curl -X POST localhost:8080/api/v1/auth/login \
+curl -X POST localhost:8090/api/v1/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"student1@smartcourse.dev","password":"SeedPass123!"}'
 ```
@@ -90,19 +94,36 @@ curl -X POST localhost:8080/api/v1/auth/login \
 Or register your own account the same way that login would otherwise have nothing to authenticate:
 
 ```bash
-curl -X POST localhost:8080/api/v1/auth/register \
+curl -X POST localhost:8090/api/v1/auth/register \
   -H 'Content-Type: application/json' \
   -d '{"email":"you@example.com","password":"correct-horse-battery","full_name":"Your Name"}'
 ```
 
-Either way you should get back an access token, a refresh token, and a user record. From here, `api/openapi.yaml` documents every endpoint, and each module's README (`internal/<module>/README.md`) explains the design behind it.
+Either way you should get back an access token, a refresh token, and a user record. Courses live in `course-api`, port **8091**:
+
+```bash
+curl localhost:8091/api/v1/courses
+```
+
+From here, `api/openapi.yaml` documents every endpoint (across all three services — it's one spec, not three, since the route paths and request/response shapes didn't change, only which process answers them), and each module's README (`internal/<module>/README.md`) explains the design behind it.
+
+### Running natively instead
+
+`make dev-core` containerizes everything, including the app, which means a code change needs a rebuild to see. For faster iteration, stop the containerized app services (`docker compose stop identity-api course-api analytics-api worker` — leave Postgres/Redis/MinIO running) and run natively instead, each in its own terminal:
+
+```bash
+make run-identity-api     # :8090
+make run-course-api       # :8091
+make run-analytics-api    # :8092
+make run-worker           # no HTTP port
+```
 
 ### Browsing and running the API without writing curl by hand
 
 Two ways to explore `api/openapi.yaml` interactively, both reading the same file — neither is a separate thing to keep in sync:
 
-- **In the browser:** `make dev-core` (step 2 above) also starts a Swagger UI container reading `api/openapi.yaml` live — **http://localhost:8089**. Every endpoint, with an "Execute" button that fires a real request against your local API (`http://localhost:8080`, selectable from the server dropdown at the top). Click "Authorize" and paste an access token from the register/login call above to call anything that needs one.
-- **In Postman:** File → Import → select `api/openapi.yaml` from this repo. Postman builds a full collection from it. Set a collection variable (or environment) for the base URL — `http://localhost:8080/api/v1` — and another for your access token, then reference it as a Bearer token on requests that need auth.
+- **In the browser:** `make dev-core` (step 2 above) also starts a Swagger UI container reading `api/openapi.yaml` live — **http://localhost:8089**. Every endpoint, with an "Execute" button that fires a real request against your local API. The spec lists all three services' base URLs in the server dropdown at the top (`localhost:8090` for auth/users, `:8091` for courses/enrollments/progress, `:8092` for analytics) — pick the one matching whatever endpoint you're trying, since each is a separate process. Click "Authorize" and paste an access token from the register/login call above to call anything that needs one.
+- **In Postman:** File → Import → select `api/openapi.yaml` from this repo. Postman builds a full collection from it, with all three base URLs available as environment/collection variables. Set your access token as another variable, then reference it as a Bearer token on requests that need auth.
 
 ### If a port is already taken
 
@@ -137,7 +158,7 @@ If you want to see what a real concurrency bug looks like when it's *not* caught
 
 **PostgreSQL is the single source of truth.** Redis and (eventually) MongoDB hold only derived, rebuildable data — never something a user's correctness depends on.
 
-**Two services, one shared codebase and database (ADR-0022).** `cmd/api` serves HTTP. `cmd/worker` runs the outbox relay today, and will run Kafka consumers and background jobs once those exist (see §5 — they don't yet). They're built and deployed independently, but both import `internal/platform/bootstrap`, so a shared code change can't drift between them the way it could if each maintained its own wiring. (This used to be one binary with a `--mode` flag — see ADR-0022 if you're curious why and when that changed; it's a good example of a design decision getting revisited based on real feedback, which is worth seeing happen at least once.)
+**Four services, one shared codebase and database (ADR-0022, ADR-0023).** `cmd/identity-api` serves auth/users. `cmd/course-api` serves courses, enrollments, and progress together — kept in one process because enrollment locks the `courses` row in the same transaction it writes an enrollment row in (ADR-0012's seat-limit guarantee). `cmd/analytics-api` serves the read-only analytics dashboard. `cmd/worker` runs the outbox relay today, and will run Kafka consumers and background jobs once those exist (see §5 — they don't yet). All four are built and deployed independently, but all import `internal/platform/bootstrap`, so a shared code change can't drift between them the way it could if each maintained its own wiring. (This used to be one binary with a `--mode` flag, then two services, then four — see ADR-0022 and ADR-0023 if you're curious why and when that changed; it's a good example of a design decision getting revisited based on real feedback, which is worth seeing happen at least once.)
 
 **Eight domain modules, one shared kernel.** Each module (`internal/identity`, `internal/course`, `internal/enrollment`, `internal/progress`, `internal/analytics`, and three not yet built — search, notification, audit) owns one business capability and follows the same internal shape: `handler.go` (HTTP), `service.go` (business logic and transactions), `repository.go` (the only file touching the database directly), `dto.go` (API request/response types), `domain.go` (entities). None of them import each other's internals directly — enforced by a lint rule, not just convention. `internal/README.md` has the full module map.
 

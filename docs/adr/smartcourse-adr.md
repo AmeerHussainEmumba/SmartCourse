@@ -53,6 +53,7 @@ The distinction matters when something changes. Six months from now, a contribut
 | [0020](#adr-0020--gcra-rate-limiting-over-fixed-window-counters) | GCRA rate limiting over fixed-window counters | Accepted | §5.7, §11.3 |
 | [0021](#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka) | In-process outbox relay with a worker pool, ahead of Kafka | Accepted | §6.3, §21.0 |
 | [0022](#adr-0022--separate-api-and-worker-binaries-one-shared-codebase-and-database) | Separate API and worker binaries, one shared codebase and database | Accepted | §4.2 |
+| [0023](#adr-0023--split-cmdapi-into-identity-api-course-api-and-analytics-api) | Split cmd/api into identity-api, course-api, and analytics-api | Accepted | §4.2 |
 
 ---
 
@@ -892,6 +893,46 @@ Option A doesn't hold up: the review's complaint is accurate on its own terms �
 ### Reversal trigger
 
 None anticipated for this record specifically. If DR-010's broader per-service-table question resolves toward full microservices, this ADR is superseded by that larger change, not reversed on its own.
+
+---
+
+## ADR-0023 — Split cmd/api into identity-api, course-api, and analytics-api
+
+**Status:** Accepted · **Date:** 2026-10-26 · **RFC:** §4.2
+
+### Context
+
+After the supervisor review that produced ADR-0022 and DR-010, a follow-up conversation clarified the deployable-services ask: it's Emumba's own company convention for a later review, not a rejection of this project's per-service-table reasoning — the supervisor explicitly accepts DR-010's case for a shared database. What she asked for instead is splitting the application further into 4-5 separately deployable Docker images while keeping the core architecture intact, with "separating out the APIs into a different service" as her own example.
+
+`cmd/api` at the time served five domain modules (`identity`, `course`, `enrollment`, `progress`, `analytics`) from one process. The question this record answers: can that be split further without touching the shared-database, shared-transaction architecture ADR-0001 and ADR-0012 require, and if so, along what boundaries.
+
+### Options
+
+**A. Leave `cmd/api` as one binary.** Two services total (api, worker) already satisfies ADR-0022; declining to go further risks not matching the stated company convention for the review.
+
+**B. One binary per domain module — five HTTP services.** Maximal granularity, matching "one service per module" cleanly.
+
+**C. Group by transactional coupling — three HTTP services.** `identity-api` (self-contained), `course-api` (`course` + `enrollment` + `progress` together), `analytics-api` (read-only, already decoupled).
+
+### Decision
+
+**Option C.** `cmd/identity-api`, `cmd/course-api`, and `cmd/analytics-api` replace `cmd/api` entirely — three new `package main`s, three new Dockerfiles, three new `docker-compose.yml` entries, each calling a narrower registration function off `internal/platform/bootstrap` (`RegisterIdentityRoutes`, `RegisterCourseRoutes`, `RegisterAnalyticsRoutes` — `RegisterModules` no longer exists). `cmd/worker` is unchanged. Four deployable images total, up from two.
+
+Option B was rejected specifically because `internal/enrollment` locks the `courses` row (`SELECT ... FOR UPDATE`) in the same database transaction it writes an enrollment row in — that's ADR-0012's seat-limit guarantee, proven by `TestEnroll_SeatLimit_NeverExceededUnderConcurrency`. A same-transaction guarantee requires one process, one connection; splitting `course` and `enrollment` into separate binaries would force that lock to become a network call or a distributed transaction, reintroducing exactly the correctness risk the per-service-table proposal (DR-010) was already rejected for. `progress` rides along with them because progress rows are created at enrollment time and have no independent reason to be elsewhere. `analytics` splits out cleanly because it was already decoupled before this record — it learns about the rest of the system through the relay/outbox (`bootstrap.BuildRelay`), never a direct call into another module's service layer, which was true before this split and remains true after it.
+
+Option A was rejected because it doesn't address what was actually asked for — "further divide the project into separately deployable Docker images... IF POSSIBLE, while keeping our core architecture intact" has a real, low-risk answer here, given the module-boundary discipline already enforced by `.golangci.yml`'s `depguard` rules (RFC §4.4): no HTTP-handler-level code in this codebase calls across module boundaries in-process. Ownership and ACL checks (`course.Service.requireOwner`, enrollment's student-ID check) compare against the JWT's claims directly, never a fresh lookup into `identity`'s tables, so `identity-api`, `course-api`, and `analytics-api` don't need to talk to each other over HTTP for anything in the current feature set.
+
+This does not touch the underlying architecture. One PostgreSQL database, one `go.mod`, one set of `internal/*` packages. `internal/platform/config` stays monolithic — every binary still requires the full set of env vars (`POSTGRES_DSN`, `REDIS_ADDR`, `MINIO_*`, `JWT_SIGNING_KEY`) even if it doesn't touch every one of them, the same already-accepted pattern as `cmd/worker` requiring MinIO config it's never used.
+
+### Consequences
+
+**Positive.** Matches the company convention the review expects to see. `identity-api`, `course-api`, and `analytics-api` can each be restarted, scaled, and deployed independently — a bad deploy to `analytics-api` can't take down login. A real, demonstrable stepping stone toward full microservices later, if ever actually needed, without having paid any of the correctness cost a premature per-service-table split would have.
+
+**Negative.** Not real service independence — one `go.mod` means a change to `internal/platform/auth` still forces rebuilding all three API images plus the worker, and one shared database means schema changes still need coordinating across everything regardless of image count. More operational surface: four processes to log/monitor/health-check instead of two, four Docker images to build in CI, `make dev-core` now starts more containers. More documentation surface to keep honest — every doc that named "two services" needed updating as part of this change (`README.md`, `cmd/README.md`, `GETTING_STARTED.md`, RFC §4.2/§4.5/§17.2, `api/openapi.yaml`'s server list, the Makefile's `run-*`/`build-*` targets), which is exactly the kind of drift this project has already found and fixed more than once.
+
+### Reversal trigger
+
+If `identity-api`, `course-api`, or `analytics-api` ever need to call each other over HTTP for something the JWT claims can't answer, that's a sign the chosen grouping was wrong, not that the whole approach was — the fix is likely regrouping, not reverting to one binary. If the supervisor's review ultimately wants true per-service data ownership after all, this ADR is superseded by that larger change, same as ADR-0022's reversal trigger for DR-010.
 
 ---
 

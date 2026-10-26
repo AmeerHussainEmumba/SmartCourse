@@ -196,12 +196,14 @@ The honest cost is failure isolation: a runaway goroutine in one module degrades
 
 ### 4.2 Run modes
 
-Two independently built, deployed, and scaled services (`cmd/api`, `cmd/worker` — ADR-0022), sharing one codebase and one database:
+Four independently built, deployed, and scaled services (`cmd/identity-api`, `cmd/course-api`, `cmd/analytics-api`, `cmd/worker` — ADR-0022, further split by ADR-0023), sharing one codebase and one database:
 
-- **`cmd/api`** — HTTP server. Stateless. Scales horizontally behind a load balancer.
+- **`cmd/identity-api`** — HTTP server for `identity` only. Stateless. Scales horizontally behind a load balancer.
+- **`cmd/course-api`** — HTTP server for `course`, `enrollment`, and `progress` together, kept in one process because enrollment locks the `courses` row in the same database transaction it writes an enrollment row in (ADR-0012). Stateless. Scales horizontally.
+- **`cmd/analytics-api`** — HTTP server for `analytics` only — read-only, already decoupled via the relay/outbox. Stateless. Scales horizontally.
 - **`cmd/worker`** — outbox relay today; Kafka consumers, Asynq workers, and the Temporal worker land in M2/M3. Scales independently.
 
-Both import `internal/platform/bootstrap`, the composition root (RFC §4.4), so a shared domain change still can't produce a version skew between the two the way it could if their wiring logic were maintained separately — the deployment artifacts are now independent, the wiring that builds them is not. (Until ADR-0022, this was literally one binary with a `--mode` flag; that history, and exactly what changed and why, is recorded there rather than silently edited out of existence — see the ADR's own rule about reversals.)
+All four import `internal/platform/bootstrap`, the composition root (RFC §4.4), so a shared domain change still can't produce a version skew between them the way it could if their wiring logic were maintained separately — the deployment artifacts are now independent, the wiring that builds them is not. (Until ADR-0022, this was literally one binary with a `--mode` flag, and until ADR-0023, the three HTTP services above were one `cmd/api` binary; that history, and exactly what changed and why, is recorded in those ADRs rather than silently edited out of existence — see the ADRs' own rule about reversals. `search`, `notification`, and `audit` aren't built yet; each joins whichever existing service its coupling pattern matches when it lands, following the same reasoning as `course-api`'s grouping.)
 
 ### 4.3 Modules
 
@@ -256,9 +258,19 @@ Enforced by `depguard` in CI, so a violation fails the build rather than relying
 flowchart TB
     Client[API clients]
 
-    subgraph API["cmd/api replicas"]
-        GIN[Gin: routing, auth, DTOs]
-        MOD[identity / course / enrollment / progress<br/>search / analytics / notification / audit]
+    subgraph IDAPI["cmd/identity-api replicas"]
+        GIN1[Gin: routing, auth, DTOs]
+        MOD1[identity]
+    end
+
+    subgraph CAPI["cmd/course-api replicas"]
+        GIN2[Gin: routing, auth, DTOs]
+        MOD2[course / enrollment / progress]
+    end
+
+    subgraph AAPI["cmd/analytics-api replicas"]
+        GIN3[Gin: routing, auth, DTOs]
+        MOD3[analytics]
     end
 
     subgraph WRK["cmd/worker replicas"]
@@ -275,11 +287,17 @@ flowchart TB
     TMP[[Temporal]]
     S3[(S3 assets)]
 
-    Client --> GIN --> MOD
-    MOD -->|read/write| PG
-    MOD -->|read| RD
-    MOD -->|start workflow| TMP
-    MOD -->|pre-signed URLs| S3
+    Client --> GIN1 --> MOD1
+    Client --> GIN2 --> MOD2
+    Client --> GIN3 --> MOD3
+    MOD1 -->|read/write| PG
+    MOD2 -->|read/write| PG
+    MOD3 -->|read/write| PG
+    MOD1 -->|read| RD
+    MOD2 -->|read| RD
+    MOD3 -->|read| RD
+    MOD2 -->|start workflow| TMP
+    MOD2 -->|pre-signed URLs| S3
 
     RELAY -->|poll outbox| PG
     RELAY -->|publish| KF
@@ -1479,7 +1497,8 @@ MinIO sits in `core` rather than a later tier because asset upload is exercised 
 ### 17.2 Repository layout
 
 ```
-cmd/api/, cmd/worker/     Two entry points, two images (ADR-0022)
+cmd/identity-api/, cmd/course-api/, cmd/analytics-api/, cmd/worker/
+                          Four entry points, four images (ADR-0022, ADR-0023)
 internal/
   platform/               Shared kernel, including bootstrap (the composition root)
   identity/ course/ enrollment/ progress/
@@ -1653,7 +1672,7 @@ Written for an engineer competent in another language and new to Go, or new to t
 
 ### 22.1 Day one — run it
 
-`make dev-core && make migrate-up && make seed && make run-api`, then open **http://localhost:8089** (Swagger UI, reading `api/openapi.yaml` live — also started by `make dev-core`) and make a request. A handful of containers, not twelve (§17.1). Nothing is understood before something runs.
+`make dev-core && make migrate-up && make seed && make run-identity-api` (plus `run-course-api` and `run-analytics-api` in their own terminals, or just let `make dev-core` run all three containerized), then open **http://localhost:8089** (Swagger UI, reading `api/openapi.yaml` live — also started by `make dev-core`) and make a request. A handful of containers, not twelve (§17.1). Nothing is understood before something runs.
 
 ### 22.2 Go for experienced engineers
 
@@ -1749,6 +1768,7 @@ ADRs record decisions as point-in-time events with their context intact. This RF
 | 0020 | GCRA rate limiting over fixed-window counters | §5.7, §11.3 |
 | 0021 | In-process outbox relay with a worker pool, ahead of Kafka | §6.3, §21.0 |
 | 0022 | Separate API and worker binaries, one shared codebase and database | §4.2 |
+| 0023 | Split cmd/api into identity-api, course-api, analytics-api | §4.2 |
 
 ---
 

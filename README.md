@@ -8,17 +8,17 @@ This README is the fast path to running the system and finding your way around. 
 
 ```bash
 cp env.example .env          # fill in real values; nothing here has a working default (see env.example)
-make dev-core                # Postgres, Redis, MinIO
+make dev-core                # Postgres, Redis, MinIO — also starts identity-api/course-api/analytics-api/worker, containerized
 make migrate-up              # apply the full schema
 make seed                    # optional — a realistic dataset to develop against, safe to re-run
-make run-api                 # http://localhost:8080
 ```
 
 Check it's alive:
 
 ```bash
-curl localhost:8080/health/live
-curl localhost:8080/health/ready
+curl localhost:8090/health/ready    # identity-api
+curl localhost:8091/health/ready    # course-api
+curl localhost:8092/health/ready    # analytics-api
 ```
 
 Browse and run every endpoint without writing curl by hand: **http://localhost:8089** (a Swagger UI reading `api/openapi.yaml` live, also started by `make dev-core`) — or `File → Import` that same file into Postman. See `docs/for-the-devs/GETTING_STARTED.md`'s "Browsing and running the API" section for both.
@@ -27,7 +27,7 @@ That's a handful of containers, not the dozen the full stack eventually needs (K
 
 ## Architecture, in one paragraph
 
-PostgreSQL is the single system of record (everything a user can assert as fact about their own account — enrolled, completed, certified — is strongly consistent, enforced by database constraints, not application code that can race). Redis and MongoDB hold only derived, rebuildable data. State changes are recorded and their side effects (search indexing, analytics, notifications, caching) happen asynchronously via a transactional outbox, so a crash mid-request never silently loses work or desyncs a dashboard from reality — today via an in-process worker-pool relay ([ADR-0021](docs/adr/smartcourse-adr.md#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka)), migrating to Kafka in M3 without changing this guarantee. Two independently deployable services — `cmd/api` for HTTP, `cmd/worker` for everything asynchronous — share one codebase and one database (`internal/platform/bootstrap`, ADR-0022), so they scale and restart independently without API and worker code ever drifting apart on a shared domain change.
+PostgreSQL is the single system of record (everything a user can assert as fact about their own account — enrolled, completed, certified — is strongly consistent, enforced by database constraints, not application code that can race). Redis and MongoDB hold only derived, rebuildable data. State changes are recorded and their side effects (search indexing, analytics, notifications, caching) happen asynchronously via a transactional outbox, so a crash mid-request never silently loses work or desyncs a dashboard from reality — today via an in-process worker-pool relay ([ADR-0021](docs/adr/smartcourse-adr.md#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka)), migrating to Kafka in M3 without changing this guarantee. Four independently deployable services — `cmd/identity-api`, `cmd/course-api`, `cmd/analytics-api` for HTTP, `cmd/worker` for everything asynchronous — share one codebase and one database (`internal/platform/bootstrap`, ADR-0022, further split by ADR-0023), so they scale and restart independently without domain code ever drifting apart on a shared change.
 
 ```mermaid
 flowchart TB
@@ -45,7 +45,8 @@ Full diagrams, the consistency model, and the reasoning behind every major choic
 ## Repository layout
 
 ```
-cmd/api/, cmd/worker/   Two entry points, two Dockerfiles, two deployable images (ADR-0022)
+cmd/identity-api/, cmd/course-api/, cmd/analytics-api/, cmd/worker/
+                        Four entry points, four Dockerfiles, four deployable images (ADR-0022, ADR-0023)
 internal/
   platform/          Shared kernel: config, db, cache, auth, errors, httpx, outbox, router, bootstrap
   identity/ course/ enrollment/ progress/    Domain modules (each has its own README)

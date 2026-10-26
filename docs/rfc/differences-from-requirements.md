@@ -32,7 +32,8 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-007](#dr-007--celery-citation-correction) | Celery citation correction | Correction | Accepted |
 | [DR-008](#dr-008--password-reset-and-email-verification) | Password reset and email verification | Addition | Accepted |
 | [DR-009](#dr-009--separate-api-and-worker-binaries-per-supervisor-review) | Separate API and worker binaries, per supervisor review | Addition | Accepted |
-| [DR-010](#dr-010--per-service-table-ownership-and-liquibase-deferred-pending-discussion) | Per-service table ownership and Liquibase — deferred pending discussion | Interpretation | Proposed |
+| [DR-010](#dr-010--per-service-table-ownership-and-liquibase-deferred-pending-discussion) | Per-service table ownership and Liquibase — deferred pending discussion | Interpretation | Proposed (tables half resolved — see entry's update) |
+| [DR-011](#dr-011--further-splitting-cmdapi-into-per-domain-deployable-services) | Further splitting cmd/api into per-domain deployable services | Interpretation | Accepted |
 
 ---
 
@@ -217,6 +218,28 @@ Both reverse specific, reasoned ADRs rather than filling a gap the brief left op
 ### If this turns out to be wrong
 
 If the supervisor confirms either requirement after discussion (e.g., an org-wide Liquibase standard we're not aware of, or a grading rubric that specifically requires per-service databases), this entry is superseded by a new one recording the implementation, with a new ADR superseding ADR-0001/ADR-0012 as applicable.
+
+### Update — 2026-10-26: per-service tables half resolved, in our favor
+
+The direct conversation this entry was waiting on happened. The supervisor's per-service table ask was about matching Emumba's own company convention for a later review, not a rejection of the reasoning above — she explicitly understands and accepts the shared-database case. The Liquibase half of this entry wasn't revisited and remains open as originally written. See DR-011 for what the conversation did ask for instead, and ADR-0023 for the resulting decision.
+
+---
+
+## DR-011 — Further splitting cmd/api into per-domain deployable services
+
+**Category:** Interpretation · **Date:** 2026-10-26 · **Related:** ADR-0022, ADR-0023, DR-010
+
+### What differs
+
+The brief doesn't ask for more than an API service and a worker service (the ADR-0022/DR-009 request). A follow-up conversation with the supervisor, after she clarified the DR-010 per-service-table ask was about company convention rather than a correctness concern, raised a further request: split the application into 4-5 separately deployable Docker images while keeping the core architecture (shared database, shared transactions) intact — her own example was "separating out the APIs into a different service."
+
+### Why this is logged as "accepted," not "proposed"
+
+Unlike DR-010, this doesn't reverse any existing ADR — it's an extension of ADR-0022's own reasoning, applied with finer granularity, and the supervisor's own framing already excludes the part (per-service data ownership) that would have reversed ADR-0001/ADR-0012. `cmd/api` split three ways — `cmd/identity-api`, `cmd/course-api` (bundling `course`, `enrollment`, `progress` to preserve ADR-0012's same-transaction seat-limit lock), `cmd/analytics-api` — alongside the unchanged `cmd/worker`, for four deployable images total. See ADR-0023 for the full decision record, including the options considered and rejected (one binary per module, which would have broken the seat-limit transaction).
+
+### If this turns out to be wrong
+
+If a five-image split (splitting `enrollment` out of `course-api` too) turns out to be what's actually expected, that requires accepting a real architectural cost — the seat-limit lock becoming a network call or distributed transaction — not just another `cmd/` directory. That tradeoff isn't decided here and would need its own ADR superseding ADR-0023's grouping decision specifically, not a silent code change.
 
 ---
 

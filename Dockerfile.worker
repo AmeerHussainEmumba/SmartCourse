@@ -1,6 +1,7 @@
-# The worker service (ADR-0022) — one of two independently built images,
-# the other being Dockerfile.api. See Dockerfile.api's header comment for
-# why both exist and why they share one source tree despite being
+# The worker service (ADR-0022) — one of four independently built images,
+# the other three being Dockerfile.identity-api, Dockerfile.course-api, and
+# Dockerfile.analytics-api (ADR-0023). See any of those header comments for
+# why they all exist and why they share one source tree despite being
 # separate images.
 FROM golang:1-alpine AS build
 WORKDIR /src
