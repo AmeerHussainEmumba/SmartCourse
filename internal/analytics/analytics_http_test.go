@@ -106,3 +106,48 @@ func TestGetPlatformSnapshot_RealRequest_ReflectsSeededRow(t *testing.T) {
 		t.Fatalf("expected response to reflect the seeded row (7,2,3,1.5), got %+v", body)
 	}
 }
+
+// TestGetCourseStats_RealRequest_ReflectsSeededRow is the HTTP-level
+// counterpart to service_integration_test.go's GetCourseStats coverage —
+// GET /analytics/courses/{id} previously didn't exist at all.
+func TestGetCourseStats_RealRequest_ReflectsSeededRow(t *testing.T) {
+	env := testenv.Setup(t)
+	svc := analytics.NewService(analytics.NewRepository(env.DB))
+	r := newTestEngine(t, svc)
+	courseID := uuid.Must(uuid.NewV7())
+
+	if err := env.DB.Exec(`
+		INSERT INTO course_stats (course_id, total_enrollments, active_enrollments, completions, completion_rate, avg_completion_s)
+		VALUES (?, 10, 4, 6, 0.6, 3600)
+	`, courseID).Error; err != nil {
+		t.Fatalf("seed course_stats: %v", err)
+	}
+
+	token, err := auth.IssueAccessToken(testJWTCfg(), uuid.New(), "student", 1)
+	if err != nil {
+		t.Fatalf("IssueAccessToken: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/analytics/courses/"+courseID.String(), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		TotalEnrollments  float64 `json:"total_enrollments"`
+		ActiveEnrollments float64 `json:"active_enrollments"`
+		Completions       float64 `json:"completions"`
+		CompletionRate    float64 `json:"completion_rate"`
+		AvgCompletionS    float64 `json:"avg_completion_s"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if body.TotalEnrollments != 10 || body.ActiveEnrollments != 4 || body.Completions != 6 || body.CompletionRate != 0.6 || body.AvgCompletionS != 3600 {
+		t.Fatalf("expected response to reflect the seeded row, got %+v", body)
+	}
+}

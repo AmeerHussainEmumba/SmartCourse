@@ -169,8 +169,8 @@ func IncrementDailyEnrollment(ctx context.Context, tx *gorm.DB, courseID uuid.UU
 
 // EnsureCourseStatsRow gives a just-published course a zeroed stats row
 // immediately (SmartCourse.md FR-2's "Analytics initialization" step) —
-// so GET /analytics/courses/{id} (not yet built) or the platform snapshot
-// never has to special-case "no row yet" versus "a row with all zeros."
+// so GET /analytics/courses/{id} or the platform snapshot never has to
+// special-case "no row yet" versus "a row with all zeros."
 func EnsureCourseStatsRow(ctx context.Context, tx *gorm.DB, courseID uuid.UUID) error {
 	return tx.WithContext(ctx).Exec(`
 		INSERT INTO course_stats (course_id) VALUES (?)
@@ -183,6 +183,26 @@ type PlatformSnapshot struct {
 	TotalInstructors      int64
 	TotalCoursesPublished int64
 	AvgCoursesPerStudent  float64
+}
+
+// CourseStats mirrors `course_stats` — written by RecomputeCourseStats,
+// read by GetCourseStats. AvgCompletionS is a pointer because it's
+// genuinely NULL until at least one student has completed the course
+// (the underlying `avg(...)` over zero rows), not a zero worth
+// distinguishing from "nobody has finished yet."
+type CourseStats struct {
+	TotalEnrollments  int64
+	ActiveEnrollments int64
+	Completions       int64
+	CompletionRate    float64
+	AvgCompletionS    *int64
+}
+
+// DailyEnrollmentRow is one (day, count) point in a course's enrollment
+// time series — DR-014/FR-5's "New Enrollments Over Time" metric.
+type DailyEnrollmentRow struct {
+	Day   time.Time
+	Count int
 }
 
 // Repository is the read side of this module — the only type the HTTP
@@ -210,4 +230,50 @@ func (r *Repository) GetPlatformSnapshot(ctx context.Context) (*PlatformSnapshot
 		return &PlatformSnapshot{}, nil // no row yet (no events processed) — zeros, not an error
 	}
 	return &s, nil
+}
+
+// GetCourseStats reads one course's aggregate row. A missing row returns
+// zeros rather than an error, the same tradeoff GetPlatformSnapshot makes
+// and for a related reason: this module has no cross-schema way to tell
+// "this course doesn't exist" apart from "this course exists but has
+// never been published" (ADR-0024 — no query into course.courses). A
+// zeroed response is correct for the second case and harmless for the
+// first; distinguishing them would need a call into internal/course,
+// which this module deliberately never does.
+func (r *Repository) GetCourseStats(ctx context.Context, courseID uuid.UUID) (*CourseStats, error) {
+	var s CourseStats
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT total_enrollments, active_enrollments, completions, completion_rate, avg_completion_s
+		FROM course_stats WHERE course_id = ?
+	`, courseID).Row().Scan(&s.TotalEnrollments, &s.ActiveEnrollments, &s.Completions, &s.CompletionRate, &s.AvgCompletionS)
+	if err != nil {
+		return &CourseStats{}, nil
+	}
+	return &s, nil
+}
+
+// ListDailyEnrollments returns one course's full enrollment time series,
+// oldest first — DR-014/FR-5's "New Enrollments Over Time," previously
+// computed (IncrementDailyEnrollment) but entirely unreadable: no
+// repository method, no Service method, no route. No date-range
+// filtering yet; add one if a real caller needs to bound a long-lived
+// course's history, rather than guessing at a window now.
+func (r *Repository) ListDailyEnrollments(ctx context.Context, courseID uuid.UUID) ([]DailyEnrollmentRow, error) {
+	rows, err := r.db.WithContext(ctx).Raw(`
+		SELECT day, count FROM daily_enrollments WHERE course_id = ? ORDER BY day ASC
+	`, courseID).Rows()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []DailyEnrollmentRow
+	for rows.Next() {
+		var row DailyEnrollmentRow
+		if err := rows.Scan(&row.Day, &row.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
