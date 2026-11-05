@@ -1,0 +1,68 @@
+# Module-boundary enforcement (RFC §4.4, ADR-0001): no module imports
+# another module's repository, domain, or GORM models. Cross-module reads go
+# through a consumer-declared interface; cross-module writes go through
+# events. A violation here fails the build, not review vigilance.
+#
+# internal/platform/** is the shared kernel and is exempt — every module may
+# import it. Add a new module's rule here when it's created; an unlisted
+# module is NOT protected by this file.
+
+version: "2"
+
+linters:
+  enable:
+    - depguard
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+  settings:
+    depguard:
+      rules:
+        identity:
+          files: ["internal/identity/**"]
+          deny:
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/course
+              desc: "identity must not import course directly (RFC §4.4) — declare a consumer-side interface"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/enrollment
+              desc: "identity must not import enrollment directly (RFC §4.4) — declare a consumer-side interface"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/progress
+              desc: "identity must not import progress directly (RFC §4.4) — declare a consumer-side interface"
+        course:
+          files: ["internal/course/**"]
+          deny:
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/identity
+              desc: "course must not import identity directly (RFC §4.4) — declare a consumer-side interface"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/enrollment
+              desc: "course must not import enrollment directly (RFC §4.4) — declare a consumer-side interface"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/progress
+              desc: "course must not import progress directly (RFC §4.4) — declare a consumer-side interface"
+        enrollment:
+          files: ["internal/enrollment/**"]
+          deny:
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/identity
+              desc: "enrollment must not import identity directly (RFC §4.4) — declare a consumer-side interface"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/course
+              desc: "enrollment must not import course's repository/domain directly — declare a CourseReader-style interface (RFC §4.4 example)"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/progress
+              desc: "enrollment must not import progress directly (RFC §4.4) — declare a consumer-side interface"
+        progress:
+          files: ["internal/progress/**"]
+          deny:
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/identity
+              desc: "progress must not import identity directly (RFC §4.4) — declare a consumer-side interface"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/course
+              desc: "progress must not import course directly (RFC §4.4) — declare a consumer-side interface"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/enrollment
+              desc: "progress must not import enrollment directly (RFC §4.4) — declare a consumer-side interface"
+        analytics:
+          files: ["internal/analytics/**"]
+          deny:
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/identity
+              desc: "analytics must not import identity directly (RFC §4.4) — it reacts to outbox events, not direct calls"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/course
+              desc: "analytics must not import course directly (RFC §4.4) — it reacts to outbox events, not direct calls"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/enrollment
+              desc: "analytics must not import enrollment directly (RFC §4.4) — it reacts to outbox events, not direct calls"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/progress
+              desc: "analytics must not import progress directly (RFC §4.4) — it reacts to outbox events, not direct calls"

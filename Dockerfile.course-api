@@ -1,0 +1,17 @@
+# The course-api service (ADR-0023, extending ADR-0022) — one of four
+# independently built images (identity-api, course-api, analytics-api,
+# worker). Builds from the same source tree and go.mod (a modular
+# monolith's code, ADR-0001), just packaged as a separate artifact so it
+# can be deployed, scaled, and restarted independently of the others.
+FROM golang:1-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -o /out/course-api ./cmd/course-api
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates
+COPY --from=build /out/course-api /usr/local/bin/course-api
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/course-api"]

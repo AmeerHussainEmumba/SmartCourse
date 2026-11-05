@@ -1,0 +1,16 @@
+# The worker service (ADR-0022) — one of four independently built images,
+# the other three being Dockerfile.identity-api, Dockerfile.course-api, and
+# Dockerfile.analytics-api (ADR-0023). See any of those header comments for
+# why they all exist and why they share one source tree despite being
+# separate images.
+FROM golang:1-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -o /out/worker ./cmd/worker
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates
+COPY --from=build /out/worker /usr/local/bin/worker
+ENTRYPOINT ["/usr/local/bin/worker"]
