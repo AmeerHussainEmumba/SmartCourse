@@ -90,6 +90,13 @@ services:
     environment:
       APP_ENV: development
       POSTGRES_DSN: postgres://smartcourse:smartcourse@postgres:5432/smartcourse?sslmode=disable
+      # worker touches platform.outbox (reads), platform.processed_events
+      # (writes, its own idempotency marker), course.enrollments (writes,
+      # via enrollment.handleCourseArchived), and every analytics table
+      # (writes, via analytics' event handlers) — not identity, since no
+      # relay handler reads or writes identity.* (schema-per-service,
+      # ADR-0024).
+      POSTGRES_SEARCH_PATH: platform,course,analytics,public
       REDIS_ADDR: redis:6379
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY_ID: smartcourse
@@ -118,6 +125,10 @@ services:
       APP_ENV: development
       HTTP_PORT: "8080"
       POSTGRES_DSN: postgres://smartcourse:smartcourse@postgres:5432/smartcourse?sslmode=disable
+      # identity + platform (identity.Service writes its outbox events
+      # into platform.outbox, in the same transaction as the business
+      # write — ADR-0006) + public (citext).
+      POSTGRES_SEARCH_PATH: identity,platform,public
       REDIS_ADDR: redis:6379
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY_ID: smartcourse
@@ -149,6 +160,10 @@ services:
       APP_ENV: development
       HTTP_PORT: "8080"
       POSTGRES_DSN: postgres://smartcourse:smartcourse@postgres:5432/smartcourse?sslmode=disable
+      # course (course+enrollment+progress's shared schema, ADR-0024) +
+      # platform (their outbox writes land in platform.outbox) + public
+      # (citext, pg_trgm — course_search_index).
+      POSTGRES_SEARCH_PATH: course,platform,public
       REDIS_ADDR: redis:6379
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY_ID: smartcourse
@@ -179,6 +194,10 @@ services:
       APP_ENV: development
       HTTP_PORT: "8080"
       POSTGRES_DSN: postgres://smartcourse:smartcourse@postgres:5432/smartcourse?sslmode=disable
+      # analytics only — its HTTP handlers are read-only, GET-only, and
+      # never write an outbox event, so unlike the other three it never
+      # needs platform (ADR-0024: analytics-api doesn't produce events).
+      POSTGRES_SEARCH_PATH: analytics,public
       REDIS_ADDR: redis:6379
       MINIO_ENDPOINT: http://minio:9000
       MINIO_ACCESS_KEY_ID: smartcourse

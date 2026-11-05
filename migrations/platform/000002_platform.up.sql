@@ -1,7 +1,19 @@
--- Platform tables (RFC §5.3.5): the outbox (ADR-0006), consumer dedup, and
--- request idempotency. These exist from M0 deliberately — retrofitting them
--- after other write paths already exist means touching every one of those
--- paths a second time (RFC §21.1).
+-- Platform schema (schema-per-service — see migrations/README.md and
+-- ADR-0024). The outbox (ADR-0006), consumer dedup, and request
+-- idempotency are shared integration infrastructure, not any one
+-- service's domain data: every producer (identity/course/enrollment/
+-- progress) writes its outbox row here, inside its own transaction.
+-- Durability only requires the same database as the business write, not
+-- the same schema, so this doesn't weaken ADR-0006's guarantee — and it's
+-- the mechanism Kafka replaces wholesale in M3, not a piece of any one
+-- service's owned data.
+--
+-- idempotency_keys.user_id no longer has a foreign key to identity.users
+-- (same cross-schema-FK policy as courses.instructor_id and
+-- enrollments.student_id — see migrations/course/000001_courses.up.sql):
+-- no code reads this table yet, and the same reasoning applies uniformly.
+CREATE SCHEMA IF NOT EXISTS platform;
+SET search_path TO platform, public;
 
 CREATE TABLE outbox (
     id             BIGSERIAL PRIMARY KEY,
@@ -28,7 +40,7 @@ CREATE TABLE processed_events (
 
 CREATE TABLE idempotency_keys (
     key             TEXT        NOT NULL,
-    user_id         UUID        NOT NULL REFERENCES users(id),
+    user_id         UUID        NOT NULL,
     endpoint        TEXT        NOT NULL,
     request_hash    BYTEA       NOT NULL,
     response_status INT,

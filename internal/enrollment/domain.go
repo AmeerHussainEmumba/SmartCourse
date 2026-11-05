@@ -17,7 +17,7 @@ const (
 	StatusWithdrawn Status = "withdrawn"
 )
 
-// Enrollment mirrors `enrollments` (migrations/000005_enrollment.up.sql).
+// Enrollment mirrors `enrollments` (migrations/course/000003_enrollment.up.sql).
 type Enrollment struct {
 	ID          uuid.UUID `gorm:"primaryKey"`
 	StudentID   uuid.UUID

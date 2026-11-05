@@ -15,8 +15,18 @@ endif
 
 DSN ?= $(POSTGRES_DSN)
 
+# Schema-per-service (ADR-0024): four independent migration sets, one per
+# Postgres schema, each tracked by its own x-migrations-table so they don't
+# collide on a single shared schema_migrations row. Order matters only for
+# `up`/`migrate-down-all` — platform first (citext/pg_trgm live in `public`,
+# needed before identity/course's tables that use them), analytics last
+# (nothing else depends on it) — not for individual-service migrate-down,
+# where cross-schema ordering doesn't apply (ADR-0024: no cross-schema FKs).
+MIGRATION_SERVICES := platform identity course analytics
+MIGRATION_SERVICES_REVERSED := analytics course identity platform
+
 .PHONY: dev-core dev-workflow dev-events dev-observability dev-full dev-down \
-        migrate-up migrate-down migrate-create \
+        migrate-up migrate-down migrate-down-all migrate-create \
         run-identity-api run-course-api run-analytics-api run-worker \
         build build-identity-api build-course-api build-analytics-api build-worker \
         lint test test-race test-integration seed fmt
@@ -44,13 +54,28 @@ dev-down:
 ## --- Migrations (migrations/README.md) -----------------------------------
 
 migrate-up:
-	$(MIGRATE) -path migrations -database "$(DSN)" up
+	@for svc in $(MIGRATION_SERVICES); do \
+		echo "--- $$svc ---"; \
+		$(MIGRATE) -path migrations/$$svc -database "$(DSN)&x-migrations-table=$${svc}_schema_migrations" up || exit 1; \
+	done
 
+# Rolls back one migration for a single service: `make migrate-down service=course`.
 migrate-down:
-	$(MIGRATE) -path migrations -database "$(DSN)" down 1
+	@if [ -z "$(service)" ]; then echo "usage: make migrate-down service=<$(MIGRATION_SERVICES)>"; exit 1; fi
+	$(MIGRATE) -path migrations/$(service) -database "$(DSN)&x-migrations-table=$(service)_schema_migrations" down 1
 
+# Full teardown of every service's schema, reverse of migrate-up's order —
+# a local dev reset, not something CI or production ever calls.
+migrate-down-all:
+	@for svc in $(MIGRATION_SERVICES_REVERSED); do \
+		echo "--- $$svc ---"; \
+		$(MIGRATE) -path migrations/$$svc -database "$(DSN)&x-migrations-table=$${svc}_schema_migrations" down -all || exit 1; \
+	done
+
+# `make migrate-create service=course name=add_something`
 migrate-create:
-	$(MIGRATE) create -ext sql -dir migrations -seq $(name)
+	@if [ -z "$(service)" ]; then echo "usage: make migrate-create service=<$(MIGRATION_SERVICES)> name=<name>"; exit 1; fi
+	$(MIGRATE) create -ext sql -dir migrations/$(service) -seq $(name)
 
 ## --- Running the binaries (ADR-0022 + ADR-0023: four services) -----------
 #
@@ -68,16 +93,16 @@ migrate-create:
 #     step either way (RFC §5.8 — no auto-migration on container start).
 
 run-identity-api:
-	HTTP_PORT=$${HTTP_PORT:-8090} go run ./cmd/identity-api
+	HTTP_PORT=$${HTTP_PORT:-8090} POSTGRES_SEARCH_PATH=identity,platform,public go run ./cmd/identity-api
 
 run-course-api:
-	HTTP_PORT=$${HTTP_PORT:-8091} go run ./cmd/course-api
+	HTTP_PORT=$${HTTP_PORT:-8091} POSTGRES_SEARCH_PATH=course,platform,public go run ./cmd/course-api
 
 run-analytics-api:
-	HTTP_PORT=$${HTTP_PORT:-8092} go run ./cmd/analytics-api
+	HTTP_PORT=$${HTTP_PORT:-8092} POSTGRES_SEARCH_PATH=analytics,public go run ./cmd/analytics-api
 
 run-worker:
-	go run ./cmd/worker
+	POSTGRES_SEARCH_PATH=platform,course,analytics,public go run ./cmd/worker
 
 build: build-identity-api build-course-api build-analytics-api build-worker
 
@@ -111,4 +136,4 @@ test-integration:
 	go test -race -tags=integration ./...
 
 seed:
-	go run ./cmd/seed
+	POSTGRES_SEARCH_PATH=identity,course,platform,public go run ./cmd/seed

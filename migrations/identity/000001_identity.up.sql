@@ -1,5 +1,11 @@
 -- Identity (RFC §5.3.1). UUIDv7 primary keys are generated application-side
--- (ADR-0005) — no DB-side default here by design.
+-- (ADR-0005) — no DB-side default here by design. Owns its own schema
+-- (schema-per-service, ADR-0024): no other service's migrations create
+-- objects here, and nothing in this file references another service's
+-- tables.
+
+CREATE SCHEMA IF NOT EXISTS identity;
+SET search_path TO identity, public;
 
 CREATE TYPE user_role AS ENUM ('student', 'instructor', 'admin');
 

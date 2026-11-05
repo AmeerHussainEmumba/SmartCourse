@@ -8,6 +8,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -22,7 +23,12 @@ import (
 // afterthought: MaxOpenConns × replicas must stay under Postgres's
 // max_connections, with headroom for migrations and operators).
 func Open(cfg config.PostgresConfig) (*gorm.DB, error) {
-	gdb, err := gorm.Open(postgres.Open(cfg.DSN), &gorm.Config{
+	dsn, err := dsnWithSearchPath(cfg.DSN, cfg.SearchPath)
+	if err != nil {
+		return nil, fmt.Errorf("build DSN: %w", err)
+	}
+
+	gdb, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger:                                   gormlogger.Default.LogMode(gormlogger.Warn),
 		DisableForeignKeyConstraintWhenMigrating: true, // schema is owned by migrations/, not AutoMigrate (ADR-0015 §19.15)
 	})
@@ -45,6 +51,27 @@ func Open(cfg config.PostgresConfig) (*gorm.DB, error) {
 	}
 
 	return gdb, nil
+}
+
+// dsnWithSearchPath adds search_path as a connection parameter (schema-per-
+// service, ADR-0024) rather than running `SET search_path` after connecting
+// — the pool opens multiple physical connections, and a single SET only
+// affects the one connection that ran it. Setting it in the DSN makes
+// pgx (gorm.io/driver/postgres's driver) apply it as a startup parameter on
+// every connection the pool opens, pooled or not. No-op if searchPath is
+// empty (e.g. a caller that only ever queries fully-qualified names).
+func dsnWithSearchPath(dsn, searchPath string) (string, error) {
+	if searchPath == "" {
+		return dsn, nil
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", fmt.Errorf("parse DSN: %w", err)
+	}
+	q := u.Query()
+	q.Set("search_path", searchPath)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
 // Ping is used by the readiness probe (RFC §12.5) — a lightweight,

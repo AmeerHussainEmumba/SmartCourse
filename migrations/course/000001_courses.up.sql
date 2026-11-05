@@ -2,12 +2,30 @@
 -- courses.published_version_id is what students see, courses.draft_version_id
 -- is what's being edited. idx_one_draft_per_course makes concurrent publish
 -- attempts on the same course impossible at the storage layer.
+--
+-- Owns its own schema (schema-per-service, ADR-0024), shared with
+-- enrollment and progress specifically because enrollment locks the
+-- courses row in the same transaction it writes an enrollment row in
+-- (ADR-0012's seat-limit guarantee) — splitting that into two schemas
+-- would force the lock across a boundary it can't cross. See
+-- migrations/README.md.
+--
+-- courses.instructor_id has no foreign key to identity.users (it did
+-- before ADR-0024): a cross-schema FK is a structural dependency on
+-- another service's schema that this service doesn't otherwise have —
+-- the application already never reads identity.users from here (callers
+-- are authorized via JWT claims, never a fresh lookup), and there is no
+-- user-delete feature, so nothing relies on the database catching a
+-- dangling instructor_id.
+
+CREATE SCHEMA IF NOT EXISTS course;
+SET search_path TO course, public;
 
 CREATE TYPE version_state AS ENUM ('draft','publishing','ready','publish_failed','superseded');
 
 CREATE TABLE courses (
     id                   UUID PRIMARY KEY,
-    instructor_id        UUID        NOT NULL REFERENCES users(id),
+    instructor_id        UUID        NOT NULL,
     slug                 TEXT        NOT NULL UNIQUE,
     published_version_id UUID,
     draft_version_id     UUID,

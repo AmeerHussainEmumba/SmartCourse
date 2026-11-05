@@ -90,25 +90,41 @@ func Setup(t *testing.T) *Env {
 	return &Env{DB: gdb, RDB: rdb}
 }
 
+// migrationServices is the fixed apply order (schema-per-service,
+// ADR-0024): platform first (citext/pg_trgm live in `public`, needed
+// before identity/course's tables that use them), analytics last (nothing
+// else depends on it) — matches Makefile's MIGRATION_SERVICES.
+var migrationServices = []string{"platform", "identity", "course", "analytics"}
+
+// applyMigrations runs all four services' migrations against one database,
+// each tracked by its own x-migrations-table so they don't collide on a
+// single shared schema_migrations row (same scheme Makefile's migrate-up
+// uses). Tests always apply every service's schema regardless of which
+// module is under test — fixtures commonly span schemas (e.g. an
+// enrollment test seeding a row into identity.users), same as before
+// ADR-0024 when it was one flat migrations/ directory.
 func applyMigrations(dsn string) error {
-	path, err := migrationsPath()
+	root, err := migrationsRoot()
 	if err != nil {
 		return err
 	}
-	m, err := migrate.New("file://"+path, dsn)
-	if err != nil {
-		return fmt.Errorf("create migrator: %w", err)
-	}
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		return fmt.Errorf("run migrations: %w", err)
+	for _, svc := range migrationServices {
+		svcDSN := dsn + "&x-migrations-table=" + svc + "_schema_migrations"
+		m, err := migrate.New("file://"+filepath.Join(root, svc), svcDSN)
+		if err != nil {
+			return fmt.Errorf("create migrator for %s: %w", svc, err)
+		}
+		if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+			return fmt.Errorf("run %s migrations: %w", svc, err)
+		}
 	}
 	return nil
 }
 
-// migrationsPath resolves migrations/ relative to this source file rather
+// migrationsRoot resolves migrations/ relative to this source file rather
 // than the working directory, so tests pass regardless of which package
 // invokes them.
-func migrationsPath() (string, error) {
+func migrationsRoot() (string, error) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		return "", fmt.Errorf("resolve caller for migrations path")
@@ -118,8 +134,18 @@ func migrationsPath() (string, error) {
 	return filepath.Join(root, "migrations"), nil
 }
 
+// dbConfigFor's search_path spans every schema: unlike a real binary, test
+// code routinely reaches into more than one service's tables (fixtures
+// seeding identity.users for a course/enrollment test, assertions reading
+// analytics' mirror tables directly), so tests keep every bare table name
+// resolvable the same way they were before ADR-0024's schema split.
 func dbConfigFor(dsn string) config.PostgresConfig {
-	return config.PostgresConfig{DSN: dsn, MaxOpenConns: 10, MaxIdleConns: 5}
+	return config.PostgresConfig{
+		DSN:          dsn,
+		MaxOpenConns: 10,
+		MaxIdleConns: 5,
+		SearchPath:   "identity,course,analytics,platform,public",
+	}
 }
 
 func trimRedisScheme(addr string) string {

@@ -22,7 +22,7 @@ const (
 	StateSuperseded    VersionState = "superseded"
 )
 
-// Course mirrors `courses` (migrations/000003_courses.up.sql).
+// Course mirrors `courses` (migrations/course/000001_courses.up.sql).
 type Course struct {
 	ID                 uuid.UUID `gorm:"primaryKey"`
 	InstructorID       uuid.UUID

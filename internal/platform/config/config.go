@@ -32,6 +32,13 @@ type PostgresConfig struct {
 	DSN          string
 	MaxOpenConns int
 	MaxIdleConns int
+	// SearchPath sets the Postgres connection's search_path (schema-per-
+	// service, ADR-0024) — e.g. "course,public". Differs per binary (set
+	// in docker-compose.yml / Makefile run-* targets), which is why it's
+	// not hardcoded here the way table names aren't schema-qualified in
+	// any repository.go: the connection resolves bare table names against
+	// whichever schema(s) this binary was started with.
+	SearchPath string
 }
 
 type RedisConfig struct {
@@ -119,6 +126,7 @@ func Load() (*Config, error) {
 			DSN:          req("POSTGRES_DSN"),
 			MaxOpenConns: optInt("POSTGRES_MAX_OPEN_CONNS", 20),
 			MaxIdleConns: optInt("POSTGRES_MAX_IDLE_CONNS", 10),
+			SearchPath:   req("POSTGRES_SEARCH_PATH"),
 		},
 		Redis: RedisConfig{
 			Addr:     req("REDIS_ADDR"),
