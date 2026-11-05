@@ -9,8 +9,11 @@ info:
     error shape, Idempotency-Key) and docs/rfc/smartcourse-prd.md for
     product context. Publishing workflow status (M2, ADR-0025) is built —
     see POST/GET on /courses/{id}/publish[-status] and GET /courses/search
-    below. Endpoints not yet built (certificates, the remaining analytics
-    metrics, admin/audit beyond role change) are not listed here — an
+    below. 7 of FR-5's 10 analytics metrics are live — see /analytics/*
+    below (DR-017: the last two of these had been computed since ADR-0024
+    but had no read path until this spec caught up to reality). Endpoints
+    not yet built (certificates, "Most Popular Courses"/"Failed Events"
+    analytics, admin/audit beyond role change) are not listed here — an
     absent path means "not built yet," not "undocumented."
 servers:
   # One spec, three backing processes (ADR-0023) — route paths and
@@ -314,6 +317,44 @@ paths:
         '204': { description: No Content }
         '403': { description: Not the owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
+  /analytics/platform:
+    get:
+      summary: Platform-wide totals (SmartCourse.md FR-5) — total students/instructors/courses published, average courses per student
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformSnapshot' } } } }
+
+  /analytics/courses/{id}:
+    get:
+      summary: >
+        One course's aggregate stats (FR-5: completion rate, average time
+        to complete) — zeros if the course has never been published, not a
+        404 (this schema never queries internal/course directly, ADR-0024,
+        so it can't distinguish "never published" from "doesn't exist").
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CourseStats' } } } }
+
+  /analytics/courses/{id}/daily-enrollments:
+    get:
+      summary: One course's daily enrollment counts (FR-5 — "New Enrollments Over Time"), oldest first.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties: { day: { type: string, format: date }, count: { type: integer } }
+
   /enrollments:
     get:
       summary: List the current student's enrollments
@@ -494,6 +535,23 @@ components:
         category: { type: string, nullable: true }
         level: { type: string, nullable: true }
         enrollment_count: { type: integer }
+
+    PlatformSnapshot:
+      type: object
+      properties:
+        total_students: { type: integer }
+        total_instructors: { type: integer }
+        total_courses_published: { type: integer }
+        avg_courses_per_student: { type: number }
+
+    CourseStats:
+      type: object
+      properties:
+        total_enrollments: { type: integer }
+        active_enrollments: { type: integer }
+        completions: { type: integer }
+        completion_rate: { type: number }
+        avg_completion_s: { type: integer, nullable: true, description: Null until at least one student has completed the course }
 
     CourseDetail:
       type: object

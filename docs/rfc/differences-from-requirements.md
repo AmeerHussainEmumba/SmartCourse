@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Living document |
-| Last updated | 2026-11-05 |
+| Last updated | 2026-11-06 |
 | Related | `smartcourse-rfc.md`, `smartcourse-adr.md`, `docs/baseline/SmartCourse.md`, `docs/baseline/Execution Guidelines.md` |
 
 ## Purpose
@@ -37,6 +37,9 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-012](#dr-012--seed-data-created-through-the-service-layer-not-a-sql-script) | Seed data created through the service layer, not a SQL script | Interpretation | Proposed |
 | [DR-013](#dr-013--schema-per-service-reverses-dr-010s-shared-schema-position) | Schema-per-service reverses DR-010's shared-schema position | Interpretation | Accepted |
 | [DR-014](#dr-014--search-indexing-and-course-detail-caching-pulled-forward-into-m2) | Search indexing and course-detail caching pulled forward into M2 | Addition | Accepted |
+| [DR-015](#dr-015--dr-008s-existing-asynq-notification-path-was-inaccurate) | DR-008's "existing Asynq notification path" was inaccurate | Correction | Accepted |
+| [DR-016](#dr-016--syncrwmutex-required-by-the-tech-stack-not-used-not-previously-logged) | sync.RWMutex: required by the tech stack, not used, not previously logged | Interpretation | Accepted |
+| [DR-017](#dr-017--course_stats-and-daily_enrollments-were-computed-but-unreadable) | course_stats and daily_enrollments were computed but unreadable | Correction | Accepted |
 
 ---
 
@@ -301,6 +304,60 @@ The same reasoning DR-006 already established and ADR-0021 already acted on: the
 ### If this turns out to be wrong
 
 If `internal/search` lands in M3 as its own module with its own schema and ranking strategy (the same way `internal/analytics` was rebuilt rather than merely relocated when ADR-0024 landed), this entry's `IndexSearch` write path is superseded by that module's own relay-driven handler — not a reversal, an upgrade path already anticipated in ADR-0025's reversal trigger.
+
+---
+
+## DR-015 — DR-008's "existing Asynq notification path" was inaccurate
+
+**Category:** Correction · **Date:** 2026-11-06 · **Related:** DR-008, DR-007, `internal/identity/email.go`
+
+### What was wrongly asserted
+
+DR-008 (password reset and email verification) states both flows are "delivered by email through the existing Asynq notification path." No such path exists, today or at any point this register can verify: Asynq is not a dependency (absent from `go.mod`), and email delivery is `identity.LoggingEmailSender` — a stand-in that logs `"would send email verification email"` and sends nothing (its own doc comment: "the M0/M1 placeholder... until it does," swappable behind the `EmailSender` interface it's declared against). A baseline-compliance audit comparing claims across this project's own documentation against actual running code found the mismatch.
+
+### Why this is logged
+
+Same reason as DR-007: not a deviation from the baseline, a correction to our own prior documentation, which asserted something false about implementation state. DR-008's underlying decision (add password reset/email verification, reusing the token-hashing pattern already built for refresh tokens) is unaffected and stands — only the "through the existing Asynq notification path" clause was wrong; it should have said "through `LoggingEmailSender`, a stand-in pending real delivery (Asynq, M3)." Left uncorrected, a reviewer reading DR-008 alone would believe background email delivery is built; it isn't.
+
+### If this turns out to be wrong
+
+Not applicable — this entry itself is the correction, the same way DR-007 is. DR-008 is not edited, per this register's own rule against editing an entry to reflect a reversal.
+
+---
+
+## DR-016 — `sync.RWMutex`: required by the tech stack, not used, not previously logged
+
+**Category:** Interpretation · **Date:** 2026-11-06 · **Related:** RFC §21.0, ADR-0021
+
+### What differs
+
+`SmartCourse.md`'s Tech Stack section lists `sync.RWMutex` by name among the concurrency primitives "the implementation must demonstrate practical usage of" — the same list `sync.Mutex`, `sync/atomic`, `sync.WaitGroup`, and `context.Context` appear in, all of which are used in real production code. `sync.RWMutex` has zero uses anywhere in this codebase outside test files, confirmed by a baseline-compliance audit.
+
+### Why
+
+RFC §21.0 already states this plainly in its own status prose: "`sync.RWMutex` has no forced-fit use — the one candidate pattern RFC §10.3 names (a read-heavy/write-rare in-process config cache) doesn't exist as a real need yet, and adding one only to use the primitive would be exactly the anti-pattern ADR-0021 was written to avoid." That's a defensible reading of an ambiguous instruction — "demonstrate practical usage" read as "use it where a real need exists," not "manufacture one" — but it was never logged in this register the way every other baseline departure was, so a reviewer checking this register specifically for unmet tech-stack items wouldn't find it. Logged now for exactly that reason: the gap itself isn't new; its absence from this document was.
+
+### If this turns out to be wrong
+
+If a genuine read-heavy/write-rare shared-state need emerges (the in-process config cache RFC §10.3 names is still the most likely candidate), this is superseded by a new entry recording where `sync.RWMutex` was added and why that specific case earned it. If the reviewer intends literal, forced demonstration of every named primitive regardless of organic need, this entry is superseded and one is added for its own sake, with that tradeoff stated plainly rather than hidden.
+
+---
+
+## DR-017 — `course_stats` and `daily_enrollments` were computed but unreadable
+
+**Category:** Correction · **Date:** 2026-11-06 · **Related:** ADR-0024, DR-014, `internal/analytics`
+
+### What was wrongly asserted
+
+RFC §21.0 and `internal/analytics/README.md` both claimed analytics closed "5 of 10" SmartCourse.md FR-5 metrics, counting per-course completion rate, average time to complete, and new enrollments over time among them. `course_stats` and `daily_enrollments` were genuinely written by the relay's handlers (since ADR-0024) — but neither had a repository read method, a `Service` method, or an HTTP route. "Computed and stored" was reported as "live"; a baseline-compliance audit comparing the brief's metric list against what's actually reachable by a client found the three metrics above were not.
+
+### Why this is logged, and what changed
+
+Same category as DR-007/DR-015: a correction to our own status claims, not a baseline deviation. Fixed in the same pass this was found, rather than left open: `Repository.GetCourseStats`/`ListDailyEnrollments`, `Service` wrappers, and two new routes (`GET /analytics/courses/{id}`, `GET /analytics/courses/{id}/daily-enrollments`) now give both tables a real read path, with integration and HTTP-level test coverage (`service_integration_test.go`, `analytics_http_test.go`). FR-5 is now honestly 7 of 10 — the remaining two ("Most Popular Courses," "Failed Events / Workflow Issues") are genuinely not built yet, not merely unexposed.
+
+### If this turns out to be wrong
+
+Not applicable — this closes a gap between documentation and reality rather than making a bet.
 
 ---
 
