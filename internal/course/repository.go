@@ -1,9 +1,11 @@
 // The only file in this module that issues GORM/raw-SQL queries directly
 // (RFC §5.9). GORM handles single-entity CRUD; the catalogue query uses
 // raw SQL specifically to join instructor names in one query instead of
-// N+1 (RFC §13.2) — a raw-SQL join against `users` is reading the same
-// database, not importing internal/identity's Go types, so it doesn't
-// violate the module-boundary rule (RFC §4.4).
+// N+1 (RFC §13.2) — joined against instructor_mirror, this module's own
+// denormalized copy of display names (ADR-0024), not identity.users
+// directly: identity and course are different Postgres schemas now, and
+// no foreign key or join crosses that boundary. See handlers.go for how
+// the mirror is kept current.
 package course
 
 import (
@@ -23,7 +25,24 @@ type Repository struct {
 func NewRepository(db *gorm.DB) *Repository { return &Repository{db: db} }
 
 func (r *Repository) WithTx(tx *gorm.DB) *Repository { return &Repository{db: tx} }
-func (r *Repository) DB() *gorm.DB                   { return r.db }
+
+// UpsertInstructorMirror records (or updates) one user's display name,
+// fed by identity.user_registered and identity.user_profile_updated
+// (handlers.go). eventID (the outbox row's own id,
+// relay.DecodedEvent.OutboxID) guards against the relay's worker pool
+// processing those two events out of order for the same user — same
+// mechanism and same reason as analytics.UpsertUserRoleMirror.
+func UpsertInstructorMirror(ctx context.Context, tx *gorm.DB, userID uuid.UUID, fullName string, eventID int64) error {
+	return tx.WithContext(ctx).Exec(`
+		INSERT INTO instructor_mirror (user_id, full_name, last_event_id, updated_at) VALUES (?, ?, ?, now())
+		ON CONFLICT (user_id) DO UPDATE SET
+			full_name = EXCLUDED.full_name,
+			last_event_id = EXCLUDED.last_event_id,
+			updated_at = EXCLUDED.updated_at
+		WHERE EXCLUDED.last_event_id > instructor_mirror.last_event_id
+	`, userID, fullName, eventID).Error
+}
+func (r *Repository) DB() *gorm.DB { return r.db }
 
 var ErrNotFound = errors.New("course: not found")
 
@@ -218,7 +237,8 @@ type CatalogueRow struct {
 // CatalogueFilter narrows ListCatalogue — every field is optional (zero
 // value means "don't filter on this"). Search matches course_versions.title
 // only; filtering by instructor name would need a second ILIKE against
-// users.full_name, deliberately left out until a real need for it shows up.
+// instructor_mirror.full_name, deliberately left out until a real need
+// for it shows up.
 type CatalogueFilter struct {
 	Category *string
 	Level    *string
@@ -226,18 +246,24 @@ type CatalogueFilter struct {
 }
 
 // ListCatalogue returns published, non-archived courses ordered newest
-// first, joined against the instructor's name in one query (RFC §13.2 — "no
-// N+1"). Keyset, never OFFSET: afterCreatedAt/afterID identify the last row
-// of the previous page; a nil afterID means "first page." filter's
-// conditions are appended before the keyset condition, so args stay in the
-// same order they appear in the query string regardless of which filters
-// are set.
+// first, joined against the instructor's mirrored name in one query (RFC
+// §13.2 — "no N+1"). LEFT JOIN, not JOIN: instructor_mirror is populated
+// asynchronously from identity's events (handlers.go), so a course
+// created in the same instant as its instructor's very first request
+// could theoretically outrace the mirror — COALESCE falls back to an
+// empty string rather than silently dropping the course from the
+// catalogue over a timing gap that closes itself within one relay poll
+// interval. Keyset, never OFFSET: afterCreatedAt/afterID identify the
+// last row of the previous page; a nil afterID means "first page."
+// filter's conditions are appended before the keyset condition, so args
+// stay in the same order they appear in the query string regardless of
+// which filters are set.
 func (r *Repository) ListCatalogue(ctx context.Context, limit int, afterCreatedAt *time.Time, afterID *uuid.UUID, filter CatalogueFilter) ([]CatalogueRow, error) {
 	q := `
-		SELECT c.id, c.slug, cv.title, u.full_name, cv.category, cv.level, c.enrollment_count, c.created_at
+		SELECT c.id, c.slug, cv.title, COALESCE(im.full_name, ''), cv.category, cv.level, c.enrollment_count, c.created_at
 		FROM courses c
 		JOIN course_versions cv ON cv.id = c.published_version_id
-		JOIN users u ON u.id = c.instructor_id
+		LEFT JOIN instructor_mirror im ON im.user_id = c.instructor_id
 		WHERE c.published_version_id IS NOT NULL AND c.archived_at IS NULL`
 	args := []any{}
 	if filter.Category != nil {

@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// LessonProgress mirrors `lesson_progress` (migrations/000005_enrollment.up.sql).
+// LessonProgress mirrors `lesson_progress` (migrations/course/000003_enrollment.up.sql).
 // Rows are pre-created at enrollment time (internal/enrollment) — this
 // module only ever updates them, never inserts.
 type LessonProgress struct {

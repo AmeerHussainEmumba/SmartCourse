@@ -94,7 +94,11 @@ func (s *Service) Enroll(ctx context.Context, studentID, courseID uuid.UUID) (*E
 			AggregateID:   courseID,
 			EventType:     "enrollment.student_enrolled",
 			SchemaVersion: 1,
-			Payload:       map[string]any{"enrollment_id": e.ID, "student_id": studentID, "course_id": courseID},
+			// enrolled_at lets analytics.enrollment_mirror carry its own
+			// enrolled_at without querying course.enrollments for it
+			// (ADR-0024 — analytics never reads another service's
+			// tables).
+			Payload: map[string]any{"enrollment_id": e.ID, "student_id": studentID, "course_id": courseID, "enrolled_at": e.EnrolledAt},
 		}); err != nil {
 			return apperrors.ErrInternal.Wrap(err)
 		}

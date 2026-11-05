@@ -3,35 +3,116 @@
 // internal/platform/relay — see README.md for why this module exists this
 // early relative to the original M3 plan.
 //
-// Every recompute below reads from source tables rather than maintaining
-// fragile increment/decrement pairs (ADR-0017's rebuildability principle,
-// applied eagerly here instead of on ADR-0017's 60-second schedule — the
-// scheduled reconciliation path itself is still not built; see README.md).
-// This is the only file in the module issuing SQL, consistent with every
-// other module's repository.go (RFC §5.9).
+// Schema-per-service (ADR-0024): this module's tables live in the
+// `analytics` schema, and nothing here queries course.courses,
+// course.enrollments, or identity.users — those are other services' owned
+// data. Instead, three mirror tables (user_role_mirror, course_mirror,
+// enrollment_mirror) hold exactly the fields this module needs, upserted
+// row-by-row from relay events (handlers.go). Every recompute below still
+// reads from those mirror "source tables" rather than maintaining fragile
+// increment/decrement pairs (ADR-0017's rebuildability principle,
+// preserved by ADR-0024 — only the source moved, from another service's
+// live tables to this service's own event-derived copy). This is the only
+// file in the module issuing SQL, consistent with every other module's
+// repository.go (RFC §5.9).
 package analytics
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
+// UpsertUserRoleMirror records (or updates) one user's role, fed by
+// identity.user_registered and identity.user_role_changed. Recomputing
+// platform counts from this table (rather than incrementing/decrementing a
+// running total on every event) means a role that changes twice, or an
+// event redelivered after a crash, can never leave the count wrong — the
+// next recompute just reflects whatever's in the mirror.
+//
+// eventID (the outbox row's own id, relay.DecodedEvent.OutboxID) guards
+// against the relay's worker pool processing a user's registered and
+// role_changed events out of order: the update is only applied if eventID
+// is newer than the last one actually applied to this row, so a
+// late-finishing older event can never stomp a role a newer event already
+// set.
+func UpsertUserRoleMirror(ctx context.Context, tx *gorm.DB, userID uuid.UUID, role string, eventID int64) error {
+	return tx.WithContext(ctx).Exec(`
+		INSERT INTO user_role_mirror (user_id, role, last_event_id, updated_at) VALUES (?, ?, ?, now())
+		ON CONFLICT (user_id) DO UPDATE SET
+			role = EXCLUDED.role,
+			last_event_id = EXCLUDED.last_event_id,
+			updated_at = EXCLUDED.updated_at
+		WHERE EXCLUDED.last_event_id > user_role_mirror.last_event_id
+	`, userID, role, eventID).Error
+}
+
+// UpsertCourseMirror records that a course has been published, fed by
+// course.course_published. Never cleared by course.course_archived —
+// total_courses_published counts "ever published," matching the behavior
+// this had before ADR-0024 (archiving a course never cleared
+// courses.published_version_id either).
+func UpsertCourseMirror(ctx context.Context, tx *gorm.DB, courseID uuid.UUID, published bool) error {
+	return tx.WithContext(ctx).Exec(`
+		INSERT INTO course_mirror (course_id, published, updated_at) VALUES (?, ?, now())
+		ON CONFLICT (course_id) DO UPDATE SET published = EXCLUDED.published, updated_at = EXCLUDED.updated_at
+	`, courseID, published).Error
+}
+
+// InsertEnrollmentMirror records a new enrollment, fed by enrollment.
+// student_enrolled — the only event carrying enrolled_at. Idempotent
+// against redelivery of the same event (ON CONFLICT DO UPDATE with the
+// same values is a no-op in effect, not an error).
+func InsertEnrollmentMirror(ctx context.Context, tx *gorm.DB, enrollmentID, courseID, studentID uuid.UUID, enrolledAt time.Time) error {
+	return tx.WithContext(ctx).Exec(`
+		INSERT INTO enrollment_mirror (enrollment_id, course_id, student_id, status, enrolled_at, updated_at)
+		VALUES (?, ?, ?, 'active', ?, now())
+		ON CONFLICT (enrollment_id) DO UPDATE SET
+			enrolled_at = EXCLUDED.enrolled_at,
+			updated_at = EXCLUDED.updated_at
+	`, enrollmentID, courseID, studentID, enrolledAt).Error
+}
+
+// UpdateEnrollmentMirrorStatus transitions an existing mirror row — fed by
+// enrollment.student_withdrawn and progress.course_completed, neither of
+// which carries enrolled_at, so this updates rather than upserts: the row
+// must already exist from InsertEnrollmentMirror.
+func UpdateEnrollmentMirrorStatus(ctx context.Context, tx *gorm.DB, enrollmentID uuid.UUID, status string, completedAt *time.Time) error {
+	return tx.WithContext(ctx).Exec(`
+		UPDATE enrollment_mirror SET status = ?, completed_at = ?, updated_at = now()
+		WHERE enrollment_id = ?
+	`, status, completedAt, enrollmentID).Error
+}
+
+// CourseIDForEnrollment looks up course_id from this module's own mirror —
+// never from course.enrollments (ADR-0024). Used by handleCourseCompleted,
+// since progress.course_completed's payload carries enrollment_id and
+// student_id, not course_id (the event is deliberately minimal at the
+// source; consumers that need more join for it against their own data,
+// rather than every event growing every possible field "just in case").
+func CourseIDForEnrollment(ctx context.Context, tx *gorm.DB, enrollmentID uuid.UUID) (uuid.UUID, error) {
+	var courseID uuid.UUID
+	err := tx.WithContext(ctx).Raw(`SELECT course_id FROM enrollment_mirror WHERE enrollment_id = ?`, enrollmentID).
+		Row().Scan(&courseID)
+	return courseID, err
+}
+
 // RecomputePlatformSnapshot recomputes the single-row platform snapshot
-// from source tables (users, courses, enrollments) — correct by
-// construction, not by keeping a running total in sync.
+// from this module's own mirror tables — correct by construction, not by
+// keeping a running total in sync.
 func RecomputePlatformSnapshot(ctx context.Context, tx *gorm.DB) error {
 	return tx.WithContext(ctx).Exec(`
-		INSERT INTO analytics_platform_snapshot (id, total_students, total_instructors, total_courses_published, avg_courses_per_student, updated_at)
+		INSERT INTO platform_snapshot (id, total_students, total_instructors, total_courses_published, avg_courses_per_student, updated_at)
 		SELECT
 			true,
-			(SELECT count(*) FROM users WHERE role = 'student'),
-			(SELECT count(*) FROM users WHERE role = 'instructor'),
-			(SELECT count(*) FROM courses WHERE published_version_id IS NOT NULL),
+			(SELECT count(*) FROM user_role_mirror WHERE role = 'student'),
+			(SELECT count(*) FROM user_role_mirror WHERE role = 'instructor'),
+			(SELECT count(*) FROM course_mirror WHERE published),
 			COALESCE(
-				(SELECT count(*)::numeric FROM enrollments WHERE status IN ('active','completed')) /
-				NULLIF((SELECT count(*) FROM users WHERE role = 'student'), 0),
+				(SELECT count(*)::numeric FROM enrollment_mirror WHERE status IN ('active','completed')) /
+				NULLIF((SELECT count(*) FROM user_role_mirror WHERE role = 'student'), 0),
 				0
 			),
 			now()
@@ -46,10 +127,10 @@ func RecomputePlatformSnapshot(ctx context.Context, tx *gorm.DB) error {
 
 // RecomputeCourseStats recomputes one course's aggregate row — total and
 // active enrollments, completions, completion rate, and average time to
-// complete — from enrollments directly.
+// complete — from enrollment_mirror directly.
 func RecomputeCourseStats(ctx context.Context, tx *gorm.DB, courseID uuid.UUID) error {
 	return tx.WithContext(ctx).Exec(`
-		INSERT INTO analytics_course_stats (course_id, total_enrollments, active_enrollments, completions, completion_rate, avg_completion_s, updated_at)
+		INSERT INTO course_stats (course_id, total_enrollments, active_enrollments, completions, completion_rate, avg_completion_s, updated_at)
 		SELECT
 			?,
 			count(*) FILTER (WHERE status IN ('active','completed')),
@@ -60,9 +141,9 @@ func RecomputeCourseStats(ctx context.Context, tx *gorm.DB, courseID uuid.UUID) 
 				ELSE 0
 			END,
 			(SELECT avg(extract(epoch FROM completed_at - enrolled_at))::bigint
-			 FROM enrollments WHERE course_id = ? AND status = 'completed'),
+			 FROM enrollment_mirror WHERE course_id = ? AND status = 'completed'),
 			now()
-		FROM enrollments WHERE course_id = ?
+		FROM enrollment_mirror WHERE course_id = ?
 		ON CONFLICT (course_id) DO UPDATE SET
 			total_enrollments = EXCLUDED.total_enrollments,
 			active_enrollments = EXCLUDED.active_enrollments,
@@ -80,9 +161,9 @@ func RecomputeCourseStats(ctx context.Context, tx *gorm.DB, courseID uuid.UUID) 
 // against.
 func IncrementDailyEnrollment(ctx context.Context, tx *gorm.DB, courseID uuid.UUID) error {
 	return tx.WithContext(ctx).Exec(`
-		INSERT INTO analytics_daily_enrollments (day, course_id, count)
+		INSERT INTO daily_enrollments (day, course_id, count)
 		VALUES (current_date, ?, 1)
-		ON CONFLICT (day, course_id) DO UPDATE SET count = analytics_daily_enrollments.count + 1
+		ON CONFLICT (day, course_id) DO UPDATE SET count = daily_enrollments.count + 1
 	`, courseID).Error
 }
 
@@ -92,7 +173,7 @@ func IncrementDailyEnrollment(ctx context.Context, tx *gorm.DB, courseID uuid.UU
 // never has to special-case "no row yet" versus "a row with all zeros."
 func EnsureCourseStatsRow(ctx context.Context, tx *gorm.DB, courseID uuid.UUID) error {
 	return tx.WithContext(ctx).Exec(`
-		INSERT INTO analytics_course_stats (course_id) VALUES (?)
+		INSERT INTO course_stats (course_id) VALUES (?)
 		ON CONFLICT (course_id) DO NOTHING
 	`, courseID).Error
 }
@@ -107,7 +188,7 @@ type PlatformSnapshot struct {
 // Repository is the read side of this module — the only type the HTTP
 // handler is allowed to reach data through (via Service), matching every
 // other module's handler → service → repository shape (RFC §4.3). The
-// write-side Recompute*/Ensure*/Increment* functions above stay
+// write-side Recompute*/Ensure*/Increment*/Upsert* functions above stay
 // package-level functions taking tx *gorm.DB directly, not Repository
 // methods: they run inside the relay's per-event transaction, the same
 // pattern internal/enrollment uses for lockCourseForEnrollment — a
@@ -123,7 +204,7 @@ func (r *Repository) GetPlatformSnapshot(ctx context.Context) (*PlatformSnapshot
 	var s PlatformSnapshot
 	err := r.db.WithContext(ctx).Raw(`
 		SELECT total_students, total_instructors, total_courses_published, avg_courses_per_student
-		FROM analytics_platform_snapshot WHERE id = true
+		FROM platform_snapshot WHERE id = true
 	`).Row().Scan(&s.TotalStudents, &s.TotalInstructors, &s.TotalCoursesPublished, &s.AvgCoursesPerStudent)
 	if err != nil {
 		return &PlatformSnapshot{}, nil // no row yet (no events processed) — zeros, not an error

@@ -41,8 +41,10 @@ func Handlers() []relay.Handler {
 // one lock-ordering rule for every transaction that touches it.
 //
 // This does not also emit enrollment.student_withdrawn per enrollment.
-// analytics.RecomputeCourseStats/RecomputePlatformSnapshot both
-// recompute from live `enrollments` rows rather than tracking deltas, and
+// analytics.RecomputeCourseStats/RecomputePlatformSnapshot both recompute
+// from analytics' own mirror tables rather than tracking deltas (ADR-0024
+// moved what they recompute from off this module's live `enrollments`
+// rows, but not the recompute-not-increment principle itself), and
 // ADR-0017's scheduled reconciliation is the documented mechanism for
 // closing any gap until something else touches that course or the
 // platform snapshot — not a gap this handler needs to also close.

@@ -28,7 +28,7 @@ const (
 	StatusDeleted   UserStatus = "deleted"
 )
 
-// User mirrors the `users` table (migrations/000002_identity.up.sql).
+// User mirrors the `users` table (migrations/identity/000001_identity.up.sql).
 type User struct {
 	ID              uuid.UUID `gorm:"primaryKey"`
 	Email           string

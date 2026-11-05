@@ -37,18 +37,16 @@ func TestGetPlatformSnapshot_ReflectsRecompute(t *testing.T) {
 		t.Fatalf("expected zeros before any recompute, got %+v", snap)
 	}
 
-	// Seed two students and one instructor directly via SQL — this test
-	// has no dependency on internal/identity's Go types (RFC §4.4 applies
-	// to test code too), same pattern internal/enrollment's and
-	// internal/progress's integration tests use.
+	// Seed two students and one instructor directly into this module's own
+	// mirror (ADR-0024) — not identity.users: analytics never reads
+	// another service's tables, even in a test, same RFC §4.4 boundary
+	// that applies to production code.
 	for i := 0; i < 2; i++ {
 		id := uuid.Must(uuid.NewV7())
-		env.DB.Exec(`INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, 'x', 'Student', 'student', 'active')`,
-			id, id.String()+"@example.com")
+		env.DB.Exec(`INSERT INTO user_role_mirror (user_id, role) VALUES (?, 'student')`, id)
 	}
 	instructorID := uuid.Must(uuid.NewV7())
-	env.DB.Exec(`INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, 'x', 'Instructor', 'instructor', 'active')`,
-		instructorID, instructorID.String()+"@example.com")
+	env.DB.Exec(`INSERT INTO user_role_mirror (user_id, role) VALUES (?, 'instructor')`, instructorID)
 
 	// This is what the relay's analytics handler does on every relevant
 	// event (internal/analytics/handlers.go) — recompute from source,

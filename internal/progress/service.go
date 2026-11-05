@@ -58,7 +58,8 @@ func (s *Service) MarkComplete(ctx context.Context, studentID, enrollmentID, les
 			return nil
 		}
 
-		if err := s.repo.markEnrollmentCompleted(ctx, tx, enrollmentID); err != nil {
+		completedAt, err := s.repo.markEnrollmentCompleted(ctx, tx, enrollmentID)
+		if err != nil {
 			return apperrors.ErrInternal.Wrap(err)
 		}
 		// CourseCompleted triggers certificate issuance via a Kafka
@@ -71,7 +72,10 @@ func (s *Service) MarkComplete(ctx context.Context, studentID, enrollmentID, les
 			AggregateID:   enrollmentID,
 			EventType:     "progress.course_completed",
 			SchemaVersion: 1,
-			Payload:       map[string]any{"enrollment_id": enrollmentID, "student_id": studentID},
+			// completed_at lets analytics.enrollment_mirror carry its own
+			// completed_at without querying course.enrollments for it
+			// (ADR-0024).
+			Payload: map[string]any{"enrollment_id": enrollmentID, "student_id": studentID, "completed_at": completedAt},
 		})
 	})
 }

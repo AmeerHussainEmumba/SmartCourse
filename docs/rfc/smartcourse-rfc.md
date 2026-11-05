@@ -205,6 +205,8 @@ Four independently built, deployed, and scaled services (`cmd/identity-api`, `cm
 
 All four import `internal/platform/bootstrap`, the composition root (RFC §4.4), so a shared domain change still can't produce a version skew between them the way it could if their wiring logic were maintained separately — the deployment artifacts are now independent, the wiring that builds them is not. (Until ADR-0022, this was literally one binary with a `--mode` flag, and until ADR-0023, the three HTTP services above were one `cmd/api` binary; that history, and exactly what changed and why, is recorded in those ADRs rather than silently edited out of existence — see the ADRs' own rule about reversals. `search`, `notification`, and `audit` aren't built yet; each joins whichever existing service its coupling pattern matches when it lands, following the same reasoning as `course-api`'s grouping.)
 
+Each service also owns its own Postgres schema now (ADR-0024, §5.3) — `identity-api`/`course-api`/`analytics-api`'s process boundaries and their data boundaries are drawn along the same lines, even though all four still share one database.
+
 ### 4.3 Modules
 
 Eight domain modules plus a shared kernel. Every module has the same internal shape:
@@ -357,7 +359,7 @@ POST /courses/{id}/publish
         BuildOutline
         ├─ IndexSearch      (course_search_index upsert)
         ├─ WarmCache        (Redis versioned outline key)
-        └─ InitAnalytics    (analytics_course_stats row)
+        └─ InitAnalytics    (course_stats row)
         PromoteVersion  ── single transaction:
                            swap published_version_id
                            mark old version superseded
@@ -432,7 +434,16 @@ Stored as native `uuid`, not `varchar` — 16 bytes versus 36, with correct orde
 
 ### 5.3 PostgreSQL schema
 
-Written as SQL DDL because constraints are design decisions, not implementation detail. Managed by `golang-migrate` as versioned files. `AutoMigrate` is not used: it cannot express partial unique indexes, check constraints, or enum types, and running schema inference against a shared database is unsafe.
+Written as SQL DDL because constraints are design decisions, not implementation detail. Managed by `golang-migrate` as versioned files, one independent migration sequence per Postgres schema (`migrations/{platform,identity,course,analytics}/`, each with its own `x-migrations-table`). `AutoMigrate` is not used: it cannot express partial unique indexes, check constraints, or enum types, and running schema inference against a shared database is unsafe.
+
+**One Postgres schema per service (ADR-0024), one database.** `instructor_id`, `student_id`, and `idempotency_keys.user_id` below are plain `UUID` columns, not foreign keys, where they'd otherwise point at a table in another schema — no code reads across that boundary (callers are authorized via JWT claims, never a fresh lookup), so nothing relies on the database catching a dangling reference there. Foreign keys are kept everywhere a reference stays within one schema (e.g. `course_versions.course_id → courses.id`).
+
+| Schema | §§ below |
+|---|---|
+| `identity` | 5.3.1 |
+| `course` (shared by course + enrollment + progress — ADR-0012's seat-limit transaction) | 5.3.2, 5.3.3, 5.3.4, and `course_search_index` in 5.3.6 |
+| `platform` | 5.3.5 |
+| `analytics` | 5.3.6 (except `course_search_index`) |
 
 #### 5.3.1 Identity
 
@@ -506,7 +517,7 @@ CREATE TYPE version_state AS ENUM ('draft','publishing','ready','publish_failed'
 
 CREATE TABLE courses (
     id                   UUID PRIMARY KEY,
-    instructor_id        UUID        NOT NULL REFERENCES users(id),
+    instructor_id        UUID        NOT NULL, -- no FK: identity.users is a different schema (ADR-0024)
     slug                 TEXT        NOT NULL UNIQUE,
     published_version_id UUID,
     draft_version_id     UUID,
@@ -605,7 +616,7 @@ CREATE TABLE course_prerequisites (
 
 CREATE TABLE enrollments (
     id            UUID PRIMARY KEY,
-    student_id    UUID NOT NULL REFERENCES users(id),
+    student_id    UUID NOT NULL, -- no FK: identity.users is a different schema (ADR-0024)
     course_id     UUID NOT NULL REFERENCES courses(id),
     status        enrollment_status NOT NULL DEFAULT 'active',
     enrolled_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -649,6 +660,8 @@ Certificates snapshot the student name and course title. A certificate must rema
 
 #### 5.3.5 Platform tables
 
+Lives in the `platform` schema (ADR-0024) — shared integration infrastructure every producer (identity/course/enrollment/progress) writes to inside its own transaction, not any one service's domain data. `idempotency_keys.user_id` has no FK into `identity.users` for the same cross-schema-FK reason as `courses.instructor_id` above.
+
 ```sql
 CREATE TABLE outbox (
     id             BIGSERIAL PRIMARY KEY,
@@ -675,7 +688,7 @@ CREATE TABLE processed_events (
 
 CREATE TABLE idempotency_keys (
     key             TEXT        NOT NULL,
-    user_id         UUID        NOT NULL REFERENCES users(id),
+    user_id         UUID        NOT NULL, -- no FK: identity.users is a different schema (ADR-0024)
     endpoint        TEXT        NOT NULL,
     request_hash    BYTEA       NOT NULL,
     response_status INT,
@@ -696,6 +709,8 @@ CREATE TABLE idempotency_keys (
 
 #### 5.3.6 Read models
 
+`course_search_index` stays in the `course` schema (its FK to `courses(id)` is unchanged — same schema, ADR-0024) until `internal/search` is actually built; the `analytics_*` tables below moved to their own `analytics` schema and lost the `analytics_` prefix (redundant once namespaced) and their FKs into `course.courses`.
+
 ```sql
 CREATE TABLE course_search_index (
     course_id        UUID PRIMARY KEY REFERENCES courses(id) ON DELETE CASCADE,
@@ -713,9 +728,36 @@ CREATE TABLE course_search_index (
 CREATE INDEX idx_search_vector ON course_search_index USING GIN(search_vector);
 CREATE INDEX idx_search_title_trgm ON course_search_index USING GIN(title gin_trgm_ops);
 CREATE INDEX idx_search_facets ON course_search_index(category, level);
+```
 
-CREATE TABLE analytics_course_stats (
-    course_id            UUID PRIMARY KEY REFERENCES courses(id) ON DELETE CASCADE,
+**`analytics` schema** (ADR-0024). `internal/analytics` never queries `course.courses`, `course.enrollments`, or `identity.users` directly — three mirror tables hold exactly the fields it needs, upserted row-by-row from relay events (`internal/analytics/handlers.go`), and the aggregate tables below recompute from those mirrors instead (ADR-0017's rebuildability principle, same as before ADR-0024, just pointed at this schema's own data):
+
+```sql
+CREATE TABLE user_role_mirror (
+    user_id       UUID PRIMARY KEY,
+    role          TEXT NOT NULL,
+    last_event_id BIGINT NOT NULL DEFAULT 0, -- guards against the relay's worker pool processing a user's events out of order
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE course_mirror (
+    course_id  UUID PRIMARY KEY,
+    published  BOOLEAN NOT NULL DEFAULT false,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE enrollment_mirror (
+    enrollment_id UUID PRIMARY KEY,
+    course_id     UUID NOT NULL,
+    student_id    UUID NOT NULL,
+    status        TEXT NOT NULL CHECK (status IN ('active','completed','withdrawn')),
+    enrolled_at   TIMESTAMPTZ NOT NULL,
+    completed_at  TIMESTAMPTZ,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE course_stats (
+    course_id            UUID PRIMARY KEY,
     total_enrollments    BIGINT NOT NULL DEFAULT 0,
     active_enrollments   BIGINT NOT NULL DEFAULT 0,
     completions          BIGINT NOT NULL DEFAULT 0,
@@ -724,14 +766,14 @@ CREATE TABLE analytics_course_stats (
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE analytics_daily_enrollments (
+CREATE TABLE daily_enrollments (
     day       DATE NOT NULL,
-    course_id UUID NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+    course_id UUID NOT NULL,
     count     INT  NOT NULL DEFAULT 0,
     PRIMARY KEY (day, course_id)
 );
 
-CREATE TABLE analytics_platform_snapshot (
+CREATE TABLE platform_snapshot (
     id                  BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id),
     total_students      BIGINT NOT NULL DEFAULT 0,
     total_instructors   BIGINT NOT NULL DEFAULT 0,
@@ -743,7 +785,9 @@ CREATE TABLE analytics_platform_snapshot (
 
 The search index is a **separate table, deliberately not a generated column or trigger on `course_versions`**. A trigger would make index maintenance invisible and synchronous, deleting a required publishing step (FR-2) and coupling index updates to the write transaction. A separate table keeps indexing asynchronous, replayable, and observable — and means substituting OpenSearch later replaces one consumer rather than restructuring the write path.
 
-`analytics_platform_snapshot` uses the single-row-table idiom: `id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id)` makes a second row impossible.
+`platform_snapshot` uses the single-row-table idiom: `id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id)` makes a second row impossible.
+
+`user_role_mirror.last_event_id` exists because moving analytics off direct table reads reopened a race direct reads never had: the relay's worker pool (§10.2 — default 4 workers) has no per-aggregate ordering, so a user's `identity.user_registered` and a later `identity.user_role_changed` can commit out of order. A naive upsert would let whichever finishes last win, silently reverting a promotion. `UpsertUserRoleMirror` (`internal/analytics/repository.go`) only applies an update when the incoming event's outbox id is newer than what's recorded. `course_mirror` and `enrollment_mirror` don't need the same guard — see `internal/analytics/README.md` for why.
 
 ### 5.4 MongoDB collections
 
@@ -806,7 +850,7 @@ Every key is reconstructible from PostgreSQL. A full Redis flush costs latency a
 
 ### 5.8 Migrations
 
-`golang-migrate`, versioned `NNNNNN_description.up.sql` / `.down.sql`. Every migration has a tested down path. Migrations run as an explicit step, never automatically on service start — an API replica starting during a rolling restart must not race another replica to alter a table.
+`golang-migrate`, versioned `NNNNNN_description.up.sql` / `.down.sql` — one independent sequence per service's schema (`migrations/{platform,identity,course,analytics}/`, ADR-0024), not one flat directory. Every migration has a tested down path. Migrations run as an explicit step, never automatically on service start — an API replica starting during a rolling restart must not race another replica to alter a table.
 
 ### 5.9 GORM usage boundary
 
@@ -991,7 +1035,7 @@ ValidateMetadata ───┤                   ├──> BuildOutline ──�
 | `BuildOutline` | — | 3× | Constructs the cache document |
 | `IndexSearch` | Cache, analytics | 5× | Upsert `course_search_index` |
 | `WarmCache` | Index, analytics | 3× | Write versioned Redis key |
-| `InitAnalytics` | Index, cache | 5× | Create `analytics_course_stats` row |
+| `InitAnalytics` | Index, cache | 5× | Create `course_stats` row |
 | `PromoteVersion` | — | 5× | Transactional swap plus `CoursePublished` outbox row. **Must be last** |
 
 `PromoteVersion` being last and atomic is what makes the whole workflow safe. Every preceding activity operates on the draft version or on derived stores; nothing a student can observe changes until that final transaction commits.
@@ -1095,14 +1139,14 @@ Two transactions that never lock the same *pair* of tables cannot deadlock on th
 
 | Metric (FR-5) | Source | Freshness |
 |---|---|---|
-| Total students | `analytics_platform_snapshot` | 60 s |
-| Total instructors | `analytics_platform_snapshot` | 60 s |
-| Total courses published | `analytics_platform_snapshot` | 60 s |
-| New enrollments over time | `analytics_daily_enrollments` | Near-real-time |
-| Course completion rate | `analytics_course_stats` | Near-real-time |
-| Average time to complete | `analytics_course_stats.avg_completion_s` | 60 s |
+| Total students | `platform_snapshot` | 60 s |
+| Total instructors | `platform_snapshot` | 60 s |
+| Total courses published | `platform_snapshot` | 60 s |
+| New enrollments over time | `daily_enrollments` | Near-real-time |
+| Course completion rate | `course_stats` | Near-real-time |
+| Average time to complete | `course_stats.avg_completion_s` | 60 s |
 | Most popular courses | Redis sorted set, reconciled from Postgres | 60 s |
-| Average courses per student | `analytics_platform_snapshot` | 60 s |
+| Average courses per student | `platform_snapshot` | 60 s |
 | Failed events / workflow issues | MongoDB `failed_events` | Near-real-time |
 
 ### 9.2 Two update paths
@@ -1115,7 +1159,9 @@ Averages (completion time, courses per student) are computed only by the schedul
 
 ### 9.3 Analytics stay in PostgreSQL
 
-MongoDB owns the archive, not the aggregates. The metrics are small, structured, relational, and queried by fixed dashboards. PostgreSQL serves them with ordinary indexed queries and — critically — can recompute them from the source tables in the same database, which is what makes reconciliation possible. Aggregates in MongoDB would make every reconciliation a cross-store operation for no gain.
+MongoDB owns the archive, not the aggregates. The metrics are small, structured, relational, and queried by fixed dashboards. PostgreSQL serves them with ordinary indexed queries and — critically — can recompute them from source tables in the same database, which is what makes reconciliation possible. Aggregates in MongoDB would make every reconciliation a cross-store operation for no gain.
+
+"Source tables" means `internal/analytics`'s own mirror tables (§5.3.6), not `course.courses`/`course.enrollments`/`identity.users` directly — schema-per-service (ADR-0024) means analytics' recompute reads only ever leave the `analytics` schema. The mirrors are themselves kept current by the event-driven path below; this doesn't change what reconciliation recomputes from, only where that data now lives.
 
 ---
 
@@ -1621,7 +1667,7 @@ The design is one system. The milestones below are review checkpoints, not archi
 
 - **Concurrent publish validation** (`course.Service.runPublishChecks`) — `ValidateMetadata` gates, then lesson-content validation and totals recompute run concurrently via `errgroup`, matching RFC §7.4's own activity graph shape.
 - **The outbox relay** (`internal/platform/relay`) — a genuine bounded worker pool: goroutines, a channel for job dispatch (structural backpressure), `sync.WaitGroup`-drained graceful shutdown, `sync.Mutex`-guarded in-process claim tracking, `sync/atomic` counters. Proven, not just written: `relay_integration_test.go` asserts bounded concurrency is actually enforced, idempotency actually holds across retries, a poison event actually stops retrying after the configured max, and shutdown actually drains in-flight work's *database commit*, not just its Go function return (the second bug ADR-0021 records).
-- **`internal/analytics`**, the relay's first handler — recomputes `analytics_platform_snapshot` and `analytics_course_stats` from source on every relevant event, and `analytics_daily_enrollments` incrementally. `GET /analytics/platform` is live. This closes FR-5 from zero to five of ten metrics (platform totals, per-course enrollment/completion stats); the remaining five (search-driven popularity, failed-events) still need search and MongoDB respectively.
+- **`internal/analytics`**, the relay's first handler — recomputes `platform_snapshot` and `course_stats` from source on every relevant event, and `daily_enrollments` incrementally. `GET /analytics/platform` is live. This closes FR-5 from zero to five of ten metrics (platform totals, per-course enrollment/completion stats); the remaining five (search-driven popularity, failed-events) still need search and MongoDB respectively.
 
 The relay later gained a second handler, for a different reason than the concurrency pull-forward above: `internal/enrollment`'s `enrollment-course-archival` consumer, added when supervisor review of course archival (`POST /courses/{id}/archive`) surfaced that an archived course was leaving its already-enrolled students with an active status and no working access path. `course.Service.ArchiveCourse` writes `course.course_archived`; the handler bulk-withdraws every active enrollment on that course. See `internal/enrollment/README.md` for the implementation, and the §4.5/§6.5 event tables above, now updated with this consumer.
 

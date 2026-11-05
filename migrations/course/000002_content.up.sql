@@ -2,6 +2,7 @@
 -- are immutable snapshots, publishing copies the tree (ADR-0010).
 -- lesson_key is stable across versions and is what lesson_progress joins on
 -- (ADR-0011) — id is not, because republishing creates new lesson rows.
+SET search_path TO course, public;
 
 CREATE TABLE modules (
     id                UUID PRIMARY KEY,

@@ -47,10 +47,12 @@ jobs:
 
       - name: Run migrations
         run: |
-          go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest \
-            -path migrations \
-            -database "postgres://smartcourse:smartcourse@localhost:5432/smartcourse?sslmode=disable" \
-            up
+          for svc in platform identity course analytics; do
+            go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest \
+              -path migrations/$svc \
+              -database "postgres://smartcourse:smartcourse@localhost:5432/smartcourse?sslmode=disable&x-migrations-table=${svc}_schema_migrations" \
+              up
+          done
 
       - name: Unit + integration tests (race detector always on — RFC §10.6/§18.7)
         run: go test -race ./...

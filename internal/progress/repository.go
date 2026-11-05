@@ -77,11 +77,16 @@ func (r *Repository) isFullyComplete(ctx context.Context, tx *gorm.DB, enrollmen
 	return totalLessons > 0 && completedCount >= totalLessons, nil
 }
 
-func (r *Repository) markEnrollmentCompleted(ctx context.Context, tx *gorm.DB, enrollmentID uuid.UUID) error {
+// markEnrollmentCompleted returns the completed_at it wrote so the caller
+// can put the exact same value in the progress.course_completed outbox
+// event (ADR-0024 — analytics.enrollment_mirror needs completed_at, and a
+// second time.Now() call here would drift from what's actually in the row).
+func (r *Repository) markEnrollmentCompleted(ctx context.Context, tx *gorm.DB, enrollmentID uuid.UUID) (time.Time, error) {
 	now := time.Now().UTC()
-	return tx.WithContext(ctx).Exec(`
+	err := tx.WithContext(ctx).Exec(`
 		UPDATE enrollments SET status = 'completed', completed_at = ?
 		WHERE id = ? AND status = 'active'`, now, enrollmentID).Error
+	return now, err
 }
 
 func (r *Repository) ListProgress(ctx context.Context, enrollmentID uuid.UUID) ([]LessonProgress, error) {

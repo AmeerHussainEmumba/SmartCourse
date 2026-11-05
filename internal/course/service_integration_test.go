@@ -19,6 +19,11 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/test/integration/testenv"
 )
 
+// seedInstructor seeds both identity.users (so the row exists, even
+// though nothing in this module reads it directly anymore — ADR-0024) and
+// course.instructor_mirror (what ListCatalogue actually joins against),
+// mirroring what internal/course's relay handler would do in production
+// in response to identity.user_registered.
 func seedInstructor(t *testing.T, env *testenv.Env) uuid.UUID {
 	t.Helper()
 	id := uuid.Must(uuid.NewV7())
@@ -26,6 +31,9 @@ func seedInstructor(t *testing.T, env *testenv.Env) uuid.UUID {
 		id, id.String()+"@example.com").Error
 	if err != nil {
 		t.Fatalf("seed instructor: %v", err)
+	}
+	if err := env.DB.Exec(`INSERT INTO instructor_mirror (user_id, full_name) VALUES (?, 'Test Instructor')`, id).Error; err != nil {
+		t.Fatalf("seed instructor_mirror: %v", err)
 	}
 	return id
 }
