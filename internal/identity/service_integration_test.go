@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/identity"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/auth"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
@@ -43,6 +45,8 @@ func newTestServiceWithEmail(t *testing.T, sender identity.EmailSender) (*identi
 type capturingEmailSender struct {
 	mu                     sync.Mutex
 	lastPasswordResetToken string
+	lastEmailVerifyToken   string
+	emailVerifySendCount   int
 	failWith               error
 }
 
@@ -54,6 +58,10 @@ func (s *capturingEmailSender) SendPasswordReset(ctx context.Context, toEmail, r
 }
 
 func (s *capturingEmailSender) SendEmailVerification(ctx context.Context, toEmail, rawToken string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastEmailVerifyToken = rawToken
+	s.emailVerifySendCount++
 	return s.failWith
 }
 
@@ -61,6 +69,18 @@ func (s *capturingEmailSender) PasswordResetToken() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lastPasswordResetToken
+}
+
+func (s *capturingEmailSender) EmailVerifyToken() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastEmailVerifyToken
+}
+
+func (s *capturingEmailSender) EmailVerifySendCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.emailVerifySendCount
 }
 
 func TestRegister_DuplicateEmail_Rejected(t *testing.T) {
@@ -391,5 +411,197 @@ func TestRegister_DoesNotFailWhenEmailDeliveryFails(t *testing.T) {
 	}
 	if user.Email != "emailfails@example.com" {
 		t.Fatalf("unexpected user record: %+v", user)
+	}
+}
+
+// --- previously-untested Service methods: Logout, GetMe, UpdateMe,
+// ResendEmailVerification, ConfirmEmailVerification (test-coverage audit) ---
+
+func TestLogout_RevokesRefreshToken(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	authResp, err := svc.Register(ctx, identity.RegisterRequest{Email: "logout@example.com", Password: "correct-horse-battery", FullName: "User"})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	if err := svc.Logout(ctx, identity.LogoutRequest{RefreshToken: authResp.RefreshToken}); err != nil {
+		t.Fatalf("logout: %v", err)
+	}
+
+	if _, err := svc.Refresh(ctx, identity.RefreshRequest{RefreshToken: authResp.RefreshToken}); err == nil {
+		t.Fatal("expected the logged-out refresh token to be rejected")
+	}
+}
+
+// TestLogout_UnknownToken_IsANoOp proves Logout doesn't leak whether a
+// refresh token ever existed — calling it with a token nobody issued (or
+// one already revoked) must succeed silently, not error, the same no-
+// enumeration posture RequestPasswordReset/ResendEmailVerification take.
+func TestLogout_UnknownToken_IsANoOp(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	if err := svc.Logout(ctx, identity.LogoutRequest{RefreshToken: "never-issued-token"}); err != nil {
+		t.Fatalf("expected logout with an unknown token to be a silent no-op, got: %v", err)
+	}
+}
+
+func TestGetMe_ReturnsCurrentUser_RejectsUnknownID(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	authResp, err := svc.Register(ctx, identity.RegisterRequest{Email: "getme@example.com", Password: "correct-horse-battery", FullName: "Original Name"})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	userID, err := uuid.Parse(authResp.User.ID)
+	if err != nil {
+		t.Fatalf("parse user id: %v", err)
+	}
+
+	resp, err := svc.GetMe(ctx, userID)
+	if err != nil {
+		t.Fatalf("GetMe: %v", err)
+	}
+	if resp.Email != "getme@example.com" || resp.FullName != "Original Name" {
+		t.Fatalf("unexpected GetMe response: %+v", resp)
+	}
+
+	if _, err := svc.GetMe(ctx, uuid.New()); !errors.Is(err, apperrors.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for an unknown user id, got: %v", err)
+	}
+}
+
+// TestUpdateMe_PersistsChangeAndWritesProfileUpdatedEvent is the regression
+// test for why UpdateMe exists as its own method rather than silently
+// reusing some generic update path: course.instructor_mirror (ADR-0024)
+// only stays current because this exact write emits
+// identity.user_profile_updated in the same transaction as the column
+// update — a module boundary this test can't reach across (RFC §4.4), so
+// it asserts on the one thing it can see directly: the outbox row.
+func TestUpdateMe_PersistsChangeAndWritesProfileUpdatedEvent(t *testing.T) {
+	svc, env := newTestService(t)
+	ctx := context.Background()
+
+	authResp, err := svc.Register(ctx, identity.RegisterRequest{Email: "updateme@example.com", Password: "correct-horse-battery", FullName: "Old Name"})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	userID, err := uuid.Parse(authResp.User.ID)
+	if err != nil {
+		t.Fatalf("parse user id: %v", err)
+	}
+
+	resp, err := svc.UpdateMe(ctx, userID, identity.UpdateProfileRequest{FullName: "New Name"})
+	if err != nil {
+		t.Fatalf("UpdateMe: %v", err)
+	}
+	if resp.FullName != "New Name" {
+		t.Fatalf("expected UpdateMe to return the new name, got %q", resp.FullName)
+	}
+
+	again, err := svc.GetMe(ctx, userID)
+	if err != nil {
+		t.Fatalf("GetMe after update: %v", err)
+	}
+	if again.FullName != "New Name" {
+		t.Fatalf("expected the persisted name to be updated, got %q", again.FullName)
+	}
+
+	var eventCount int64
+	env.DB.Raw(`SELECT count(*) FROM outbox WHERE event_type = 'identity.user_profile_updated' AND aggregate_id = ?`, userID).
+		Row().Scan(&eventCount)
+	if eventCount != 1 {
+		t.Fatalf("expected exactly 1 identity.user_profile_updated outbox event, got %d", eventCount)
+	}
+}
+
+// TestEmailVerification_ResendThenConfirm_MarksVerified exercises both
+// ResendEmailVerification and ConfirmEmailVerification together — the
+// pair only makes sense tested as a round trip, the same way
+// TestConfirmPasswordReset_RevokesAllRefreshTokens tests its own request/
+// confirm pair together.
+func TestEmailVerification_ResendThenConfirm_MarksVerified(t *testing.T) {
+	sender := &capturingEmailSender{}
+	svc, env := newTestServiceWithEmail(t, sender)
+	ctx := context.Background()
+
+	authResp, err := svc.Register(ctx, identity.RegisterRequest{Email: "verifyme@example.com", Password: "correct-horse-battery", FullName: "User"})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	userID, err := uuid.Parse(authResp.User.ID)
+	if err != nil {
+		t.Fatalf("parse user id: %v", err)
+	}
+	if sender.EmailVerifySendCount() != 1 {
+		t.Fatalf("expected Register itself to send 1 verification email, got %d", sender.EmailVerifySendCount())
+	}
+
+	if err := svc.ResendEmailVerification(ctx, identity.ResendVerificationRequest{Email: "verifyme@example.com"}); err != nil {
+		t.Fatalf("resend: %v", err)
+	}
+	if sender.EmailVerifySendCount() != 2 {
+		t.Fatalf("expected resend to send a second verification email, got %d sends", sender.EmailVerifySendCount())
+	}
+	token := sender.EmailVerifyToken()
+	if token == "" {
+		t.Fatal("expected a verification token to have been generated and sent")
+	}
+
+	if err := svc.ConfirmEmailVerification(ctx, token); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+
+	repo := identity.NewRepository(env.DB)
+	user, err := repo.GetUserByID(ctx, userID)
+	if err != nil {
+		t.Fatalf("look up user: %v", err)
+	}
+	if user.EmailVerifiedAt == nil {
+		t.Fatal("expected email_verified_at to be set after confirmation")
+	}
+
+	// A used (or garbage) token must be rejected, not silently re-accepted.
+	if err := svc.ConfirmEmailVerification(ctx, token); err == nil {
+		t.Fatal("expected re-using an already-confirmed verification token to fail")
+	}
+	if err := svc.ConfirmEmailVerification(ctx, "garbage-token-never-issued"); err == nil {
+		t.Fatal("expected an unknown verification token to fail")
+	}
+}
+
+// TestResendEmailVerification_NoEnumeration_AndNoOpOnceVerified proves the
+// two cases ResendEmailVerification deliberately treats as silent
+// successes (RFC §11.3-style no-enumeration, mirroring
+// RequestPasswordReset): an unknown email, and an already-verified one.
+func TestResendEmailVerification_NoEnumeration_AndNoOpOnceVerified(t *testing.T) {
+	sender := &capturingEmailSender{}
+	svc, _ := newTestServiceWithEmail(t, sender)
+	ctx := context.Background()
+
+	if err := svc.ResendEmailVerification(ctx, identity.ResendVerificationRequest{Email: "never-registered@example.com"}); err != nil {
+		t.Fatalf("expected no error for an unknown email (no enumeration), got: %v", err)
+	}
+	if sender.EmailVerifySendCount() != 0 {
+		t.Fatalf("expected no email sent for an unknown address, got %d sends", sender.EmailVerifySendCount())
+	}
+
+	if _, err := svc.Register(ctx, identity.RegisterRequest{Email: "alreadyverified@example.com", Password: "correct-horse-battery", FullName: "User"}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	token := sender.EmailVerifyToken()
+	if err := svc.ConfirmEmailVerification(ctx, token); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+
+	sendsBeforeResend := sender.EmailVerifySendCount()
+	if err := svc.ResendEmailVerification(ctx, identity.ResendVerificationRequest{Email: "alreadyverified@example.com"}); err != nil {
+		t.Fatalf("expected no error resending for an already-verified account, got: %v", err)
+	}
+	if sender.EmailVerifySendCount() != sendsBeforeResend {
+		t.Fatalf("expected no new email sent once already verified, sends went from %d to %d", sendsBeforeResend, sender.EmailVerifySendCount())
 	}
 }

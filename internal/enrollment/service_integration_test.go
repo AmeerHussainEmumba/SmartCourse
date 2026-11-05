@@ -244,3 +244,85 @@ func TestEnroll_UnpublishedCourse_Rejected(t *testing.T) {
 		t.Fatalf("expected course_not_published, got: %v", err)
 	}
 }
+
+// TestGetByID_ReturnsOwnEnrollment_RejectsOthers is the IDOR check
+// GetByID's own doc comment describes: loading the resource and comparing
+// student_id against the caller, not just trusting the client only ever
+// requests its own enrollment ID.
+func TestGetByID_ReturnsOwnEnrollment_RejectsOthers(t *testing.T) {
+	env := testenv.Setup(t)
+	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
+	ctx := context.Background()
+
+	courseID := seedCourse(t, env, nil)
+	owner := seedStudent(t, env)
+	other := seedStudent(t, env)
+
+	e, err := svc.Enroll(ctx, owner, courseID)
+	if err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+
+	got, err := svc.GetByID(ctx, owner, e.ID)
+	if err != nil {
+		t.Fatalf("GetByID (owner): %v", err)
+	}
+	if got.ID != e.ID || got.StudentID != owner {
+		t.Fatalf("unexpected enrollment returned to owner: %+v", got)
+	}
+
+	if _, err := svc.GetByID(ctx, other, e.ID); err == nil {
+		t.Fatal("expected a non-owning student to be rejected")
+	} else if appErr, ok := apperrors.As(err); !ok || appErr.Code != "not_your_enrollment" {
+		t.Fatalf("expected not_your_enrollment, got: %v", err)
+	}
+
+	if _, err := svc.GetByID(ctx, owner, uuid.Must(uuid.NewV7())); err == nil {
+		t.Fatal("expected a non-existent enrollment ID to be rejected")
+	} else if appErr, ok := apperrors.As(err); !ok || appErr.Code != "not_found" {
+		t.Fatalf("expected not_found for a non-existent enrollment, got: %v", err)
+	}
+}
+
+// TestListMine_ReturnsOnlyCallersOwnEnrollments proves the query is scoped
+// to the caller across more than one enrolled course and more than one
+// student, not just that it returns something.
+func TestListMine_ReturnsOnlyCallersOwnEnrollments(t *testing.T) {
+	env := testenv.Setup(t)
+	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
+	ctx := context.Background()
+
+	courseA := seedCourse(t, env, nil)
+	courseB := seedCourse(t, env, nil)
+	mine := seedStudent(t, env)
+	someoneElse := seedStudent(t, env)
+
+	eA, err := svc.Enroll(ctx, mine, courseA)
+	if err != nil {
+		t.Fatalf("Enroll courseA: %v", err)
+	}
+	eB, err := svc.Enroll(ctx, mine, courseB)
+	if err != nil {
+		t.Fatalf("Enroll courseB: %v", err)
+	}
+	if _, err := svc.Enroll(ctx, someoneElse, courseA); err != nil {
+		t.Fatalf("Enroll someoneElse: %v", err)
+	}
+
+	list, err := svc.ListMine(ctx, mine)
+	if err != nil {
+		t.Fatalf("ListMine: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected exactly 2 enrollments for the caller, got %d: %+v", len(list), list)
+	}
+	ids := map[uuid.UUID]bool{list[0].ID: true, list[1].ID: true}
+	if !ids[eA.ID] || !ids[eB.ID] {
+		t.Fatalf("expected ListMine to return both of the caller's own enrollments, got %+v", list)
+	}
+	for _, e := range list {
+		if e.StudentID != mine {
+			t.Fatalf("expected every returned enrollment to belong to the caller, got one owned by %s", e.StudentID)
+		}
+	}
+}
