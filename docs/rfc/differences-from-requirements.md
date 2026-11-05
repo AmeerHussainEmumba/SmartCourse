@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Living document |
-| Last updated | 2026-10-26 |
+| Last updated | 2026-11-03 |
 | Related | `smartcourse-rfc.md`, `smartcourse-adr.md`, `docs/baseline/SmartCourse.md`, `docs/baseline/Execution Guidelines.md` |
 
 ## Purpose
@@ -35,6 +35,7 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-010](#dr-010--per-service-table-ownership-and-liquibase-deferred-pending-discussion) | Per-service table ownership and Liquibase — deferred pending discussion | Interpretation | Proposed (tables half resolved — see entry's update) |
 | [DR-011](#dr-011--further-splitting-cmdapi-into-per-domain-deployable-services) | Further splitting cmd/api into per-domain deployable services | Interpretation | Accepted |
 | [DR-012](#dr-012--seed-data-created-through-the-service-layer-not-a-sql-script) | Seed data created through the service layer, not a SQL script | Interpretation | Proposed |
+| [DR-013](#dr-013--schema-per-service-reverses-dr-010s-shared-schema-position) | Schema-per-service reverses DR-010's shared-schema position | Interpretation | Accepted |
 
 ---
 
@@ -224,6 +225,10 @@ If the supervisor confirms either requirement after discussion (e.g., an org-wid
 
 The direct conversation this entry was waiting on happened. The supervisor's per-service table ask was about matching Emumba's own company convention for a later review, not a rejection of the reasoning above — she explicitly understands and accepts the shared-database case. The Liquibase half of this entry wasn't revisited and remains open as originally written. See DR-011 for what the conversation did ask for instead, and ADR-0023 for the resulting decision.
 
+### Update — 2026-11-03: Liquibase half now resolved too
+
+A later written review asked for Liquibase again ("own Liquibase changelog" per service). Asked directly, the supervisor confirmed: "Liquibase not a hard requirement for you. You're on golang-migrate just we need to make sure each service has its own migrations folder." Both halves of this entry are now resolved — neither in the direction the original review asked for, but both by direct confirmation rather than this project's own unilateral case. `golang-migrate` stays (`internal/platform/db`, `Makefile`), reorganized into one independent migration sequence per service (`migrations/{platform,identity,course,analytics}/`) rather than Liquibase changelogs. See DR-013 and ADR-0024 for what that same conversation asked for on data ownership, which this register's original per-service-table reasoning did not survive unchanged.
+
 ---
 
 ## DR-011 — Further splitting cmd/api into per-domain deployable services
@@ -259,6 +264,24 @@ This wasn't received as a specific, detailed ask (unlike DR-009/DR-011) — it's
 ### If this turns out to be wrong
 
 If a plain SQL seed script is actually required (e.g., to match a company convention, or because the service-layer approach is unacceptable for some reason not yet stated), `cmd/seed/main.go` would be replaced by a `.sql` file (or a `golang-migrate`-style seed migration) populating the same dataset directly, accepting the loss of validation-by-construction and the idempotency behavior unless reimplemented separately.
+
+---
+
+## DR-013 — Schema-per-service reverses DR-010's shared-schema position
+
+**Category:** Interpretation · **Date:** 2026-11-03 · **Related:** DR-010, DR-011, ADR-0001, ADR-0012, ADR-0023, ADR-0024
+
+### What differs
+
+DR-010 logged this project's reasoned case against per-service data ownership, and recorded the supervisor's agreement with it ("she explicitly accepts the shared-database reasoning," per that entry's 2026-10-26 update). A later written review asked again, more specifically: "The direction is independent services that each own their code and their data... no foreign keys or joins across services." Asked directly, the supervisor confirmed and narrowed it: identity and analytics each get their own schema, course/enrollment/progress stay together (the seat-limit transaction case was accepted again), and it's "not one schema per table, it's one schema per service." Each service now has its own Postgres schema, with no foreign key crossing a schema boundary, implemented as ADR-0024.
+
+### Why this is logged as "accepted," not treated as settling DR-010
+
+This is a genuine reversal of DR-010's shared-*schema* position, not an extension of it the way DR-011 extended ADR-0022 — DR-010's own case (built from `docs/baseline/SmartCourse.md` and `docs/baseline/Execution Guidelines.md` directly) is **not retracted**: nothing in the original brief required this, and no new technical finding makes it necessary for correctness, performance, or anything the brief asks for. It's implemented because it was given as a direct, confirmed requirement, which is a different and sufficient reason on its own — matching the supervisor's stated direction for this engagement takes precedence over the team's own architectural preference here. DR-010's shared-*database* case (one Postgres instance, one set of credentials, transactions that can still span what are now schema boundaries) is unaffected and remains accepted; only the "one schema" half of DR-010 is reversed. The seat-limit transaction reasoning DR-010 led with is explicitly still intact — course, enrollment, and progress share one schema specifically so that guarantee never had to be touched.
+
+### If this turns out to be wrong
+
+If the schema split ever needs reversing (e.g., it turns out to add operational cost — migration-tooling surface, `search_path` misconfiguration risk — without a corresponding benefit the supervisor confirms she still wants), the fix is a new entry superseding this one and ADR-0024, collapsing back toward DR-010's original shared-schema position, not a silent revert.
 
 ---
 

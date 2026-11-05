@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Living document |
-| Last updated | 2026-09-24 |
+| Last updated | 2026-11-03 |
 | Related | `smartcourse-rfc.md` |
 
 ## Review status (2026-09-24)
@@ -54,6 +54,7 @@ The distinction matters when something changes. Six months from now, a contribut
 | [0021](#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka) | In-process outbox relay with a worker pool, ahead of Kafka | Accepted | §6.3, §21.0 |
 | [0022](#adr-0022--separate-api-and-worker-binaries-one-shared-codebase-and-database) | Separate API and worker binaries, one shared codebase and database | Accepted | §4.2 |
 | [0023](#adr-0023--split-cmdapi-into-identity-api-course-api-and-analytics-api) | Split cmd/api into identity-api, course-api, and analytics-api | Accepted | §4.2 |
+| [0024](#adr-0024--schema-per-service-within-one-shared-database) | Schema-per-service within one shared database | Accepted | §5.3 |
 
 ---
 
@@ -933,6 +934,57 @@ This does not touch the underlying architecture. One PostgreSQL database, one `g
 ### Reversal trigger
 
 If `identity-api`, `course-api`, or `analytics-api` ever need to call each other over HTTP for something the JWT claims can't answer, that's a sign the chosen grouping was wrong, not that the whole approach was — the fix is likely regrouping, not reverting to one binary. If the supervisor's review ultimately wants true per-service data ownership after all, this ADR is superseded by that larger change, same as ADR-0022's reversal trigger for DR-010.
+
+---
+
+## ADR-0024 — Schema-per-service within one shared database
+
+**Status:** Accepted · **Date:** 2026-11-03 · **RFC:** §5.3
+
+### Context
+
+A written review of ADR-0023's split (identity-api/course-api/analytics-api, one shared database) rejected it as not yet real: "This is still one codebase packaged four ways, not microservices yet... one `go.mod`, a shared `internal/` that every image builds in full, and one database with one user and foreign keys across domains. The direction is independent services that each own their code and their data," with a reference layout showing a `services/` tree, one `go.mod` per service, a `libs/common` module, and "each service owns its own schema and its own Liquibase changelog, with no foreign keys or joins across services."
+
+A direct follow-up conversation narrowed this considerably. Liquibase is confirmed not a hard requirement — `golang-migrate` stays, each service just needs its own migrations folder. The seat-limit transaction case from ADR-0012/ADR-0023 was accepted again: course and enrollment stay in one schema, one service. What remains, in the supervisor's own words: "What I do want is clear data ownership between services. Identity and analytics should each own their own schema, and analytics should get its data from events through your relay instead of querying the course and enrollment tables... it's not one schema per table, it's one schema per service." The separate-`go.mod`/`libs/common` half of the original review is confirmed still wanted, explicitly sequenced after this record: "we do the schema split first."
+
+**This record is implemented because it was given as a direct requirement following review, not because it reverses the engineering case this project made for a single shared database (ADR-0001, DR-010).** That case is not retracted here — no new technical finding makes per-service schema ownership necessary for correctness, performance, or anything in the original brief, and the shared-database architecture ADR-0001 chose remains, by this project's own reasoning, the better fit for a system this size. It is adopted because matching the supervisor's stated direction for this engagement takes precedence over the team's own architectural preference here, and because the actual cost turned out to be acceptable: no code was doing cross-schema joins in the first place (identity is reached only via JWT claims, never a live lookup), and the one place that was — analytics reading `courses`/`enrollments`/`users` directly — had a reasonable alternative once pointed at.
+
+### Options
+
+**A. Decline — keep one shared `public` schema.** Contradicts an explicit, direct instruction ("What I do want is..."), not a preference being weighed; not viable.
+
+**B. One schema per table (or per module), matching "no foreign keys or joins across services" at maximum granularity.** Rejected by the supervisor herself in the same conversation: "it's not one schema per table, it's one schema per service" — `course`, `enrollment`, and `progress` stay together in one schema, same grouping ADR-0023 already uses for the seat-limit transaction.
+
+**C. One Postgres schema per service (identity, course\[+enrollment+progress\], analytics), plus a neutral `platform` schema for the outbox/relay infrastructure every service shares, no foreign keys crossing schema boundaries, analytics rebuilt to consume only relay events.** Everything stays in one database, one `go.mod` (deferred to a later record, per "we do the schema split first").
+
+### Decision
+
+**Option C.** Four Postgres schemas, matching ADR-0023's service boundaries exactly:
+
+- `identity` — `users`, `refresh_tokens`, `password_reset_tokens`, `email_verification_tokens`.
+- `course` — `courses`, `course_versions`, `course_prerequisites`, `modules`, `lessons`, `enrollments`, `lesson_progress`, `certificates`, `course_search_index` (the last one stays here, not its own schema, until `internal/search` actually exists — see `migrations/course/000004_search_index.up.sql`).
+- `analytics` — three new mirror tables (`user_role_mirror`, `course_mirror`, `enrollment_mirror`) plus the renamed aggregate tables (`platform_snapshot`, `course_stats`, `daily_enrollments` — the `analytics_` prefix was dropped as redundant once they live in their own schema).
+- `platform` — `outbox`, `processed_events`, `idempotency_keys`: shared integration infrastructure, not any one service's domain data. Every producer (identity/course/enrollment/progress) writes its outbox row here inside its own transaction; durability only requires the same *database*, not the same schema, so this doesn't weaken ADR-0006's guarantee. This is treated as the thing Kafka replaces wholesale in M3, not a service's owned data — the alternative (an `outbox`/`processed_events` pair duplicated per producer schema) would mean the worker running multiple relay instances for a mechanism that disappears in M3 anyway.
+
+**No foreign keys cross a schema boundary.** `courses.instructor_id` and `enrollments.student_id` no longer reference `identity.users`; `idempotency_keys.user_id` no longer does either. None of these were ever read by application code across the boundary (callers are authorized via JWT claims, never a fresh lookup — RFC §4.4's module-boundary discipline already meant this), and there is no user-delete feature, so nothing relied on the database catching a dangling reference. Migrations are reorganized to match: `migrations/{platform,identity,course,analytics}/`, each an independent `golang-migrate` sequence with its own `x-migrations-table` so the four don't collide on a shared `schema_migrations` row (`make migrate-up` runs all four in that fixed order — `platform` first, since `citext`/`pg_trgm` live in `public` and identity/course need them).
+
+**Each binary's database connection sets `search_path`** (`internal/platform/config`'s new `POSTGRES_SEARCH_PATH`, applied by `internal/platform/db.Open` as a DSN parameter so it's a startup parameter on every pooled connection, not a `SET` that would only affect one) rather than schema-qualifying every query by hand — `identity-api` gets `identity,platform,public`, `course-api` gets `course,platform,public`, `analytics-api` gets `analytics,public` (it never writes an outbox event, so it's the one service that doesn't need `platform`), `worker` gets `platform,course,analytics,public`. No `internal/*` repository code changed table names to schema-qualified ones; bare names resolve correctly as long as the connection's search_path is right.
+
+**`internal/analytics` was rebuilt, not just relocated.** Before this record it queried `courses`/`enrollments`/`users` directly on every recompute (ADR-0017's rebuildability principle — recompute from source rather than maintain fragile running totals). That's exactly what the supervisor's "events through your relay instead of querying the course and enrollment tables" rules out. The fix keeps ADR-0017's principle but moves what counts as "source": three mirror tables, upserted row-by-row as `internal/analytics/handlers.go` consumes each relay event, and `RecomputePlatformSnapshot`/`RecomputeCourseStats` now recompute from those instead — a bug in a counter is still fixable by recomputing, it just recomputes from analytics' own data now. Two outbox payloads gained a field to make this possible without new queries: `enrollment.student_enrolled` gained `enrolled_at`, `progress.course_completed` gained `completed_at` (both already computed in scope where the event was written, just not previously included).
+
+**`internal/course` picked up its first relay consumer, for the same reason `internal/analytics` was rebuilt.** `ListCatalogue`'s "no N+1" join (RFC §13.2) was `JOIN users u ON u.id = c.instructor_id` — a live cross-schema join this record rules out, missed when first drafting this record and caught by live verification, not by review: `GET /courses` silently returning no instructor name (or erroring, depending on the connection's search_path) once `course-api`'s connection stopped including `identity`. `course.instructor_mirror` replaces it — a denormalized copy of every registered user's display name (not just instructors; `identity.user_registered` fires for everyone, the mirror is just only ever looked up via `instructor_id`), fed by `identity.user_registered` and a new `identity.user_profile_updated` event (`UpdateMe` didn't emit one before this record; nothing needed to know about a name change across a module boundary until now). `ListCatalogue` uses `LEFT JOIN ... COALESCE(..., '')`, not an inner join, since the mirror is populated asynchronously and a course published in the same instant as its instructor's first request could theoretically outrace it.
+
+**A real correctness bug was found and fixed while building this**, not before: the relay's worker pool (4 concurrent workers, no per-aggregate ordering — `internal/platform/relay`) means a user's `identity.user_registered` and a later `identity.user_role_changed` (or `user_profile_updated`) can have their handlers finish in either order. A live end-to-end check (seed → wait for the relay to drain → check `analytics.platform_snapshot`) caught this directly: seeded instructors showed up as students. `user_role_mirror` and `course.instructor_mirror` both gained a `last_event_id` column (the outbox row's own monotonic id), and their upsert functions only apply an update when the incoming event is actually newer than what's recorded — the exact race ADR-0017's original recompute-from-live-table design was immune to by construction, and that both mirror-based replacements had to re-earn explicitly. `internal/analytics/mirror_integration_test.go` and `internal/course/instructor_mirror_integration_test.go` have regression tests for it.
+
+### Consequences
+
+**Positive.** Matches the supervisor's explicit, direct requirement. Postgres enforces that nothing outside a service's own code can accidentally start depending on another service's internal table shape within the same database — a mistake that was structurally possible before (nothing stopped a future change from adding a cross-schema join) is now a permission error. A real step toward the deferred `go.mod` split: whichever service eventually gets its own physical database first, its schema is already self-contained, no FK to unwind at that point.
+
+**Negative.** Not full data isolation — one Postgres instance, one set of credentials, one connection pool budget shared across every schema; a schema boundary is a namespace, not a security boundary, and anyone with `POSTGRES_DSN` can still query any schema directly (same limitation ADR-0022/0023 already accepted for the shared database itself). Losing the two cross-schema foreign keys means a dangling `instructor_id`/`student_id` is no longer caught by the database — acceptable today only because nothing deletes users and the application layer already never trusted that constraint for anything functional. The `platform` schema is a deliberate exception to "no cross-schema dependency," justified by it being transport infrastructure rather than data, but it does mean `identity-api`/`course-api`/`worker` structurally depend on `platform` existing — not a cost `analytics-api` shares, which is why its search_path omits it. More migration-tooling surface: four independent sequences instead of one, a fixed apply order to remember, `x-migrations-table` per service. Every cross-service display field now carried by a mirror (`instructor_name`, user roles) is eventually, not immediately, consistent — a real tradeoff against the single `JOIN` this replaced, bounded by the relay's poll interval (ADR-0021) and accepted the same way every other relay-fed read model in this system already is.
+
+### Reversal trigger
+
+If the deferred `go.mod`/`libs/common` split (tracked for a later record) turns out to need schema boundaries drawn differently than ADR-0023's service boundaries — e.g. `search` or `notification` landing and needing their own schema sooner than expected — this record is extended, not reversed, the same way ADR-0023 extended ADR-0022. If the `platform` schema's shared-outbox approach turns out to cause real contention or coupling once more services exist, split it per-producer-schema at that point; nothing here prevents that migration later.
 
 ---
 

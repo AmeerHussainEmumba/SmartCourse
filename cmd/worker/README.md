@@ -13,7 +13,9 @@ docker compose --profile core up -d    # or containerized, alongside the api ser
 
 ## Current state
 
-Runs the outbox relay (ADR-0021), with `internal/analytics` and `internal/enrollment` registered as handlers today. Kafka consumers, Asynq pools, and the Temporal worker are still M2/M3 scope (RFC §21.0) — when they land, this is where they get wired in, alongside the relay, not replacing it (the relay itself migrates to publishing-to-Kafka rather than disappearing — see ADR-0021's reversal trigger).
+Runs the outbox relay (ADR-0021), with `internal/analytics`, `internal/course`, and `internal/enrollment` registered as handlers today. Kafka consumers, Asynq pools, and the Temporal worker are still M2/M3 scope (RFC §21.0) — when they land, this is where they get wired in, alongside the relay, not replacing it (the relay itself migrates to publishing-to-Kafka rather than disappearing — see ADR-0021's reversal trigger).
+
+This binary's database connection is the only one scoped to `platform`, `course`, and `analytics` schemas together (`POSTGRES_SEARCH_PATH`, ADR-0024) — not `identity`, since no handler here reads or writes identity's own tables, only the `full_name`/`role` fields already carried in identity's event payloads. It polls `platform.outbox` (every producer's events land there regardless of which schema produced them), and writes into `course.instructor_mirror`, `analytics`'s mirror and aggregate tables, and `course.enrollments` (via `enrollment.handleCourseArchived`), depending on which handler runs.
 
 ## Why a separate binary from the API services
 
