@@ -102,6 +102,15 @@ services:
       MINIO_ACCESS_KEY_ID: smartcourse
       MINIO_SECRET_ACCESS_KEY: smartcourse123
       JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
+      # Only read by this binary's Temporal worker (ADR-0009/0025) — not
+      # identity-api/analytics-api. worker is tagged *profiles-core, same
+      # as temporal itself is NOT (it's *profiles-workflow), so under
+      # plain `core` this points at a server that isn't running; that's
+      # fine (bootstrap.ConnectTemporal is lazy) — only publishing itself
+      # would fail until `make dev-workflow` brings temporal up too.
+      TEMPORAL_HOST_PORT: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: course-publish
     depends_on:
       postgres:
         condition: service_healthy
@@ -169,6 +178,12 @@ services:
       MINIO_ACCESS_KEY_ID: smartcourse
       MINIO_SECRET_ACCESS_KEY: smartcourse123
       JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
+      # Service.Publish starts the publish workflow here (ADR-0009/0025) —
+      # see worker's identical block above for why this is safe to boot
+      # with no Temporal present (plain `core` profile).
+      TEMPORAL_HOST_PORT: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: course-publish
     ports: ["8091:8080"]
     depends_on:
       postgres:

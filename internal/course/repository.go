@@ -10,6 +10,7 @@ package course
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -92,32 +93,132 @@ func (r *Repository) SetDraftVersion(ctx context.Context, courseID, versionID uu
 		Update("draft_version_id", versionID).Error
 }
 
-// PromoteVersion is the single transaction that makes a publish visible
-// (ADR-0010) — swap published_version_id, mark the old version superseded,
-// clear draft_version_id. Everything before this call operates on the
-// draft only; nothing a student can observe changes until this commits.
+// PromoteVersion is what makes a publish visible (ADR-0010) — swap
+// published_version_id, mark the old version superseded, clear
+// draft_version_id. It does NOT open its own transaction (unlike this
+// file's other multi-step operations): it's called via r.WithTx from
+// Service.PromoteAndPublish, in the same transaction as the
+// course.course_published outbox write, so promotion and the event that
+// announces it either both happen or neither does (M1 ran these as two
+// separate transactions — a gap closed when this became a Temporal
+// activity, which must be atomic to retry safely; see ADR-0025).
+// Everything before this call operates on the draft only; nothing a
+// student can observe changes until this commits.
 func (r *Repository) PromoteVersion(ctx context.Context, courseID, newVersionID uuid.UUID, oldVersionID *uuid.UUID) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&Course{}).Where("id = ?", courseID).
-			Updates(map[string]any{
-				"published_version_id": newVersionID,
-				"draft_version_id":     nil,
-				"updated_at":           time.Now().UTC(),
-			}).Error; err != nil {
+	if err := r.db.WithContext(ctx).Model(&Course{}).Where("id = ?", courseID).
+		Updates(map[string]any{
+			"published_version_id": newVersionID,
+			"draft_version_id":     nil,
+			"updated_at":           time.Now().UTC(),
+		}).Error; err != nil {
+		return err
+	}
+	if err := r.db.WithContext(ctx).Model(&CourseVersion{}).Where("id = ?", newVersionID).
+		Updates(map[string]any{"state": StateReady, "published_at": time.Now().UTC()}).Error; err != nil {
+		return err
+	}
+	if oldVersionID != nil {
+		if err := r.db.WithContext(ctx).Model(&CourseVersion{}).Where("id = ?", *oldVersionID).
+			Update("state", StateSuperseded).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&CourseVersion{}).Where("id = ?", newVersionID).
-			Updates(map[string]any{"state": StateReady, "published_at": time.Now().UTC()}).Error; err != nil {
-			return err
+	}
+	return nil
+}
+
+// SetVersionPublishing records that a publish workflow has started —
+// transitions the draft to `publishing` and stores its Temporal workflow
+// ID, so GetPublishStatus (and idx_one_draft_per_course, already in place
+// since M0) both have something real to read. Called once, right after
+// Service.Publish starts the workflow; never from inside the workflow
+// itself.
+func (r *Repository) SetVersionPublishing(ctx context.Context, id uuid.UUID, workflowID string) error {
+	return r.db.WithContext(ctx).Model(&CourseVersion{}).Where("id = ?", id).
+		Updates(map[string]any{"state": StatePublishing, "workflow_id": workflowID, "publish_error": nil}).Error
+}
+
+// GetInstructorName reads instructor_mirror the same way ListCatalogue's
+// LEFT JOIN does — a miss (mirror not caught up yet, ADR-0024) returns ""
+// rather than an error, same tradeoff ListCatalogue makes and for the same
+// reason: an instructor's own very first publish racing their own
+// just-registered event shouldn't fail the publish.
+func (r *Repository) GetInstructorName(ctx context.Context, userID uuid.UUID) (string, error) {
+	var name string
+	err := r.db.WithContext(ctx).Raw(`SELECT full_name FROM instructor_mirror WHERE user_id = ?`, userID).Row().Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return name, err
+}
+
+// UpsertSearchIndex is IndexSearch's write (RFC §7.4, pulled forward from
+// M3 per ADR-0025) — one row per course, replaced wholesale on every
+// publish rather than diffed, since a full republish already recomputes
+// every field BuildOutline collected. search_vector is built here, in SQL,
+// not in Go: to_tsvector needs Postgres's text search configuration, and
+// building it application-side would mean shipping that logic twice.
+// Title is weighted 'A' (ranks above a description match) — RFC §21's D11
+// defers final relevance tuning, so this is a reasonable starting weight,
+// not a tuned one.
+func (r *Repository) UpsertSearchIndex(ctx context.Context, o *PublishOutline) error {
+	tags := o.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	return r.db.WithContext(ctx).Exec(`
+		INSERT INTO course_search_index
+			(course_id, version_id, title, description, instructor_name, category, level, tags, enrollment_count, search_vector, indexed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
+			setweight(to_tsvector('english', ?), 'A') || setweight(to_tsvector('english', ?), 'B'), now())
+		ON CONFLICT (course_id) DO UPDATE SET
+			version_id = EXCLUDED.version_id, title = EXCLUDED.title, description = EXCLUDED.description,
+			instructor_name = EXCLUDED.instructor_name, category = EXCLUDED.category, level = EXCLUDED.level,
+			tags = EXCLUDED.tags, enrollment_count = EXCLUDED.enrollment_count,
+			search_vector = EXCLUDED.search_vector, indexed_at = EXCLUDED.indexed_at
+	`, o.CourseID, o.VersionID, o.Title, o.Description, o.InstructorName, o.Category, o.Level,
+		pq.StringArray(tags), o.EnrollmentCount, o.Title, o.Description).Error
+}
+
+// SearchRow is SearchCourses' result row.
+type SearchRow struct {
+	CourseID        uuid.UUID
+	Slug            string
+	Title           string
+	InstructorName  string
+	Category        *string
+	Level           *string
+	EnrollmentCount int
+}
+
+// SearchCourses ranks by full-text relevance first, enrollment count as a
+// tiebreaker — a real ranking, not just a filter, which is the difference
+// between this and ListCatalogue's plain ILIKE search (RFC §21's D11:
+// relevance weighting itself is still provisional, tuned later against
+// real query logs). Joined against courses for the slug a search result
+// actually needs to link to; course_search_index itself doesn't carry it.
+func (r *Repository) SearchCourses(ctx context.Context, query string, limit int) ([]SearchRow, error) {
+	rows, err := r.db.WithContext(ctx).Raw(`
+		SELECT c.id, c.slug, csi.title, csi.instructor_name, csi.category, csi.level, csi.enrollment_count
+		FROM course_search_index csi
+		JOIN courses c ON c.id = csi.course_id
+		WHERE csi.search_vector @@ plainto_tsquery('english', ?) AND c.archived_at IS NULL
+		ORDER BY ts_rank(csi.search_vector, plainto_tsquery('english', ?)) DESC, csi.enrollment_count DESC
+		LIMIT ?
+	`, query, query, limit).Rows()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []SearchRow
+	for rows.Next() {
+		var row SearchRow
+		if err := rows.Scan(&row.CourseID, &row.Slug, &row.Title, &row.InstructorName, &row.Category, &row.Level, &row.EnrollmentCount); err != nil {
+			return nil, err
 		}
-		if oldVersionID != nil {
-			if err := tx.Model(&CourseVersion{}).Where("id = ?", *oldVersionID).
-				Update("state", StateSuperseded).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 // --- versions ----------------------------------------------------------------

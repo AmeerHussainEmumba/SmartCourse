@@ -21,6 +21,7 @@ type Config struct {
 	Postgres PostgresConfig
 	Redis    RedisConfig
 	MinIO    MinIOConfig
+	Temporal TemporalConfig
 
 	JWT   JWTConfig
 	Argon Argon2Config
@@ -53,6 +54,20 @@ type MinIOConfig struct {
 	SecretAccessKey string
 	UseSSL          bool
 	BucketAssets    string
+}
+
+// TemporalConfig is deliberately all-optional, unlike Postgres/Redis above:
+// Temporal backs course publishing only (ADR-0009, ADR-0025) — identity-api
+// and analytics-api never touch it, and even course-api/worker only need a
+// reachable server at the moment a publish actually runs, not at boot
+// (bootstrap.ConnectTemporal uses client.NewLazyClient for exactly this
+// reason). Requiring these at startup the way POSTGRES_DSN is required
+// would make every binary's boot depend on a service only one workflow
+// uses.
+type TemporalConfig struct {
+	HostPort  string
+	Namespace string
+	TaskQueue string
 }
 
 type JWTConfig struct {
@@ -139,6 +154,11 @@ func Load() (*Config, error) {
 			SecretAccessKey: req("MINIO_SECRET_ACCESS_KEY"),
 			UseSSL:          optBool("MINIO_USE_SSL", false),
 			BucketAssets:    envOr("MINIO_BUCKET_ASSETS", "smartcourse-assets"),
+		},
+		Temporal: TemporalConfig{
+			HostPort:  envOr("TEMPORAL_HOST_PORT", "temporal:7233"),
+			Namespace: envOr("TEMPORAL_NAMESPACE", "default"),
+			TaskQueue: envOr("TEMPORAL_TASK_QUEUE", "course-publish"),
 		},
 		JWT: JWTConfig{
 			SigningKey:      req("JWT_SIGNING_KEY"),

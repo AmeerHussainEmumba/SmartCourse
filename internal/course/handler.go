@@ -2,6 +2,7 @@
 package course
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -19,8 +20,11 @@ type Handler struct{ svc *Service }
 func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig) {
 	h := &Handler{svc: svc}
 
-	// Discovery — public.
+	// Discovery — public. /courses/search is registered before /courses/:slug
+	// so gin's router doesn't treat "search" as a slug value — RFC §7.4's
+	// IndexSearch read side, pulled forward from M3 per ADR-0025.
 	r.GET("/courses", h.listCatalogue)
+	r.GET("/courses/search", h.searchCourses)
 	r.GET("/courses/:slug", h.getDetail)
 
 	// Authoring — instructor-owned, ownership itself checked in service.go.
@@ -30,6 +34,16 @@ func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig) {
 	instructor.PATCH("/:id", h.updateDraft)
 	instructor.POST("/:id/modules", h.addModule)
 	instructor.POST("/:id/publish", h.publish)
+	// :slug, not :id: gin's router (httprouter-based) panics at startup if
+	// two routes for the same HTTP method share a path depth with
+	// different wildcard names — this GET route and the public
+	// `GET /courses/:slug` above both sit at /courses/<param>[...], so
+	// they must agree on the placeholder name even though this one holds
+	// a course ID, not a slug. The URL contract (RFC §7.5) is unaffected;
+	// this is purely gin's internal routing requirement. Caught by
+	// actually starting course-api against the real router, not by
+	// inspection — see ADR-0025.
+	instructor.GET("/:slug/publish-status", h.publishStatus)
 	instructor.POST("/:id/archive", h.archiveCourse)
 
 	modules := r.Group("/modules")
@@ -206,6 +220,9 @@ func (h *Handler) deleteLesson(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// publish starts the publish workflow and returns 202, not 200 — M2's
+// publish is asynchronous (RFC §7.5). The client polls publishStatus below
+// with the same course ID until the workflow reaches a terminal state.
 func (h *Handler) publish(c *gin.Context) {
 	id, _ := identityauth.FromContext(c.Request.Context())
 	courseID, err := uuid.Parse(c.Param("id"))
@@ -214,6 +231,21 @@ func (h *Handler) publish(c *gin.Context) {
 		return
 	}
 	resp, err := h.svc.Publish(c.Request.Context(), courseID, id.UserID)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusAccepted, resp)
+}
+
+func (h *Handler) publishStatus(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	courseID, err := uuid.Parse(c.Param("slug")) // route registered as :slug — see RegisterRoutes' comment
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(err))
+		return
+	}
+	resp, err := h.svc.GetPublishStatus(c.Request.Context(), courseID, id.UserID)
 	if err != nil {
 		httpx.Fail(c, err)
 		return
@@ -243,6 +275,24 @@ func (h *Handler) listCatalogue(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// searchCourses backs GET /courses/search?q= — full-text ranked search
+// (RFC §7.4's IndexSearch, read side), distinct from listCatalogue's plain
+// substring filter.
+func (h *Handler) searchCourses(c *gin.Context) {
+	q := c.Query("q")
+	if q == "" {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(fmt.Errorf("q is required")))
+		return
+	}
+	limit := httpx.ClampLimit(atoiOr(c.Query("limit"), 0))
+	resp, err := h.svc.SearchCourses(c.Request.Context(), q, limit)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": resp})
 }
 
 func (h *Handler) getDetail(c *gin.Context) {

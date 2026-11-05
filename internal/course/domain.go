@@ -64,6 +64,47 @@ type CourseVersion struct {
 
 func (CourseVersion) TableName() string { return "course_versions" }
 
+// PublishWorkflowName is the registered Temporal workflow type name for
+// PublishCourseWorkflow (internal/workflows). It lives here, not in
+// internal/workflows, so Service.Publish can start the workflow by name
+// (client.ExecuteWorkflow accepts a string) without importing
+// internal/workflows — that import can only run the other way, since
+// internal/workflows imports internal/course for its Activities (RFC
+// §4.4's no-cross-module-import rule, extended to this new package the
+// same way bootstrap is exempt from it: the one place allowed to depend on
+// both sides of a boundary because wiring them together is its entire job).
+const PublishWorkflowName = "PublishCourseWorkflow"
+
+// PublishWorkflowInput is PublishCourseWorkflow's sole parameter — plain,
+// JSON-serializable data only (Temporal marshals workflow arguments), never
+// a *Service or *Repository.
+type PublishWorkflowInput struct {
+	CourseID     uuid.UUID
+	VersionID    uuid.UUID
+	OldVersionID *uuid.UUID
+	Title        string
+}
+
+// PublishOutline is BuildOutline's result and IndexSearch/WarmCache's
+// input (RFC §7.4) — everything about a draft needed to index it for
+// search and warm its detail cache, assembled once rather than twice.
+// DetailJSON is the pre-marshaled CourseDetailResponse WarmCache writes
+// verbatim into Redis, so a cache hit never re-serializes anything.
+type PublishOutline struct {
+	CourseID        uuid.UUID
+	VersionID       uuid.UUID
+	VersionNumber   int
+	Slug            string
+	Title           string
+	Description     string
+	InstructorName  string
+	Category        *string
+	Level           *string
+	Tags            []string
+	EnrollmentCount int
+	DetailJSON      []byte
+}
+
 // Module mirrors `modules`. Named Module (not CourseModule) because it's
 // always referenced package-qualified (course.Module) outside this package.
 type Module struct {

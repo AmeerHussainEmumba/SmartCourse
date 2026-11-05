@@ -55,13 +55,13 @@ jobs:
           done
 
       - name: Unit + integration tests (race detector always on — RFC §10.6/§18.7)
-        run: go test -race ./...
+        run: go test -race -tags=integration ./...
         env:
           POSTGRES_DSN: postgres://smartcourse:smartcourse@localhost:5432/smartcourse?sslmode=disable
           REDIS_ADDR: localhost:6379
 
       - name: Coverage report
-        run: go test -race -coverprofile=coverage.out ./... && go tool cover -func=coverage.out
+        run: go test -race -tags=integration -coverprofile=coverage.out ./... && go tool cover -func=coverage.out
         env:
           POSTGRES_DSN: postgres://smartcourse:smartcourse@localhost:5432/smartcourse?sslmode=disable
           REDIS_ADDR: localhost:6379

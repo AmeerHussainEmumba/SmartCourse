@@ -41,9 +41,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Built with client.NewLazyClient (bootstrap.ConnectTemporal) — never
+	// fails here even if Temporal isn't reachable yet; only an actual
+	// publish call would (ADR-0009/0025).
+	temporalClient, err := bootstrap.ConnectTemporal(cfg)
+	if err != nil {
+		logger.Error("failed to build temporal client", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer temporalClient.Close()
+
 	r := router.New(cfg.Env, cfg.CORSAllowedOrigins)
 	router.RegisterHealth(r, deps.HealthCheckers())
-	bootstrap.RegisterCourseRoutes(r, deps, cfg)
+	bootstrap.RegisterCourseRoutes(r, deps, cfg, temporalClient)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),

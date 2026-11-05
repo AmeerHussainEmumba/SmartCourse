@@ -12,7 +12,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
-	"golang.org/x/sync/errgroup"
+	"github.com/redis/go-redis/v9"
+	temporalclient "go.temporal.io/sdk/client"
 	"gorm.io/gorm"
 
 	apperrors "github.com/AmeerHussainEmumba/SmartCourse/internal/platform/errors"
@@ -35,15 +36,36 @@ var (
 	errSlugFormat      = apperrors.New(400, "invalid_slug", "Slug must be lowercase letters, numbers, and hyphens only.")
 	errNotOwner        = apperrors.New(403, "not_owner", "You do not own this course.")
 	errNoDraft         = apperrors.New(409, "no_draft", "This course has no draft version to edit.")
-	errAlreadyDraft    = apperrors.New(409, "already_publishing", "This course's draft is already being published.")
 	errContentTooLarge = apperrors.New(400, "content_too_large", "Lesson content exceeds the maximum allowed size.")
 )
 
-type Service struct {
-	repo *Repository
+// cacheTTL bounds how long a warmed course-detail entry lives in Redis.
+// Deliberately NOT tied to explicit invalidation (ADR-0025): each entry's
+// key is already scoped to one specific version number, so a republish
+// simply starts writing under a new key — the old key is never read again
+// and just needs to eventually expire rather than be hunted down and
+// deleted. A day is long enough to matter for a popular course's detail
+// reads, short enough that a key nobody explicitly cleans up doesn't
+// accumulate forever.
+const cacheTTL = 24 * time.Hour
+
+func cacheKeyForVersion(courseID uuid.UUID, versionNumber int) string {
+	return fmt.Sprintf("course:detail:%s:v%d", courseID, versionNumber)
 }
 
-func NewService(repo *Repository) *Service { return &Service{repo: repo} }
+type Service struct {
+	repo      *Repository
+	rdb       *redis.Client
+	temporal  temporalclient.Client
+	taskQueue string
+}
+
+// temporal and taskQueue are nil/empty-safe for callers that never publish
+// (cmd/seed's read paths, most of this package's own tests) — only
+// Service.Publish dereferences temporal, and only when actually called.
+func NewService(repo *Repository, rdb *redis.Client, temporal temporalclient.Client, taskQueue string) *Service {
+	return &Service{repo: repo, rdb: rdb, temporal: temporal, taskQueue: taskQueue}
+}
 
 // --- course & draft lifecycle ------------------------------------------------
 
@@ -360,27 +382,39 @@ func (s *Service) DeleteLesson(ctx context.Context, courseID, instructorID, less
 
 // --- publish -----------------------------------------------------------------
 //
-// M1 implements publish synchronously: validate (concurrently, where the
-// steps are independent), then promote. This is the deliberately marked
-// Temporal seam (RFC §21 M1: "Publish endpoint exists and transitions state
-// synchronously, with the Temporal seam marked"). Durable, crash-recoverable
-// orchestration — retrying one failed activity independently, resuming after
-// a worker restart mid-sequence — is still M2/Temporal scope; nothing here
-// survives a process crash mid-publish, which is exactly what Temporal
-// buys and a same-process errgroup does not.
+// M2 implements RFC §7.4's full activity graph as a Temporal workflow
+// (internal/workflows.PublishCourseWorkflow, ADR-0009/0025):
 //
-// What IS implemented now is real: runPublishChecks mirrors RFC §7.4's
-// activity graph — ValidateMetadata gates first (deterministic, no retry;
-// a failure is the instructor's error, not transient), then the remaining
-// independent steps run concurrently via errgroup. VerifyAssets isn't
-// implemented yet (no asset-upload endpoint exists — RFC §21.0), so
-// validateLessonContent stands in as VerifyAssets's sibling in the same
-// graph position: a genuine, independent check of the draft's actual
-// content, not a placeholder goroutine added to tick a box.
-// Publish replaces PublishCourse's body with a Temporal workflow start in
-// M2; nothing calling this method today needs to change when that happens.
+//	ValidateMetadata -> {VerifyAssets, ComputeMetadata} -> BuildOutline -> {IndexSearch, WarmCache} -> PromoteVersion
+//
+// Every exported method below this comment up to PromoteAndPublish is one
+// node in that graph — plain, Temporal-agnostic Go methods on Service, each
+// independently retryable because Temporal calls them as separate
+// activities (internal/workflows.Activities just forwards to these; the
+// Temporal SDK import stays out of this package entirely, matching RFC
+// §4.4's module-boundary discipline extended to the new package). This
+// replaces M1's runPublishChecks/validateMetadata/validateLessonContent,
+// which bundled the same checks into one errgroup inside a single
+// synchronous call — real concurrency, but none of it survived a process
+// crash mid-publish, which is exactly what Temporal buys.
+//
+// InitAnalytics isn't one of these methods: analytics already recomputes
+// course_stats from the course.course_published outbox event
+// PromoteAndPublish writes, via the existing relay path (ADR-0021). Adding
+// a second, synchronous write here would race that idempotent recompute
+// for no benefit — ADR-0025 documents this as a deliberate omission, not a
+// gap.
 
-func (s *Service) Publish(ctx context.Context, courseID, instructorID uuid.UUID) (*VersionResponse, error) {
+// Publish starts the publish workflow and returns immediately (RFC §7.5:
+// 202, not 200, as of M2) — it does not wait for ValidateMetadata or
+// anything else to run. The workflow ID is deterministic
+// (publish-{course_id}-{version_number}), so a duplicate publish request
+// while one is already running attaches to it rather than starting a
+// second one (client.ExecuteWorkflow's default WorkflowIDReusePolicy
+// returns the existing run's handle instead of erroring) — idempotency at
+// the orchestration layer, on top of idx_one_draft_per_course's
+// storage-layer guard against two different drafts racing.
+func (s *Service) Publish(ctx context.Context, courseID, instructorID uuid.UUID) (*PublishAcceptedResponse, error) {
 	c, err := s.requireOwner(ctx, courseID, instructorID)
 	if err != nil {
 		return nil, err
@@ -392,74 +426,63 @@ func (s *Service) Publish(ctx context.Context, courseID, instructorID uuid.UUID)
 	if err != nil {
 		return nil, apperrors.ErrInternal.Wrap(err)
 	}
-	if draft.State == StatePublishing {
-		return nil, errAlreadyDraft
+
+	workflowID := fmt.Sprintf("publish-%s-%d", courseID, draft.VersionNumber)
+	_, err = s.temporal.ExecuteWorkflow(ctx, temporalclient.StartWorkflowOptions{
+		ID:        workflowID,
+		TaskQueue: s.taskQueue,
+	}, PublishWorkflowName, PublishWorkflowInput{
+		CourseID: courseID, VersionID: draft.ID, OldVersionID: c.PublishedVersionID, Title: draft.Title,
+	})
+	if err != nil {
+		return nil, apperrors.ErrUnavailable.Wrap(fmt.Errorf("start publish workflow: %w", err))
 	}
 
-	if err := s.runPublishChecks(ctx, draft); err != nil {
-		_ = s.repo.UpdateVersionState(ctx, draft.ID, StatePublishFailed, strPtr(err.Error()))
-		return nil, err
-	}
-
-	if err := s.repo.PromoteVersion(ctx, courseID, draft.ID, c.PublishedVersionID); err != nil {
+	if err := s.repo.SetVersionPublishing(ctx, draft.ID, workflowID); err != nil {
 		return nil, apperrors.ErrInternal.Wrap(err)
 	}
+	return &PublishAcceptedResponse{WorkflowID: workflowID, State: string(StatePublishing)}, nil
+}
 
-	if err := s.repo.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return outbox.Write(ctx, tx, outbox.Event{
-			AggregateType: "course",
-			AggregateID:   courseID,
-			EventType:     "course.course_published",
-			SchemaVersion: 1,
-			Payload:       map[string]any{"course_id": courseID, "version_id": draft.ID, "title": draft.Title},
-		})
-	}); err != nil {
-		// Promotion already committed — the course IS published. A failure
-		// writing the outbox event here is logged, not surfaced as a
-		// publish failure to the instructor; RFC §14.2 treats a missed
-		// event as recoverable via reconciliation, not as data loss.
-		return nil, apperrors.ErrUnavailable.Wrap(fmt.Errorf("published but event recording failed: %w", err))
+// GetPublishStatus backs GET /courses/{id}/publish-status (RFC §7.5) — it
+// reads course_versions directly, never Temporal's API: every state
+// transition a client cares about (publishing/ready/publish_failed) is
+// already written to Postgres by the activities below, which is also the
+// system of record every other read in this module uses. Querying Temporal
+// instead would mean this endpoint has a dependency GetPublishedDetail and
+// ListCatalogue don't, for data that's already sitting in the same row.
+func (s *Service) GetPublishStatus(ctx context.Context, courseID, instructorID uuid.UUID) (*PublishStatusResponse, error) {
+	c, err := s.requireOwner(ctx, courseID, instructorID)
+	if err != nil {
+		return nil, err
 	}
-
-	updated, err := s.repo.GetVersionByID(ctx, draft.ID)
+	// The draft, if one exists, is the version actually publishing or
+	// having just failed to — once PromoteAndPublish commits, the draft
+	// pointer is cleared and the published version itself holds the
+	// terminal "ready" state instead.
+	versionID := c.DraftVersionID
+	if versionID == nil {
+		versionID = c.PublishedVersionID
+	}
+	if versionID == nil {
+		return nil, apperrors.ErrNotFound
+	}
+	v, err := s.repo.GetVersionByID(ctx, *versionID)
 	if err != nil {
 		return nil, apperrors.ErrInternal.Wrap(err)
 	}
-	resp := toVersionResponse(updated)
-	return &resp, nil
+	return &PublishStatusResponse{WorkflowID: v.WorkflowID, State: string(v.State), Error: v.PublishError}, nil
 }
 
-// runPublishChecks is the concurrent piece (RFC §7 — "operations should
-// execute concurrently wherever dependencies allow"; §10.1 explains why
-// errgroup over a raw sync.WaitGroup: a WaitGroup alone loses errors and
-// doesn't cancel siblings on first failure, so a failing content check
-// doesn't stop the totals recompute from doing pointless work). Both
-// goroutines below do a real, independent database round trip — this is
-// not the same work split across goroutines for appearance.
-func (s *Service) runPublishChecks(ctx context.Context, draft *CourseVersion) error {
-	if err := s.validateMetadata(ctx, draft); err != nil {
-		return err
+// ValidateMetadata is the ValidateMetadata activity (RFC §7.4 — "None" in
+// the retry column: a failure here is the instructor's error, not a
+// transient one, so the workflow marks the version failed immediately
+// rather than retrying).
+func (s *Service) ValidateMetadata(ctx context.Context, versionID uuid.UUID) error {
+	v, err := s.repo.GetVersionByID(ctx, versionID)
+	if err != nil {
+		return apperrors.ErrInternal.Wrap(err)
 	}
-
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error { return s.validateLessonContent(gctx, draft.ID) })
-	g.Go(func() error {
-		if err := s.repo.RecomputeVersionTotals(gctx, draft.ID); err != nil {
-			return apperrors.ErrInternal.Wrap(err)
-		}
-		return nil
-	})
-	return g.Wait()
-}
-
-// validateMetadata is today's ValidateMetadata activity (RFC §7.4), called
-// directly rather than via a workflow. Deliberately conservative: its
-// failure must be the instructor's error (missing content), not a
-// transient one — see the activity table's retry column ("None"). Takes
-// ctx explicitly rather than defaulting to context.Background() internally
-// — the earlier version didn't, which meant a client disconnecting
-// mid-publish couldn't cancel this query (RFC §10.5's specific warning).
-func (s *Service) validateMetadata(ctx context.Context, v *CourseVersion) error {
 	if v.Title == "" {
 		return apperrors.ErrValidation.Wrap(fmt.Errorf("title is required to publish"))
 	}
@@ -473,13 +496,16 @@ func (s *Service) validateMetadata(ctx context.Context, v *CourseVersion) error 
 	return nil
 }
 
-// validateLessonContent stands in for VerifyAssets in today's graph (see
-// the package-level publish comment): a genuine scan of every lesson in
-// the draft, independent of and concurrent with RecomputeVersionTotals.
-// Defense in depth beyond the DB's own CHECK constraint on content size —
-// this fails as a clean 400 before publish, rather than a raw constraint
-// violation if this check is ever bypassed.
-func (s *Service) validateLessonContent(ctx context.Context, versionID uuid.UUID) error {
+// VerifyAssets stands in for the RFC §7.4 activity of the same name: no
+// asset-upload endpoint exists yet (RFC §21.0), so there's nothing to
+// HeadObject against. What runs instead is a genuine, independent scan of
+// every lesson's actual content in the draft — not a placeholder, just a
+// narrower real check in the same graph position, concurrent with
+// ComputeMetadata. Defense in depth beyond the DB's own CHECK constraint on
+// content size: this fails as a clean 400-equivalent before publish,
+// rather than a raw constraint violation if the application-level check at
+// write time is ever bypassed.
+func (s *Service) VerifyAssets(ctx context.Context, versionID uuid.UUID) error {
 	mods, err := s.repo.ListModules(ctx, versionID)
 	if err != nil {
 		return apperrors.ErrInternal.Wrap(err)
@@ -494,6 +520,141 @@ func (s *Service) validateLessonContent(ctx context.Context, versionID uuid.UUID
 				return errContentTooLarge
 			}
 		}
+	}
+	return nil
+}
+
+// ComputeMetadata is the ComputeMetadata activity — lesson count and total
+// duration, recomputed from the draft's actual content tree rather than
+// trusted from incremental updates made while authoring.
+func (s *Service) ComputeMetadata(ctx context.Context, versionID uuid.UUID) error {
+	if err := s.repo.RecomputeVersionTotals(ctx, versionID); err != nil {
+		return apperrors.ErrInternal.Wrap(err)
+	}
+	return nil
+}
+
+// BuildOutline is the BuildOutline activity — assembles everything
+// IndexSearch and WarmCache need in one pass (one set of DB reads, not two)
+// and pre-marshals the course detail payload WarmCache writes to Redis
+// verbatim, so a cache hit never re-serializes anything.
+func (s *Service) BuildOutline(ctx context.Context, courseID, versionID uuid.UUID) (*PublishOutline, error) {
+	c, err := s.repo.GetCourseByID(ctx, courseID)
+	if err != nil {
+		return nil, apperrors.ErrInternal.Wrap(err)
+	}
+	v, err := s.repo.GetVersionByID(ctx, versionID)
+	if err != nil {
+		return nil, apperrors.ErrInternal.Wrap(err)
+	}
+
+	// BuildOutline runs before PromoteAndPublish (RFC §7.4 — the cache
+	// must already be warm the instant the pointer swap makes the course
+	// live, not built afterward). At this point c and v still reflect the
+	// DRAFT's pre-promotion state: c.DraftVersionID is still set,
+	// c.PublishedVersionID may still point at the OLD version or be nil,
+	// and v.State is "publishing", not "ready". Caching that snapshot
+	// verbatim would mean GetPublishedDetail's first cache hit after a
+	// publish serves a course that still looks unpublished — caught live
+	// (`make dev-workflow` + a real publish), not by inspection. published
+	// and readyVersion are what the row WILL read as the instant
+	// PromoteAndPublish's transaction commits — deterministic, since
+	// PromoteVersion (repository.go) sets exactly these three fields.
+	published := *c
+	published.PublishedVersionID = &v.ID
+	published.DraftVersionID = nil
+	readyVersion := *v
+	readyVersion.State = StateReady
+
+	detail, err := s.loadDetail(ctx, &published, &readyVersion)
+	if err != nil {
+		return nil, err
+	}
+	instructorName, err := s.repo.GetInstructorName(ctx, c.InstructorID)
+	if err != nil {
+		return nil, apperrors.ErrInternal.Wrap(err)
+	}
+	detailJSON, err := json.Marshal(detail)
+	if err != nil {
+		return nil, apperrors.ErrInternal.Wrap(err)
+	}
+	return &PublishOutline{
+		CourseID: c.ID, VersionID: v.ID, VersionNumber: v.VersionNumber, Slug: c.Slug,
+		Title: v.Title, Description: v.Description, InstructorName: instructorName,
+		Category: v.Category, Level: v.Level, Tags: []string(v.Tags),
+		EnrollmentCount: c.EnrollmentCount, DetailJSON: detailJSON,
+	}, nil
+}
+
+// IndexSearch is the IndexSearch activity (RFC §7.4, pulled forward from
+// M3 per ADR-0025 rather than left as a no-op stand-in — GET
+// /courses/search is live, not just this write side of it).
+func (s *Service) IndexSearch(ctx context.Context, o *PublishOutline) error {
+	if err := s.repo.UpsertSearchIndex(ctx, o); err != nil {
+		return apperrors.ErrInternal.Wrap(err)
+	}
+	return nil
+}
+
+// WarmCache is the WarmCache activity (RFC §7.4, same pull-forward as
+// IndexSearch) — writes the version-scoped Redis key GetPublishedDetail
+// reads through. See cacheTTL's comment for why there's no explicit
+// invalidation step: each version gets its own key.
+func (s *Service) WarmCache(ctx context.Context, o *PublishOutline) error {
+	key := cacheKeyForVersion(o.CourseID, o.VersionNumber)
+	if err := s.rdb.Set(ctx, key, o.DetailJSON, cacheTTL).Err(); err != nil {
+		return apperrors.ErrInternal.Wrap(err)
+	}
+	return nil
+}
+
+// PromoteAndPublish is the PromoteVersion activity — must run last (RFC
+// §7.4: "the only one whose effect students can observe"). Promotion and
+// the course.course_published outbox write happen in one transaction
+// (repository.go's PromoteVersion no longer opens its own, precisely so
+// this method can wrap both in one) — a fix over M1's two separate
+// transactions, needed here because Temporal's at-least-once activity
+// execution means this method must be safe to run twice. The idempotency
+// guard is a check, not a transaction-level dedupe: if courseID's
+// published_version_id already equals versionID, promotion (and the event
+// announcing it) already happened on a previous attempt, so this is a
+// no-op rather than a duplicate outbox row.
+func (s *Service) PromoteAndPublish(ctx context.Context, courseID, versionID uuid.UUID, oldVersionID *uuid.UUID, title string) error {
+	c, err := s.repo.GetCourseByID(ctx, courseID)
+	if err != nil {
+		return apperrors.ErrInternal.Wrap(err)
+	}
+	if c.PublishedVersionID != nil && *c.PublishedVersionID == versionID {
+		return nil
+	}
+	err = s.repo.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txRepo := s.repo.WithTx(tx)
+		if err := txRepo.PromoteVersion(ctx, courseID, versionID, oldVersionID); err != nil {
+			return err
+		}
+		return outbox.Write(ctx, tx, outbox.Event{
+			AggregateType: "course",
+			AggregateID:   courseID,
+			EventType:     "course.course_published",
+			SchemaVersion: 1,
+			Payload:       map[string]any{"course_id": courseID, "version_id": versionID, "title": title},
+		})
+	})
+	if err != nil {
+		return apperrors.ErrInternal.Wrap(err)
+	}
+	return nil
+}
+
+// MarkPublishFailed is the workflow's failure-handling step (RFC §7.4: "no
+// compensation of prior activities is needed, because none of them
+// affected the live version — a property of the design, not an
+// oversight"). Called by the workflow with the triggering activity's error
+// message; never from the HTTP path, which only ever starts a publish, not
+// fails one.
+func (s *Service) MarkPublishFailed(ctx context.Context, versionID uuid.UUID, reason string) error {
+	if err := s.repo.UpdateVersionState(ctx, versionID, StatePublishFailed, &reason); err != nil {
+		return apperrors.ErrInternal.Wrap(err)
 	}
 	return nil
 }
@@ -557,6 +718,14 @@ func (s *Service) ListCatalogue(ctx context.Context, limit int, cursor, category
 // §5.5). Progress is deliberately NOT joined here: that join happens in
 // internal/progress against this same published version, keeping this
 // method usable by both authenticated and (future) anonymous callers.
+//
+// Read-through cache (ADR-0025, pulled forward from M3): WarmCache already
+// writes this exact payload to Redis on every publish, keyed by version
+// number, so a hit here skips the module/lesson reads below entirely. A
+// miss falls through to Postgres and fills the cache itself — not just
+// relying on WarmCache — so a cold key (eviction, or a read landing before
+// WarmCache's activity finishes) still gets a correct answer, just a
+// slower one.
 func (s *Service) GetPublishedDetail(ctx context.Context, slug string) (*CourseDetailResponse, error) {
 	c, err := s.repo.GetCourseBySlug(ctx, slug)
 	if errors.Is(err, ErrNotFound) {
@@ -573,6 +742,31 @@ func (s *Service) GetPublishedDetail(ctx context.Context, slug string) (*CourseD
 	if err != nil {
 		return nil, apperrors.ErrInternal.Wrap(err)
 	}
+
+	key := cacheKeyForVersion(c.ID, v.VersionNumber)
+	if cached, err := s.rdb.Get(ctx, key).Bytes(); err == nil {
+		var resp CourseDetailResponse
+		if json.Unmarshal(cached, &resp) == nil {
+			return &resp, nil
+		}
+	}
+
+	resp, err := s.loadDetail(ctx, c, v)
+	if err != nil {
+		return nil, err
+	}
+	if respJSON, err := json.Marshal(resp); err == nil {
+		_ = s.rdb.Set(ctx, key, respJSON, cacheTTL).Err() // best-effort fill-on-miss; a Redis error here must not fail a read Postgres already answered correctly
+	}
+	return resp, nil
+}
+
+// loadDetail is GetPublishedDetail and BuildOutline's shared read: both
+// assemble the identical Course/Version/Modules/Lessons shape, one against
+// the published version, the other against the draft mid-publish — the
+// query shape (RFC §13.2's N+1 discipline) shouldn't exist twice just
+// because the caller differs.
+func (s *Service) loadDetail(ctx context.Context, c *Course, v *CourseVersion) (*CourseDetailResponse, error) {
 	mods, err := s.repo.ListModules(ctx, v.ID)
 	if err != nil {
 		return nil, apperrors.ErrInternal.Wrap(err)
@@ -596,6 +790,25 @@ func (s *Service) GetPublishedDetail(ctx context.Context, slug string) (*CourseD
 		resp.Modules = append(resp.Modules, mwl)
 	}
 	return resp, nil
+}
+
+// SearchCourses backs GET /courses/search (RFC §7.4's IndexSearch, read
+// side) — ranked full-text search over course_search_index, distinct from
+// ListCatalogue's plain ILIKE substring filter.
+func (s *Service) SearchCourses(ctx context.Context, query string, limit int) ([]SearchResultResponse, error) {
+	rows, err := s.repo.SearchCourses(ctx, query, limit)
+	if err != nil {
+		return nil, apperrors.ErrInternal.Wrap(err)
+	}
+	out := make([]SearchResultResponse, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, SearchResultResponse{
+			CourseID: row.CourseID.String(), Slug: row.Slug, Title: row.Title,
+			InstructorName: row.InstructorName, Category: row.Category, Level: row.Level,
+			EnrollmentCount: row.EnrollmentCount,
+		})
+	}
+	return out, nil
 }
 
 // ResolveModuleCourseID and ResolveLessonCourseID exist so handler.go never
@@ -627,5 +840,3 @@ func (s *Service) ResolveLessonCourseID(ctx context.Context, lessonID uuid.UUID)
 	}
 	return s.ResolveModuleCourseID(ctx, lesson.ModuleID)
 }
-
-func strPtr(s string) *string { return &s }

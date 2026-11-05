@@ -19,15 +19,18 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/course"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/enrollment"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/identity"
+	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/bootstrap"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/cache"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/db"
+	apperrors "github.com/AmeerHussainEmumba/SmartCourse/internal/platform/errors"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/logging"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/progress"
 )
@@ -56,10 +59,20 @@ func main() {
 		logger.Error("failed to connect to redis", slog.Any("error", err))
 		os.Exit(1)
 	}
+	// Seed publishes real courses through course.Service.Publish, which as
+	// of M2 starts a real Temporal workflow — `make seed` now requires
+	// `make dev-workflow` (not just dev-core) to be running, same as any
+	// other instructor publishing a course. See cmd/seed/README.md.
+	temporalClient, err := bootstrap.ConnectTemporal(cfg)
+	if err != nil {
+		logger.Error("failed to build temporal client", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer temporalClient.Close()
 
 	identityRepo := identity.NewRepository(gdb)
 	identitySvc := identity.NewService(identityRepo, rdb, cfg.JWT, cfg.Argon, identity.LoggingEmailSender{})
-	courseSvc := course.NewService(course.NewRepository(gdb))
+	courseSvc := course.NewService(course.NewRepository(gdb), rdb, temporalClient, cfg.Temporal.TaskQueue)
 	enrollmentSvc := enrollment.NewService(enrollment.NewRepository(gdb))
 	progressSvc := progress.NewService(progress.NewRepository(gdb))
 
@@ -301,8 +314,11 @@ func (s *seeder) publishedCourse(instructorID uuid.UUID, title, slug string, cat
 	if err != nil {
 		return seededCourse{}, err
 	}
-	if _, err := s.courseSvc.Publish(s.ctx, courseID, instructorID); err != nil {
+	if err := s.publishWithRetry(courseID, instructorID); err != nil {
 		return seededCourse{}, fmt.Errorf("publish course: %w", err)
+	}
+	if err := s.waitForPublish(courseID, instructorID); err != nil {
+		return seededCourse{}, err
 	}
 	var flat []uuid.UUID
 	for _, keys := range keysByModule {
@@ -314,6 +330,66 @@ func (s *seeder) publishedCourse(instructorID uuid.UUID, title, slug string, cat
 func (s *seeder) draftCourse(instructorID uuid.UUID, title, slug string, cat, lvl *string, modules []moduleSpec) error {
 	_, _, err := s.courseBuild(instructorID, title, slug, cat, lvl, nil, modules)
 	return err
+}
+
+// publishWithRetry retries Service.Publish itself, not just the status
+// poll below, on apperrors.ErrUnavailable's code ("temporarily_unavailable")
+// — a real, observed race specific to cold-starting the whole stack at
+// once: the Temporal client this script holds is lazy (bootstrap.
+// ConnectTemporal) and its very first real RPC can take longer to
+// establish than the Temporal SDK's own default call timeout if Temporal's
+// server is itself still finishing startup (auto-setup, the worker's own
+// first connection) at that exact moment. In a real deployment Temporal is
+// already running continuously, so this is specifically a first-boot dev
+// artifact, not a production concern — a real API client hitting a 503
+// here would see the same error and could retry exactly the same way.
+func (s *seeder) publishWithRetry(courseID, instructorID uuid.UUID) error {
+	var lastErr error
+	for attempt := 1; attempt <= 5; attempt++ {
+		_, err := s.courseSvc.Publish(s.ctx, courseID, instructorID)
+		if err == nil {
+			return nil
+		}
+		appErr, ok := apperrors.As(err)
+		if !ok || appErr.Code != "temporarily_unavailable" {
+			return err
+		}
+		lastErr = err
+		time.Sleep(time.Duration(attempt) * time.Second)
+	}
+	return lastErr
+}
+
+// waitForPublish polls GetPublishStatus the same way a real API client
+// would (RFC §7.5) rather than reaching into Temporal directly — Publish
+// only starts the workflow now (M2), and this script enrolls students
+// against the course immediately after, which needs published_version_id
+// actually set. 30s is generous for a publish that should complete in
+// well under a second against a local worker; a timeout here almost always
+// means `make dev-workflow` (Temporal + this binary's own worker) isn't
+// running, not that publishing itself is slow.
+func (s *seeder) waitForPublish(courseID, instructorID uuid.UUID) error {
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		status, err := s.courseSvc.GetPublishStatus(s.ctx, courseID, instructorID)
+		if err != nil {
+			return fmt.Errorf("check publish status: %w", err)
+		}
+		switch course.VersionState(status.State) {
+		case course.StateReady:
+			return nil
+		case course.StatePublishFailed:
+			msg := "unknown error"
+			if status.Error != nil {
+				msg = *status.Error
+			}
+			return fmt.Errorf("publish failed: %s", msg)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("publish did not complete within 30s — is `make dev-workflow` running? (Temporal + a worker binary must be up for course.Service.Publish to finish)")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 type progressPlan struct {
