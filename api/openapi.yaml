@@ -7,9 +7,11 @@ info:
     and is grown module by module as they're implemented — see
     docs/rfc/smartcourse-rfc.md §15 for conventions (keyset pagination,
     error shape, Idempotency-Key) and docs/rfc/smartcourse-prd.md for
-    product context. Endpoints not yet built (publishing workflow status,
-    certificates, analytics, admin/audit beyond role change) are not listed
-    here — an absent path means "not built yet," not "undocumented."
+    product context. Publishing workflow status (M2, ADR-0025) is built —
+    see POST/GET on /courses/{id}/publish[-status] and GET /courses/search
+    below. Endpoints not yet built (certificates, the remaining analytics
+    metrics, admin/audit beyond role change) are not listed here — an
+    absent path means "not built yet," not "undocumented."
 servers:
   # One spec, three backing processes (ADR-0023) — route paths and
   # shapes didn't change, only which service answers them. Pick the
@@ -258,15 +260,44 @@ paths:
   /courses/{id}/publish:
     post:
       summary: >
-        Publish the draft (instructor, owner only). Synchronous in M1 —
-        validates then atomically promotes (ADR-0010). Replaced by an
-        async Temporal-backed flow in M2; the response shape is expected
-        to change to 202 + workflow ID at that point (RFC §7.5).
+        Start publishing the draft (instructor, owner only). Async as of M2
+        (ADR-0025): starts internal/workflows.PublishCourseWorkflow and
+        returns immediately. A duplicate call while one is already running
+        attaches to it (same workflow ID) rather than starting a second
+        one. Poll GET /courses/{id}/publish-status for the result.
       security: [{ bearerAuth: [] }]
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
-        '200': { description: Published, content: { application/json: { schema: { $ref: '#/components/schemas/Version' } } } }
-        '409': { description: "Validation failed (e.g. no modules), or already publishing", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '202': { description: Publish workflow started, content: { application/json: { schema: { $ref: '#/components/schemas/PublishAccepted' } } } }
+        '409': { description: "No draft to publish", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /courses/{id}/publish-status:
+    get:
+      summary: >
+        Poll the publish workflow started by POST .../publish (instructor,
+        owner only; RFC §7.5, ADR-0025). Reads course_versions directly,
+        not Temporal's API — state is one of draft/publishing/ready/
+        publish_failed/superseded; error is set only when state is
+        publish_failed.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PublishStatus' } } } }
+        '403': { description: Not the owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: Course has never had a draft or a published version, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /courses/search:
+    get:
+      summary: >
+        Full-text ranked search over published courses (RFC §7.4's
+        IndexSearch, pulled forward from M3 per ADR-0025) — distinct from
+        GET /courses' plain substring filter (q param there). Indexed on
+        every publish; not reconciled on a schedule yet.
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/SearchResult' } } } } } } }
 
   /courses/{id}/archive:
     post:
@@ -439,6 +470,30 @@ components:
         category: { type: string, nullable: true }
         level: { type: string, nullable: true }
         tags: { type: array, items: { type: string } }
+
+    PublishAccepted:
+      type: object
+      properties:
+        workflow_id: { type: string }
+        state: { type: string, enum: [publishing] }
+
+    PublishStatus:
+      type: object
+      properties:
+        workflow_id: { type: string, nullable: true }
+        state: { type: string, enum: [draft, publishing, ready, publish_failed, superseded] }
+        error: { type: string, nullable: true, description: Set only when state is publish_failed }
+
+    SearchResult:
+      type: object
+      properties:
+        course_id: { type: string, format: uuid }
+        slug: { type: string }
+        title: { type: string }
+        instructor_name: { type: string }
+        category: { type: string, nullable: true }
+        level: { type: string, nullable: true }
+        enrollment_count: { type: integer }
 
     CourseDetail:
       type: object

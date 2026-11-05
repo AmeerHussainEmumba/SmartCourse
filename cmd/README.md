@@ -5,7 +5,7 @@ Entry points. By Go convention, everything under `cmd/` is a `package main` that
 - **`cmd/identity-api/`** — HTTP service for `internal/identity` only. See its own README.
 - **`cmd/course-api/`** — HTTP service for `internal/course`, `internal/enrollment`, and `internal/progress` together (kept in one process because enrollment locks the `courses` row in the same transaction it writes an enrollment row in — ADR-0012). See its own README.
 - **`cmd/analytics-api/`** — HTTP service for `internal/analytics` only — read-only, already decoupled via the relay/outbox. See its own README.
-- **`cmd/worker/`** — the background service (outbox relay today; Kafka consumers, Asynq pools, and the Temporal worker land in M2/M3). See its own README.
+- **`cmd/worker/`** — the background service: the outbox relay, and as of M2, the Temporal worker executing the course publishing workflow (ADR-0025), run as two independent goroutines. Kafka consumers and Asynq pools still land in M3. See its own README.
 - **`cmd/seed/`** — `make seed`: populates a local database with a realistic dataset through the real service layer, not raw SQL. See its own README.
 
 Every `cmd/*-api` and `cmd/worker` binary is thin — a `main.go` that loads config, connects to Postgres/Redis, and calls into `internal/platform/bootstrap` (the composition root, RFC §4.4) to wire up its slice of domain modules. None contain real logic; if you're looking for where a route or a background job actually does something, you want `internal/`, not here.

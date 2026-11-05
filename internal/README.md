@@ -9,15 +9,15 @@ Two kinds of things live here: the **shared kernel** (`platform/`) and eight **d
 | Module | Owns | Status |
 |---|---|---|
 | [`identity`](identity/README.md) | Users, credentials, roles, refresh/reset/verification tokens | **Built** — see its README |
-| [`course`](course/README.md) | Courses, versions, modules, lessons, publish lifecycle | **Built** |
+| [`course`](course/README.md) | Courses, versions, modules, lessons, publish lifecycle (now a Temporal workflow, M2) | **Built** |
 | [`enrollment`](enrollment/README.md) | Enrollments, seat limits, prerequisites | **Built** — also the relay's second handler (`course.course_archived` → withdraw active enrollments), alongside `analytics` |
 | [`progress`](progress/README.md) | Lesson progress, course completion | **Built** |
 | [`analytics`](analytics/README.md) | Aggregates, platform/course-level counters | **Built (partial)** — pulled forward from M3 as the outbox relay's first handler (ADR-0021); 5 of 10 FR-5 metrics live |
-| `search` | Search index (`course_search_index`) | Not started — the natural next relay handler, same pattern as `analytics` |
+| `search` | A standalone search module (own schema, own relay handler, ranking strategy) | Not started as its own module — but `course_search_index`'s write (`course.Service.IndexSearch`) and read (`GET /courses/search`) are both real and live today, built inside `internal/course` as part of the M2 publish workflow (ADR-0025) rather than waiting for this module. See `internal/course/README.md`. |
 | `notification` | Notification preferences and delivery records | Not started — M3 (Asynq-backed delivery) |
 | `audit` | Event archive, audit log (MongoDB) | Not started — M3 |
 
-The three unstarted modules are empty directories today, not abandoned work — see `docs/rfc/smartcourse-rfc.md` §21.0 for exactly what's deferred and why. `search` and `notification` are now straightforward additions: register a new handler with the relay (`internal/platform/relay`) the same way `analytics` did, no new infrastructure required. `audit` still waits on MongoDB, which nothing in the codebase touches yet.
+`notification` and `audit` are empty directories today, not abandoned work — see `docs/rfc/smartcourse-rfc.md` §21.0 for exactly what's deferred and why. `notification` is a straightforward addition when it lands: register a new handler with the relay (`internal/platform/relay`), same pattern as `analytics`, no new infrastructure required. `audit` still waits on MongoDB, which nothing in the codebase touches yet. If a standalone `search` module lands later with its own schema (the same path `internal/analytics` took relative to its original inline position), `internal/course`'s `IndexSearch` write is superseded by that module's own relay-driven handler, not duplicated alongside it — ADR-0025's reversal trigger.
 
 ## Why cross-module imports are restricted
 
@@ -29,4 +29,4 @@ The shared kernel every module depends on: config, logging, database/cache clien
 
 ## `workflows/`
 
-Will hold Temporal workflow and activity definitions for course publishing (RFC §7). Empty today — M2 scope. `course.Service.Publish` currently does this work synchronously, with the seam to swap in `StartWorkflow` explicitly marked in its doc comment.
+Holds `PublishCourseWorkflow` and its `Activities` (RFC §7, ADR-0009/0025) — course publishing's Temporal workflow, built in M2. Not one of the eight domain modules above and not shaped like one (no `handler.go`/`dto.go`/`domain.go`): it's an orchestration layer over `internal/course`'s own exported, Temporal-agnostic `Service` methods, the same way `internal/platform/bootstrap` is an orchestration layer over every domain module's wiring. It imports `internal/course`; `course` never imports it back — see `course.PublishWorkflowName`'s doc comment for why that's the only direction the dependency can run.

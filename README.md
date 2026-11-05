@@ -51,8 +51,9 @@ internal/
   platform/          Shared kernel: config, db, cache, auth, errors, httpx, outbox, router, bootstrap
   identity/ course/ enrollment/ progress/    Domain modules (each has its own README)
   analytics/                                 Built — outbox relay's first handler (ADR-0021)
-  search/ notification/ audit/               Not yet built — same relay-handler pattern as analytics
-  workflows/         Temporal definitions (M2)
+  search/            Empty — its write+read (course_search_index, GET /courses/search) live inside course/ instead (M2, ADR-0025)
+  notification/ audit/                       Not yet built — same relay-handler pattern as analytics
+  workflows/         PublishCourseWorkflow + Activities — built, M2 (ADR-0025)
 migrations/          Versioned SQL schema (golang-migrate) — see migrations/README.md
 docs/
   for-the-devs/      Start here — onboarding, setup, architecture in brief
@@ -87,7 +88,7 @@ Errors are always `{ "code", "message", "details" }` with a stable, documented `
 
 Go 1.25+, Gin, GORM (bounded to simple CRUD — see [DR-004](docs/rfc/differences-from-requirements.md#dr-004--gorm-is-bounded-to-simple-crud-raw-sql-elsewhere)) + raw SQL for complex queries, PostgreSQL, Redis, MongoDB, Apache Kafka + Confluent Schema Registry, Temporal, Asynq, MinIO (S3-compatible — [ADR-0019](docs/adr/smartcourse-adr.md#adr-0019--minio-for-learning-asset-object-storage)), OpenTelemetry + Prometheus + Grafana + Jaeger, Docker Compose.
 
-**Currently running, not just specified:** Go, Gin, GORM, PostgreSQL, Redis (cache, rate limiting), Docker Compose. MongoDB, Kafka, Schema Registry, Temporal, and Asynq are still M2/M3 — see `docs/rfc/smartcourse-rfc.md` §21.0 for exactly what's built versus designed.
+**Currently running, not just specified:** Go, Gin, GORM, PostgreSQL, Redis (cache, rate limiting), Docker Compose, and — as of M2 — Temporal, backing the course publishing workflow only (ADR-0009/0025). MongoDB, Kafka, Schema Registry, and Asynq are still M3 — see `docs/rfc/smartcourse-rfc.md` §21.0 for exactly what's built versus designed.
 
 ## Testing
 

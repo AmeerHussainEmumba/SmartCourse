@@ -40,7 +40,7 @@ These five ideas explain *why* the code is shaped the way it is. Misunderstandin
 
 - **Go 1.25+** — check with `go version`.
 - **Docker** (with Compose v2, i.e. `docker compose`, not the old standalone `docker-compose`) — check with `docker compose version`.
-- That's it to get the core system running. Kafka, Temporal, MongoDB, and the observability stack come later and aren't needed yet — see §5.
+- That's it to get the system running, including course publishing (M2 — Temporal's part of `make dev-workflow`, the profile tier these steps use, not `dev-core`). Kafka, MongoDB, and the observability stack come later and aren't needed yet — see §5.
 
 ### Steps
 
@@ -55,24 +55,27 @@ cp env.example .env
 #    openssl rand -base64 48
 #    and put it in JWT_SIGNING_KEY in .env.
 
-# 2. Start the minimum infrastructure: Postgres, Redis, MinIO.
-make dev-core
+# 2. Start infrastructure — Postgres, Redis, MinIO, and (since make seed
+#    publishes real courses through a real Temporal workflow, M2) Temporal
+#    itself. `dev-workflow` is a superset of `dev-core`, not a different
+#    stack — everything `dev-core` starts is still here too.
+make dev-workflow
 
 # 3. Apply the schema.
 make migrate-up
 
 # 4. Populate realistic data — instructors, courses at every lifecycle
 #    state, students with partial progress. Goes through the real
-#    service layer (not raw SQL), so it also proves the four core
-#    modules work together. Safe to re-run — it's a no-op the second
-#    time. See cmd/seed/README.md.
+#    service layer (not raw SQL), so it also proves the core modules
+#    (including the publish workflow) work together. Safe to re-run —
+#    it's a no-op the second time. See cmd/seed/README.md.
 make seed
 
-# 5. Nothing left to do — `make dev-core` (step 2) already started the
+# 5. Nothing left to do — `make dev-workflow` (step 2) already started the
 #    application containers too (identity-api, course-api, analytics-api,
-#    worker — they're in the `core` profile, same as Postgres/Redis/MinIO).
-#    See "Running natively instead" below if you want faster iteration
-#    than a Docker rebuild on every change.
+#    worker — they're in the `core` profile, which `workflow` includes —
+#    plus Temporal and its UI). See "Running natively instead" below if
+#    you want faster iteration than a Docker rebuild on every change.
 ```
 
 Check it's alive (each HTTP service has its own `/health/ready`):
@@ -109,7 +112,7 @@ From here, `api/openapi.yaml` documents every endpoint (across all three service
 
 ### Running natively instead
 
-`make dev-core` containerizes everything, including the app, which means a code change needs a rebuild to see. For faster iteration, stop the containerized app services (`docker compose stop identity-api course-api analytics-api worker` — leave Postgres/Redis/MinIO running) and run natively instead, each in its own terminal:
+`make dev-workflow` containerizes everything, including the app, which means a code change needs a rebuild to see. For faster iteration, stop the containerized app services (`docker compose stop identity-api course-api analytics-api worker` — leave Postgres/Redis/MinIO/Temporal running) and run natively instead, each in its own terminal:
 
 ```bash
 make run-identity-api     # :8090
@@ -172,11 +175,11 @@ If you want to see what a real concurrency bug looks like when it's *not* caught
 
 Don't assume the RFC describes the current state of the code — it describes the target design, and marks what's implemented. As of now:
 
-**Built, tested, running:** the full database schema; the shared kernel (auth, config, error handling, rate limiting, the outbox writer); the `identity`, `course`, `enrollment`, and `progress` modules, each with a working HTTP API and integration tests against real infrastructure; **the outbox relay** (`internal/platform/relay`) — a real bounded worker pool that drains events and dispatches them to handlers, proven by its own concurrency tests, not just written; and `internal/analytics`, the relay's first handler, which is why `GET /analytics/platform` returns real numbers today instead of zeros. Course publishing's validation step also runs genuinely concurrently (`errgroup`), not just sequentially.
+**Built, tested, running:** the full database schema; the shared kernel (auth, config, error handling, rate limiting, the outbox writer); the `identity`, `course`, `enrollment`, and `progress` modules, each with a working HTTP API and integration tests against real infrastructure; **the outbox relay** (`internal/platform/relay`) — a real bounded worker pool that drains events and dispatches them to handlers, proven by its own concurrency tests, not just written; and `internal/analytics`, the relay's first handler, which is why `GET /analytics/platform` returns real numbers today instead of zeros. **Course publishing is a real Temporal workflow** (M2, ADR-0025) — `POST /courses/{id}/publish` starts `internal/workflows.PublishCourseWorkflow`, `GET /courses/{id}/publish-status` polls it, and the workflow's own activities run concurrently where RFC §7.4's graph allows, with per-activity retry and crash-recoverable orchestration (the thing an in-process `errgroup` alone never provided). `GET /courses/search` (full-text) and a Redis-backed course-detail cache are both real too, pulled forward from M3 as part of the same workflow.
 
-This matters for where you look for examples: if you want to see this codebase's concurrency patterns in production code (not just in a test file), read `internal/platform/relay/` and `internal/course/service.go`'s `runPublishChecks`, not just the RFC's description of them.
+This matters for where you look for examples: if you want to see this codebase's concurrency patterns in production code (not just in a test file), read `internal/platform/relay/` and `internal/workflows/workflow.go`, not just the RFC's description of them. To run the publish workflow locally, use `make dev-workflow` (not `dev-core`) — that's the Compose profile tier that actually starts Temporal alongside the four services.
 
-**Not built yet, on purpose, not a gap:** the Temporal-based publishing workflow (durable, crash-recoverable orchestration — currently synchronous with real concurrent validation but no crash recovery mid-publish; see `internal/course/service.go`'s `Publish` method, which explicitly marks where Temporal replaces it), Kafka and Schema Registry (the relay is a deliberate in-process bridge ahead of them — see ADR-0021), `search`/`notification`/`audit` modules (same relay-handler pattern as `analytics`, just not built yet), asset upload, and the observability stack (Prometheus/Grafana/Jaeger).
+**Not built yet, on purpose, not a gap:** Kafka and Schema Registry (the relay is a deliberate in-process bridge ahead of them — see ADR-0021), `notification`/`audit` modules (same relay-handler pattern as `analytics`, just not built yet — `search` is the one module name on this list that's partially real: see `internal/README.md`), asset upload, and the observability stack (Prometheus/Grafana/Jaeger).
 
 Full detail: `docs/rfc/smartcourse-rfc.md` §21.0.
 

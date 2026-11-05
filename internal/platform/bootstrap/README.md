@@ -9,10 +9,12 @@ Before ADR-0022, this wiring (`registerModules`, `buildRelay`) lived directly in
 ## What's here
 
 - **`Dependencies`** — the shared Postgres/Redis clients every service needs. `Connect` builds them once; `HealthCheckers` exposes the readiness checks each `cmd/*-api` wires into its own `/health/ready`.
+- **`ConnectTemporal`** (M2, ADR-0025) — a *lazy* Temporal client (`client.NewLazyClient`, not `Dial`), deliberately not part of `Dependencies`: only `cmd/course-api` (to start the publish workflow) and `cmd/worker` (to run it) ever call this — `identity-api`/`analytics-api` never acquire one, matching ADR-0009's "Temporal backs publishing and nothing else." Lazy means building it never fails even if Temporal isn't reachable; only an actual publish attempt does.
 - **`RegisterIdentityRoutes`** — wires `internal/identity`'s HTTP routes onto a Gin engine. Called only by `cmd/identity-api`.
-- **`RegisterCourseRoutes`** — wires `internal/course`, `internal/enrollment`, and `internal/progress`'s HTTP routes onto a Gin engine. Called only by `cmd/course-api`. The three stay together specifically because `internal/enrollment` locks the `courses` row in the same transaction as an enrollment insert (ADR-0012) — that requires one process, one connection.
+- **`RegisterCourseRoutes`** — wires `internal/course`, `internal/enrollment`, and `internal/progress`'s HTTP routes onto a Gin engine. Called only by `cmd/course-api`. The three stay together specifically because `internal/enrollment` locks the `courses` row in the same transaction as an enrollment insert (ADR-0012) — that requires one process, one connection. Takes a Temporal client explicitly (not off `Dependencies`) for `course.Service.Publish` to use.
 - **`RegisterAnalyticsRoutes`** — wires `internal/analytics`'s HTTP routes onto a Gin engine. Called only by `cmd/analytics-api`.
-- **`BuildRelay`** — wires every module's relay handlers (today, `internal/analytics` and `internal/enrollment`) into one `relay.Relay`. Called only by `cmd/worker`.
+- **`BuildRelay`** — wires every module's relay handlers (`internal/analytics`, `internal/course`, `internal/enrollment`) into one `relay.Relay`. Called only by `cmd/worker`.
+- **`BuildPublishWorker`** (M2, ADR-0025) — wires `internal/workflows.PublishCourseWorkflow` and its `Activities` onto a Temporal `worker.Worker`. Called only by `cmd/worker`, which rebuilds both the client and the worker fresh on every retry attempt rather than reusing a pair that already failed to start — see `cmd/worker/README.md` for why.
 
 ## What this does *not* change
 

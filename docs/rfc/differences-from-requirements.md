@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Living document |
-| Last updated | 2026-11-03 |
+| Last updated | 2026-11-05 |
 | Related | `smartcourse-rfc.md`, `smartcourse-adr.md`, `docs/baseline/SmartCourse.md`, `docs/baseline/Execution Guidelines.md` |
 
 ## Purpose
@@ -36,6 +36,7 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-011](#dr-011--further-splitting-cmdapi-into-per-domain-deployable-services) | Further splitting cmd/api into per-domain deployable services | Interpretation | Accepted |
 | [DR-012](#dr-012--seed-data-created-through-the-service-layer-not-a-sql-script) | Seed data created through the service layer, not a SQL script | Interpretation | Proposed |
 | [DR-013](#dr-013--schema-per-service-reverses-dr-010s-shared-schema-position) | Schema-per-service reverses DR-010's shared-schema position | Interpretation | Accepted |
+| [DR-014](#dr-014--search-indexing-and-course-detail-caching-pulled-forward-into-m2) | Search indexing and course-detail caching pulled forward into M2 | Addition | Accepted |
 
 ---
 
@@ -282,6 +283,24 @@ This is a genuine reversal of DR-010's shared-*schema* position, not an extensio
 ### If this turns out to be wrong
 
 If the schema split ever needs reversing (e.g., it turns out to add operational cost — migration-tooling surface, `search_path` misconfiguration risk — without a corresponding benefit the supervisor confirms she still wants), the fix is a new entry superseding this one and ADR-0024, collapsing back toward DR-010's original shared-schema position, not a silent revert.
+
+---
+
+## DR-014 — Search indexing and course-detail caching pulled forward into M2
+
+**Category:** Addition · **Date:** 2026-11-05 · **Related:** DR-006, ADR-0021, ADR-0025
+
+### What differs
+
+RFC §21.1 maps "Week 2" to M2 (the publishing workflow) and scopes search indexing and caching to M3 ("Kafka events, background workers, analytics, observability"). M2's actual implementation includes a working `IndexSearch` activity (a real `course_search_index` upsert plus a live `GET /courses/search` endpoint) and a working `WarmCache` activity (a real version-scoped Redis cache, read through by `GET /courses/{id}`) — both nominally M3 scope, built as real, working pieces rather than left for later or stubbed out to match the RFC's §7.4 diagram literally.
+
+### Why
+
+The same reasoning DR-006 already established and ADR-0021 already acted on: the weekly/milestone breakdown is a review checkpoint, not a build order, and a design audit that finds a gap between the documented plan and what's actually buildable right now should close that gap rather than wait on a calendar date. Here, the alternative to building these for real was a workflow with two of its seven activities as literal no-ops (rejected directly — see ADR-0025's Option B) or silently dropped (leaves RFC §7.4's own diagram unfulfilled for no forcing reason, when `course_search_index`'s schema and `internal/platform/cache`'s Redis client both already existed from M0/M1). Full reasoning and the real bugs found building this: ADR-0025.
+
+### If this turns out to be wrong
+
+If `internal/search` lands in M3 as its own module with its own schema and ranking strategy (the same way `internal/analytics` was rebuilt rather than merely relocated when ADR-0024 landed), this entry's `IndexSearch` write path is superseded by that module's own relay-driven handler — not a reversal, an upgrade path already anticipated in ADR-0025's reversal trigger.
 
 ---
 

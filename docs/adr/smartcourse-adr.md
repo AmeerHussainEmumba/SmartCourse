@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Living document |
-| Last updated | 2026-11-03 |
+| Last updated | 2026-11-05 |
 | Related | `smartcourse-rfc.md` |
 
 ## Review status (2026-09-24)
@@ -55,6 +55,7 @@ The distinction matters when something changes. Six months from now, a contribut
 | [0022](#adr-0022--separate-api-and-worker-binaries-one-shared-codebase-and-database) | Separate API and worker binaries, one shared codebase and database | Accepted | §4.2 |
 | [0023](#adr-0023--split-cmdapi-into-identity-api-course-api-and-analytics-api) | Split cmd/api into identity-api, course-api, and analytics-api | Accepted | §4.2 |
 | [0024](#adr-0024--schema-per-service-within-one-shared-database) | Schema-per-service within one shared database | Accepted | §5.3 |
+| [0025](#adr-0025--course-publishing-as-a-temporal-workflow-m2) | Course publishing as a Temporal workflow (M2) | Accepted | §7.4 |
 
 ---
 
@@ -985,6 +986,69 @@ A direct follow-up conversation narrowed this considerably. Liquibase is confirm
 ### Reversal trigger
 
 If the deferred `go.mod`/`libs/common` split (tracked for a later record) turns out to need schema boundaries drawn differently than ADR-0023's service boundaries — e.g. `search` or `notification` landing and needing their own schema sooner than expected — this record is extended, not reversed, the same way ADR-0023 extended ADR-0022. If the `platform` schema's shared-outbox approach turns out to cause real contention or coupling once more services exist, split it per-producer-schema at that point; nothing here prevents that migration later.
+
+---
+
+## ADR-0025 — Course publishing as a Temporal workflow (M2)
+
+**Status:** Accepted · **Date:** 2026-11-05 · **RFC:** §7.4, §21
+
+### Context
+
+RFC §21's delivery plan scopes M2 as "Temporal publishing workflow, activities running concurrently where the graph allows, blue-green version promotion, failure handling, workflow tests, publish-status endpoint." ADR-0009 already settled *why* Temporal applies to publishing and nothing else; this record is the concrete M2 implementation against RFC §7.4's activity graph, which predates both the outbox relay (ADR-0021) and schema-per-service (ADR-0024) and needed revisiting against both.
+
+Three of RFC §7.4's seven activities land on modules that don't fully exist yet: `IndexSearch` needs a search module (not started — `internal/README.md` lists it as the natural next relay handler, not built), `WarmCache` needs a caching layer (nothing reads through Redis for course detail today), and `InitAnalytics` would create `course_stats` directly — work the outbox relay's `internal/analytics` handler already does automatically the moment `PromoteVersion`'s outbox event is processed (ADR-0021). Deferring the first two to M3 as literal RFC scope would be the conservative reading; pulled forward instead, the same way ADR-0021 pulled the relay and concurrent publish validation forward from M2/M3 into M1 "after an audit found §7's concurrency requirements demonstrated almost nowhere in production code" — the same audit logic applies here: a publish workflow that writes two of its seven activities as no-ops isn't proving the graph, it's decorating it.
+
+### Options
+
+**A. Reduced graph — only the activities with a real backing today** (`ValidateMetadata` → `{VerifyAssets, ComputeMetadata}` → `PromoteVersion`), leaving `IndexSearch`/`WarmCache`/`InitAnalytics` as a documented, deferred gap. Honest, but ships a workflow that's thinner than RFC §7.4's own diagram without a forcing reason, when the real pieces are buildable now.
+
+**B. Full graph with no-op stand-ins** for the three unbuilt activities, matching the RFC diagram literally. Rejected on direct instruction: no-ops that do nothing but occupy a graph position are dead code and added determinism surface for work that isn't real — the same objection ADR-0021 raised against adding concurrency primitives nobody needed just to tick a box.
+
+**C. Full graph, with `IndexSearch` and `WarmCache` pulled forward as real, working pieces of their eventual M3 modules (not stubs), and `InitAnalytics` dropped as redundant with the relay's existing event-driven recompute.** `IndexSearch` gets a real `course_search_index` upsert plus a real `GET /courses/search` endpoint reading it (full-text ranked, not the catalogue's plain `ILIKE`). `WarmCache` gets a real version-scoped Redis key, with `GET /courses/{id}` reading through it. Chosen directly.
+
+### Decision
+
+**Option C.** The workflow (`internal/workflows.PublishCourseWorkflow`) implements:
+
+```
+ValidateMetadata -> {VerifyAssets, ComputeMetadata} -> BuildOutline -> {IndexSearch, WarmCache} -> PromoteAndPublish
+```
+
+`InitAnalytics` is not a node: analytics already reaches the same end state (a `course_stats` row reflecting the publish) via the relay's existing `course.course_published` handler, and adding a second, synchronous write here would race that idempotent recompute for no benefit.
+
+**Package boundary.** `internal/workflows` (new) holds the actual `go.temporal.io/sdk` dependency — the workflow function and an `Activities` struct whose methods are one-line forwards to plain, Temporal-agnostic methods on `course.Service` (`ValidateMetadata`, `VerifyAssets`, `ComputeMetadata`, `BuildOutline`, `IndexSearch`, `WarmCache`, `PromoteAndPublish`, `MarkPublishFailed`). `internal/course` never imports `internal/workflows` — the dependency runs one way, the same way `bootstrap` is the one place allowed to import every domain module. `course.Service.Publish` starts the workflow by its registered name (`course.PublishWorkflowName`, a shared string constant), not by importing the workflow function, which is what makes the one-way dependency possible at all.
+
+**Workflow ID and idempotency.** `publish-{course_id}-{version_number}` (RFC §7.5), started with Temporal's default `WorkflowIDReusePolicy` — a duplicate `POST /publish` while one is already running attaches to the existing execution (`ExecuteWorkflow` returns the running handle instead of erroring) rather than starting a second one, on top of `idx_one_draft_per_course`'s storage-layer guard (already in place since M0).
+
+**`PromoteAndPublish` is one atomic transaction**, not two like M1's synchronous `Publish` was (`PromoteVersion` plus a separate outbox-write transaction). Temporal's at-least-once activity execution means this method must tolerate being run twice; it does, via a check-then-transact guard (`if courseID's published_version_id already equals this versionID, no-op`) rather than a database-level dedupe, so a retried activity neither re-promotes nor double-emits `course.course_published`.
+
+**`GET /courses/{id}/publish-status` (RFC §7.5) reads `course_versions` directly, not Temporal's API** — every state transition it needs (`publishing`/`ready`/`publish_failed`, `workflow_id`, `publish_error`) is already written there by the activities above, which is also the system of record every other read in this module already uses. Querying Temporal instead would be a second source of truth for data already sitting in the row.
+
+**Retry policies** mirror RFC §7.4's table (`ValidateMetadata`: none; `VerifyAssets`/`ComputeMetadata`/`WarmCache`: 3×; `IndexSearch`/`PromoteAndPublish`: 5×) — explicitly provisional per RFC §21's deferred decision D1 ("retry counts and backoff curves... settled by observed failure patterns"), not tuned final values.
+
+**Failure handling stores the activity's own message, not the wrapped diagnostic text.** Temporal wraps every activity failure in an `ActivityError`/`ApplicationError` pair whose own `Error()` string embeds scheduled-event IDs and retryability flags — noise that doesn't belong in `course_versions.publish_error` for an instructor to read. `internal/workflows`' failure path unwraps to `ApplicationError.Message()` before calling `MarkPublishFailed`. Caught by a workflow unit test asserting the exact stored string, not by inspection — the first version of this code stored the wrapped text verbatim.
+
+**Temporal client connections are lazy everywhere** (`client.NewLazyClient`, not `client.Dial`) — `bootstrap.ConnectTemporal` never fails at boot even if Temporal is unreachable, matching ADR-0009's own stated consequence ("Temporal down means publishing unavailable — though nothing else is affected"). Neither `identity-api` nor `analytics-api` ever acquires one. `course-api`'s `core` Compose profile boots without Temporal present at all (Temporal only exists from the `workflow` profile tier up); only an actual publish call fails, cleanly, as a 503.
+
+### Bugs found while building this, kept here rather than quietly fixed
+
+All four were caught by actually running the stack (`make dev-workflow`, a real publish, a real `make seed`) — none were visible from the code alone, continuing the pattern ADR-0021/0024 both record.
+
+- **CI never ran a single integration test.** `.github/workflows/ci.yml`'s test step ran `go test -race ./...` with no `-tags=integration` — every `//go:build integration` file in the repo, including the enrollment seat-limit concurrency test and the relay's graceful-shutdown test, was silently excluded from every CI run since the suite existed. The job's declared Postgres/Redis service containers and its "Run migrations" step were themselves dead weight, since every integration test provisions its own disposable containers via `testenv.Setup` and never touches them. Fixed by adding `-tags=integration` to both test steps; left the (now merely redundant, still harmless) service containers and migration step alone as a separate concern.
+- **Gin's router panics at boot on two routes sharing a path depth with different wildcard names.** `GET /courses/:slug` (public detail) and the new `GET /courses/:id/publish-status` collide in gin's httprouter-based tree purely because `:slug` and `:id` are different placeholder names at the same position — `search`, a static segment, had no such problem. Fixed by registering the new route as `:slug` too (an internal gin requirement; the URL contract itself is unchanged).
+- **The Temporal worker's own `Start()` doesn't recover from one failure, even once the server becomes reachable again.** The first version of `cmd/worker`'s retry loop called `Start()` repeatedly on the *same* already-constructed client/worker pair; once the Temporal server returned its very first error (observed at `docker compose up` time, before `temporalio/auto-setup` had finished creating the `default` namespace), every subsequent retry kept failing with the identical stale error for over seven minutes — long after `nc`/`docker exec` confirmed the server was reachable and the namespace existed. Restarting the whole process (which naturally builds a fresh client) connected within seconds. Fixed by rebuilding the Temporal client and worker fresh on every retry attempt rather than reusing one across failures — not just a backoff tuning fix, a different pattern: `worker.New(...).Start()` is a once-per-lifetime call, not one safe to retry on the same instance after it fails.
+- **The warmed cache entry captured the course's pre-promotion state.** `BuildOutline` runs before `PromoteAndPublish` by design (the cache must already be warm the instant the pointer swap makes the course live), but it was caching `toCourseResponse`/`toVersionResponse` built from the row as read at that point — still showing a set `draft_version_id` and version state `"publishing"`. The very first cache hit after any publish served a course that looked unpublished. Fixed by having `BuildOutline` construct the Course/Version pair reflecting the state the row deterministically becomes once `PromoteVersion`'s three field writes commit, rather than the state it's actually in yet. Regression-tested in `internal/workflows/publish_workflow_integration_test.go`.
+
+### Consequences
+
+**Positive.** Publishing survives a worker restart mid-sequence and gets independent per-activity retry, as ADR-0009 predicted. `GET /courses/search` and cache-accelerated course detail are both real, working M3 pull-forwards rather than placeholders — a second instance (after ADR-0021) of auditing against the brief and building the real primitive early rather than decorating a graph around its absence. `PromoteAndPublish`'s atomic promote-plus-outbox-write closes a latent gap M1's synchronous `Publish` had (two separate transactions, a window where promotion could succeed and the event write could fail).
+
+**Negative.** A fourth Go package (`internal/workflows`) now depends on `internal/course`, widening course's blast radius slightly beyond what RFC §4.4's module-boundary table originally described — mitigated by the dependency running only one way and `internal/workflows` containing no business logic of its own. `course_search_index` and the Redis cache are both now populated only by a successful publish; neither has a scheduled reconciliation path yet (the same ADR-0017 gap `internal/analytics` already carries), so a document that falls out of sync with its course's live data — by a bug, not by design — has no self-healing mechanism until M3. The full-text relevance ranking is a reasonable starting default (title weighted above description), not a tuned one — RFC §21's D11 defers that explicitly.
+
+### Reversal trigger
+
+If `internal/search` lands as its own module in M3 with its own schema and ranking logic (per ADR-0024's template for `internal/analytics`), `IndexSearch`'s write path here is superseded by that module's own relay-driven handler, the same way analytics itself was rebuilt rather than merely relocated. If a broader caching strategy (CDN, HTTP cache headers, a dedicated cache-invalidation service) lands later, `WarmCache`'s simple version-keyed Redis entry is superseded by whatever that strategy specifies.
 
 ---
 
