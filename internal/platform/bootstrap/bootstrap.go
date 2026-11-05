@@ -113,15 +113,20 @@ func RegisterAnalyticsRoutes(r *gin.Engine, deps *Dependencies, cfg *config.Conf
 }
 
 // BuildRelay wires every module's relay handlers into one Relay instance.
-// Called only by cmd/worker. internal/analytics and internal/enrollment
-// register handlers today (the latter withdraws active enrollments when a
-// course is archived — see enrollment.handleCourseArchived);
+// Called only by cmd/worker. internal/analytics, internal/course, and
+// internal/enrollment register handlers today (enrollment withdraws
+// active enrollments when a course is archived — see enrollment.
+// handleCourseArchived; course keeps instructor_mirror current from
+// identity's events — see course.handleUserRegistered, ADR-0024);
 // internal/search's search-indexer and internal/notification's dispatcher
 // are the natural next additions — the relay itself doesn't change when
 // they land, only this list grows.
 func BuildRelay(deps *Dependencies) *relay.Relay {
 	rl := relay.New(deps.DB)
 	for _, h := range analytics.Handlers() {
+		rl.Register(h)
+	}
+	for _, h := range course.Handlers() {
 		rl.Register(h)
 	}
 	for _, h := range enrollment.Handlers() {

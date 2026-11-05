@@ -91,7 +91,9 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*AuthRespo
 			AggregateID:   user.ID,
 			EventType:     "identity.user_registered",
 			SchemaVersion: 1,
-			Payload:       map[string]any{"user_id": user.ID, "email": user.Email, "role": user.Role},
+			// full_name lets course.instructor_mirror seed itself without
+			// a cross-schema join into identity.users (ADR-0024).
+			Payload: map[string]any{"user_id": user.ID, "email": user.Email, "role": user.Role, "full_name": user.FullName},
 		})
 	})
 	if isUniqueViolation(err) {
@@ -284,8 +286,24 @@ func (s *Service) GetMe(ctx context.Context, userID uuid.UUID) (*UserResponse, e
 	return &resp, nil
 }
 
+// UpdateMe writes identity.user_profile_updated so course.instructor_mirror
+// (ADR-0024 — course's own denormalized copy of instructor display names,
+// never a cross-schema join into identity.users) stays current when an
+// instructor renames themselves after course.ListCatalogue has already
+// mirrored their old name.
 func (s *Service) UpdateMe(ctx context.Context, userID uuid.UUID, req UpdateProfileRequest) (*UserResponse, error) {
-	if err := s.repo.UpdateProfile(ctx, userID, req.FullName); err != nil {
+	if err := s.repo.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := s.repo.WithTx(tx).UpdateProfile(ctx, userID, req.FullName); err != nil {
+			return err
+		}
+		return outbox.Write(ctx, tx, outbox.Event{
+			AggregateType: "user",
+			AggregateID:   userID,
+			EventType:     "identity.user_profile_updated",
+			SchemaVersion: 1,
+			Payload:       map[string]any{"user_id": userID, "full_name": req.FullName},
+		})
+	}); err != nil {
 		return nil, apperrors.ErrInternal.Wrap(err)
 	}
 	return s.GetMe(ctx, userID)
