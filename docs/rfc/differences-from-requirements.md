@@ -32,7 +32,7 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-007](#dr-007--celery-citation-correction) | Celery citation correction | Correction | Accepted |
 | [DR-008](#dr-008--password-reset-and-email-verification) | Password reset and email verification | Addition | Accepted |
 | [DR-009](#dr-009--separate-api-and-worker-binaries-per-supervisor-review) | Separate API and worker binaries, per supervisor review | Addition | Accepted |
-| [DR-010](#dr-010--per-service-table-ownership-and-liquibase-deferred-pending-discussion) | Per-service table ownership and Liquibase — deferred pending discussion | Interpretation | Proposed (tables half resolved — see entry's update) |
+| [DR-010](#dr-010--per-service-table-ownership-and-liquibase-deferred-pending-discussion) | Per-service table ownership and Liquibase — deferred pending discussion | Interpretation | Resolved — both halves confirmed by 2026-11-03 (see entry's updates; tables → DR-013, Liquibase → entry itself) |
 | [DR-011](#dr-011--further-splitting-cmdapi-into-per-domain-deployable-services) | Further splitting cmd/api into per-domain deployable services | Interpretation | Accepted |
 | [DR-012](#dr-012--seed-data-created-through-the-service-layer-not-a-sql-script) | Seed data created through the service layer, not a SQL script | Interpretation | Proposed |
 | [DR-013](#dr-013--schema-per-service-reverses-dr-010s-shared-schema-position) | Schema-per-service reverses DR-010's shared-schema position | Interpretation | Accepted |
