@@ -40,6 +40,8 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-015](#dr-015--dr-008s-existing-asynq-notification-path-was-inaccurate) | DR-008's "existing Asynq notification path" was inaccurate | Correction | Accepted |
 | [DR-016](#dr-016--syncrwmutex-required-by-the-tech-stack-not-used-not-previously-logged) | sync.RWMutex: required by the tech stack, not used, not previously logged | Interpretation | Accepted |
 | [DR-017](#dr-017--course_stats-and-daily_enrollments-were-computed-but-unreadable) | course_stats and daily_enrollments were computed but unreadable | Correction | Accepted |
+| [DR-018](#dr-018--search-indexer-and-cache-invalidator-stay-inside-the-publish-workflow-not-rehomed-as-kafka-consumers) | search-indexer and cache-invalidator stay inside the publish workflow, not rehomed as Kafka consumers | Interpretation | Accepted |
+| [DR-019](#dr-019--observability-stays-m4-week-3s-literal-ask-notwithstanding) | Observability stays M4, Week 3's literal ask notwithstanding | Interpretation | Accepted |
 
 ---
 
@@ -358,6 +360,42 @@ Same category as DR-007/DR-015: a correction to our own status claims, not a bas
 ### If this turns out to be wrong
 
 Not applicable — this closes a gap between documentation and reality rather than making a bet.
+
+---
+
+## DR-018 — search-indexer and cache-invalidator stay inside the publish workflow, not rehomed as Kafka consumers
+
+**Category:** Interpretation · **Date:** 2026-11-06 · **Related:** RFC §6.5, ADR-0025, M3 planning
+
+### What differs
+
+RFC §6.5's consumer table lists `search-indexer` (subscribes `course.events`, upserts/removes `course_search_index`) and `cache-invalidator` (subscribes `course.events`, swaps the outline pointer, evicts stale keys) as standalone Kafka consumers, alongside `analytics-aggregator`, `notification-dispatcher`, and `audit-archiver`. Both pieces of functionality already exist — `IndexSearch` and `WarmCache`, activities inside `internal/workflows.PublishCourseWorkflow` (ADR-0025) — but as synchronous steps in the publish workflow, not as independent event-driven consumers reacting to a `CoursePublished` message on a topic.
+
+### Why
+
+As M3 (Kafka, the remaining consumers) was being scoped, rebuilding these two as literal Kafka consumers would be rework on something that already works correctly, and would weaken a property the current design deliberately has: `WarmCache` runs as the second-to-last activity in the workflow, before `PromoteAndPublish`, specifically so the cache is already warm the instant a course goes live (ADR-0025's own reasoning). Moving it behind a Kafka hop reintroduces exactly the staleness window — a published course briefly uncached — the current design avoids by construction. The same logic applies to `IndexSearch`. Both stay where they are; M3's Kafka-migration effort goes to the two consumers that are genuinely unbuilt — `notification-dispatcher` and `audit-archiver` — plus cutting `analytics-aggregator` (and the relay's other existing in-process handlers) over to real Kafka consumption per ADR-0021's already-committed migration path.
+
+### If this turns out to be wrong
+
+If a real need emerges for `course.events` to be consumed by something other than the publish workflow itself (e.g. a downstream system this project doesn't yet know about), `IndexSearch`/`WarmCache` are rebuilt as Kafka consumers at that point — this entry is superseded, not the workflow's existing activities broken apart speculatively now.
+
+---
+
+## DR-019 — Observability stays M4, Week 3's literal ask notwithstanding
+
+**Category:** Interpretation · **Date:** 2026-11-06 · **Related:** DR-006, RFC §21
+
+### What differs
+
+The Execution Guidelines' Week 3 scope lists "Observability setup (logs, tracing, metrics)" alongside Kafka integration and background workers. RFC §21 scopes OpenTelemetry, Prometheus, Grafana, and Jaeger entirely to M4, after events (M3). M3 work proceeds without pulling tracing/metrics forward.
+
+### Why
+
+Same precedent as DR-006: the weekly plan is a review cadence, not a hard technical gate on build order, and this project's actual delivery plan has never matched it week-for-week — Week 1 already included the full schema and enrollment, Week 2 already pulled search/caching forward from M3 (DR-014). Structured JSON logging (`internal/platform/logging`) has existed since M0 and already satisfies "logs" in Week 3's literal list; full distributed tracing through the Kafka event envelope is a materially larger piece of work than "basic... tracing" suggests, and RFC §6.4's event envelope already reserves `trace_id`/`span_id` fields for exactly this, so nothing about doing it in M4 instead requires a schema change later. Logged explicitly, rather than silently deferred, so a reviewer checking Week 3's checklist against this register finds the reasoning rather than an unexplained gap.
+
+### If this turns out to be wrong
+
+If the reviewer intends Week 3's observability line as a hard requirement rather than a checkpoint goal, this entry is superseded and a thin tracing slice (trace context propagation through the new Kafka consumers specifically, not the full M4 stack) is pulled forward instead.
 
 ---
 
