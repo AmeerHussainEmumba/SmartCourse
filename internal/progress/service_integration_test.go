@@ -122,6 +122,68 @@ func TestMarkComplete_IsIdempotent(t *testing.T) {
 	}
 }
 
+// TestGetProgress_ReflectsRealStateAndRejectsNonOwner is the regression
+// test for a method with zero prior coverage: it must reflect actual
+// marked-complete state (not just return an empty/default shape), and
+// must enforce ownership the same way MarkComplete does.
+func TestGetProgress_ReflectsRealStateAndRejectsNonOwner(t *testing.T) {
+	env := testenv.Setup(t)
+	svc := progress.NewService(progress.NewRepository(env.DB))
+	ctx := context.Background()
+
+	enrollmentID, lessonKeys, studentID := seedEnrollmentWithTwoLessons(t, env)
+
+	before, err := svc.GetProgress(ctx, studentID, enrollmentID)
+	if err != nil {
+		t.Fatalf("GetProgress before any completion: %v", err)
+	}
+	if len(before) != 2 {
+		t.Fatalf("expected 2 progress items (one per lesson), got %d: %+v", len(before), before)
+	}
+	for _, item := range before {
+		if item.CompletedAt != nil {
+			t.Fatalf("expected no lesson completed yet, got %+v", item)
+		}
+	}
+
+	if err := svc.MarkComplete(ctx, studentID, enrollmentID, lessonKeys[0]); err != nil {
+		t.Fatalf("MarkComplete: %v", err)
+	}
+
+	after, err := svc.GetProgress(ctx, studentID, enrollmentID)
+	if err != nil {
+		t.Fatalf("GetProgress after completing one lesson: %v", err)
+	}
+	var sawCompleted, sawIncomplete bool
+	for _, item := range after {
+		switch item.LessonKey {
+		case lessonKeys[0].String():
+			if item.CompletedAt == nil {
+				t.Fatalf("expected lesson %s to show completed_at after MarkComplete, got %+v", lessonKeys[0], item)
+			}
+			sawCompleted = true
+		case lessonKeys[1].String():
+			if item.CompletedAt != nil {
+				t.Fatalf("expected lesson %s to remain incomplete, got %+v", lessonKeys[1], item)
+			}
+			sawIncomplete = true
+		}
+	}
+	if !sawCompleted || !sawIncomplete {
+		t.Fatalf("expected to see both the completed and the still-incomplete lesson, got %+v", after)
+	}
+
+	someoneElse := uuid.Must(uuid.NewV7())
+	_, err = svc.GetProgress(ctx, someoneElse, enrollmentID)
+	if err == nil {
+		t.Fatal("expected reading someone else's enrollment progress to be rejected")
+	}
+	appErr, ok := apperrors.As(err)
+	if !ok || appErr.Code != "not_your_enrollment" {
+		t.Fatalf("expected not_your_enrollment, got: %v", err)
+	}
+}
+
 func TestMarkComplete_RejectsNonOwner(t *testing.T) {
 	env := testenv.Setup(t)
 	svc := progress.NewService(progress.NewRepository(env.DB))

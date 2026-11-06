@@ -7,7 +7,11 @@
 // knows one module already knows the rest.
 package analytics
 
-import "context"
+import (
+	"context"
+
+	"github.com/google/uuid"
+)
 
 type Service struct {
 	repo *Repository
@@ -19,4 +23,12 @@ func NewService(repo *Repository) *Service {
 
 func (s *Service) GetPlatformSnapshot(ctx context.Context) (*PlatformSnapshot, error) {
 	return s.repo.GetPlatformSnapshot(ctx)
+}
+
+func (s *Service) GetCourseStats(ctx context.Context, courseID uuid.UUID) (*CourseStats, error) {
+	return s.repo.GetCourseStats(ctx, courseID)
+}
+
+func (s *Service) ListDailyEnrollments(ctx context.Context, courseID uuid.UUID) ([]DailyEnrollmentRow, error) {
+	return s.repo.ListDailyEnrollments(ctx, courseID)
 }

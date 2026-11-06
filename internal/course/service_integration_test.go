@@ -6,6 +6,18 @@
 // ready), ownership enforcement (an instructor can't edit another's
 // course), and that publishing an empty draft is rejected. Run with
 // `make test-integration`; see docs/guides/testing.md.
+//
+// As of M2, Service.Publish starts a real Temporal workflow and needs a
+// real client.Client to do it — these tests construct Service with a nil
+// one (see newTestService) and drive the publish activities directly via
+// runPublishPipeline instead of calling Publish, exercising the exact same
+// Postgres/Redis effects (ValidateMetadata through PromoteAndPublish)
+// without requiring a live Temporal server in this test tier.
+// internal/workflows/publish_workflow_integration_test.go is where
+// PublishCourseWorkflow's own orchestration (branching, concurrency,
+// failure handling) is tested, via Temporal's own TestWorkflowEnvironment
+// against these same real Activities — see docs/guides/testing.md for why
+// the split exists and what each side actually covers.
 package course_test
 
 import (
@@ -38,9 +50,70 @@ func seedInstructor(t *testing.T, env *testenv.Env) uuid.UUID {
 	return id
 }
 
+// newTestService builds a Service with no Temporal client — correct for
+// every test in this file, since none of them call Publish directly (see
+// runPublishPipeline). A nil client would panic if Publish were called on
+// it; it's never called.
+func newTestService(env *testenv.Env) *course.Service {
+	return course.NewService(course.NewRepository(env.DB), env.RDB, nil, "")
+}
+
+// runPublishPipeline drives the course currently drafted under courseID
+// through RFC §7.4's activity graph in the same order
+// internal/workflows.PublishCourseWorkflow does, calling the same exported
+// Service methods the real workflow's Activities forward to — real
+// Postgres, real Redis, nothing mocked, just without a live Temporal
+// server orchestrating it. Returns the final publish status so callers can
+// assert on it the way they used to assert on Publish's old synchronous
+// return value.
+func runPublishPipeline(t *testing.T, svc *course.Service, courseID, instructorID uuid.UUID) *course.PublishStatusResponse {
+	t.Helper()
+	ctx := context.Background()
+
+	c, err := svc.GetCourse(ctx, courseID)
+	if err != nil {
+		t.Fatalf("GetCourse: %v", err)
+	}
+	if c.DraftVersionID == nil {
+		t.Fatal("expected a draft version to publish")
+	}
+	draftID := *c.DraftVersionID
+	oldID := c.PublishedVersionID
+
+	if err := svc.ValidateMetadata(ctx, draftID); err != nil {
+		t.Fatalf("ValidateMetadata: %v", err)
+	}
+	if err := svc.VerifyAssets(ctx, draftID); err != nil {
+		t.Fatalf("VerifyAssets: %v", err)
+	}
+	if err := svc.ComputeMetadata(ctx, draftID); err != nil {
+		t.Fatalf("ComputeMetadata: %v", err)
+	}
+	outline, err := svc.BuildOutline(ctx, courseID, draftID)
+	if err != nil {
+		t.Fatalf("BuildOutline: %v", err)
+	}
+	if err := svc.IndexSearch(ctx, outline); err != nil {
+		t.Fatalf("IndexSearch: %v", err)
+	}
+	if err := svc.WarmCache(ctx, outline); err != nil {
+		t.Fatalf("WarmCache: %v", err)
+	}
+	title := outline.Title
+	if err := svc.PromoteAndPublish(ctx, courseID, draftID, oldID, title); err != nil {
+		t.Fatalf("PromoteAndPublish: %v", err)
+	}
+
+	status, err := svc.GetPublishStatus(ctx, courseID, instructorID)
+	if err != nil {
+		t.Fatalf("GetPublishStatus: %v", err)
+	}
+	return status
+}
+
 func TestCoursePublish_FullLifecycle(t *testing.T) {
 	env := testenv.Setup(t)
-	svc := course.NewService(course.NewRepository(env.DB))
+	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)
 
@@ -56,8 +129,8 @@ func TestCoursePublish_FullLifecycle(t *testing.T) {
 	courseID := uuid.MustParse(courseResp.ID)
 
 	// Publishing with no modules must fail (ValidateMetadata, RFC §7.4).
-	if _, err := svc.Publish(ctx, courseID, instructorID); err == nil {
-		t.Fatal("expected publish to fail with no modules")
+	if err := svc.ValidateMetadata(ctx, uuid.MustParse(versionResp.ID)); err == nil {
+		t.Fatal("expected ValidateMetadata to fail with no modules")
 	}
 
 	mod, err := svc.AddModule(ctx, courseID, instructorID, course.CreateModuleRequest{Title: "Basics", Position: 1})
@@ -73,10 +146,7 @@ func TestCoursePublish_FullLifecycle(t *testing.T) {
 		t.Fatalf("AddLesson: %v", err)
 	}
 
-	published, err := svc.Publish(ctx, courseID, instructorID)
-	if err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
+	published := runPublishPipeline(t, svc, courseID, instructorID)
 	if published.State != "ready" {
 		t.Fatalf("expected published version state 'ready', got %s", published.State)
 	}
@@ -107,11 +177,28 @@ func TestCoursePublish_FullLifecycle(t *testing.T) {
 	if len(detail.Modules) != 1 || len(detail.Modules[0].Lessons) != 1 {
 		t.Fatalf("expected 1 module with 1 lesson in detail, got %+v", detail.Modules)
 	}
+
+	// IndexSearch's write side (ADR-0025, pulled forward from M3): the
+	// published course must be findable by a real full-text query, not
+	// just present in the catalogue's plain substring filter.
+	results, err := svc.SearchCourses(ctx, "Go", 20)
+	if err != nil {
+		t.Fatalf("SearchCourses: %v", err)
+	}
+	searchFound := false
+	for _, r := range results {
+		if r.Slug == "intro-to-go" {
+			searchFound = true
+		}
+	}
+	if !searchFound {
+		t.Fatalf("expected full-text search for %q to find intro-to-go, got %+v", "Go", results)
+	}
 }
 
 func TestUpdateDraft_RejectsNonOwner(t *testing.T) {
 	env := testenv.Setup(t)
-	svc := course.NewService(course.NewRepository(env.DB))
+	svc := newTestService(env)
 	ctx := context.Background()
 
 	owner := seedInstructor(t, env)
@@ -135,7 +222,7 @@ func TestUpdateDraft_RejectsNonOwner(t *testing.T) {
 
 func TestCreateCourse_RejectsInvalidSlug(t *testing.T) {
 	env := testenv.Setup(t)
-	svc := course.NewService(course.NewRepository(env.DB))
+	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)
 
@@ -149,7 +236,7 @@ func TestCreateCourse_RejectsInvalidSlug(t *testing.T) {
 
 func TestUpdateModule_UpdatesTitle_RejectsNonOwner(t *testing.T) {
 	env := testenv.Setup(t)
-	svc := course.NewService(course.NewRepository(env.DB))
+	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)
 
@@ -181,7 +268,7 @@ func TestUpdateModule_UpdatesTitle_RejectsNonOwner(t *testing.T) {
 
 func TestUpdateLesson_UpdatesContentAndRecomputesTotals(t *testing.T) {
 	env := testenv.Setup(t)
-	svc := course.NewService(course.NewRepository(env.DB))
+	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)
 
@@ -221,9 +308,7 @@ func TestUpdateLesson_UpdatesContentAndRecomputesTotals(t *testing.T) {
 		t.Fatalf("expected lesson_key to stay stable, got %q want %q", updated.LessonKey, lesson.LessonKey)
 	}
 
-	if _, err := svc.Publish(ctx, courseID, instructorID); err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
+	runPublishPipeline(t, svc, courseID, instructorID)
 	detail, err := svc.GetPublishedDetail(ctx, "lesson-edit")
 	if err != nil {
 		t.Fatalf("GetPublishedDetail: %v", err)
@@ -241,7 +326,7 @@ func TestUpdateLesson_UpdatesContentAndRecomputesTotals(t *testing.T) {
 // marshalled and written over the stored content as literal JSON null.
 func TestUpdateLesson_OmittingContentPreservesIt(t *testing.T) {
 	env := testenv.Setup(t)
-	svc := course.NewService(course.NewRepository(env.DB))
+	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)
 
@@ -283,9 +368,7 @@ func TestUpdateLesson_OmittingContentPreservesIt(t *testing.T) {
 	// Re-fetch independently of the returned response, straight from the
 	// published detail, so the assertion isn't just checking what the
 	// method happens to echo back.
-	if _, err := svc.Publish(ctx, courseID, instructorID); err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
+	runPublishPipeline(t, svc, courseID, instructorID)
 	detail, err := svc.GetPublishedDetail(ctx, "keep-content")
 	if err != nil {
 		t.Fatalf("GetPublishedDetail: %v", err)
@@ -300,7 +383,7 @@ func TestUpdateLesson_OmittingContentPreservesIt(t *testing.T) {
 
 func TestArchiveCourse_HidesFromCatalogueAndDetail_RejectsNonOwner(t *testing.T) {
 	env := testenv.Setup(t)
-	svc := course.NewService(course.NewRepository(env.DB))
+	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)
 
@@ -319,9 +402,7 @@ func TestArchiveCourse_HidesFromCatalogueAndDetail_RejectsNonOwner(t *testing.T)
 	}); err != nil {
 		t.Fatalf("AddLesson: %v", err)
 	}
-	if _, err := svc.Publish(ctx, courseID, instructorID); err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
+	runPublishPipeline(t, svc, courseID, instructorID)
 
 	other := seedInstructor(t, env)
 	if err := svc.ArchiveCourse(ctx, courseID, other); err == nil {
@@ -360,7 +441,7 @@ func TestArchiveCourse_HidesFromCatalogueAndDetail_RejectsNonOwner(t *testing.T)
 
 func TestListCatalogue_FiltersByCategoryLevelAndSearch(t *testing.T) {
 	env := testenv.Setup(t)
-	svc := course.NewService(course.NewRepository(env.DB))
+	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)
 
@@ -383,9 +464,7 @@ func TestListCatalogue_FiltersByCategoryLevelAndSearch(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("AddLesson %s: %v", slug, err)
 		}
-		if _, err := svc.Publish(ctx, courseID, instructorID); err != nil {
-			t.Fatalf("Publish %s: %v", slug, err)
-		}
+		runPublishPipeline(t, svc, courseID, instructorID)
 	}
 	publish("Go for Beginners", "go-for-beginners", &backend, &beginner)
 	publish("Rust Internals", "rust-internals", nil, nil)

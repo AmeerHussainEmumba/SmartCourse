@@ -18,6 +18,8 @@ Users, credentials, roles, and every token type that authenticates a request: JW
 
 **Login is rate-limited twice, on purpose, against different attack shapes (ADR-0020, RFC §11.3).** A per-IP GCRA limit at the route level (`handler.go`) catches many guesses from one source. A separate per-account limit inside `Service.Login` itself (`ratelimit.AccountKey`, checked before the database is even touched) catches one attacker spreading guesses for one account across many IPs — a per-IP-only limit wouldn't. `TestLogin_PerAccountRateLimit_BlocksAfterThreshold` proves the account limit actually blocks the correct password once the budget is exhausted, not just that a limiter type exists.
 
+**`UpdateMe` writes `identity.user_profile_updated` to the outbox (ADR-0024).** Nothing in this module reads it back — it exists because `internal/course`'s `instructor_mirror` (its own denormalized copy of every user's display name, fed from identity's events since schema-per-service rules out a live cross-schema join) needs to know when a name changes, not just when an account is first registered. `TestUpdateMe_PersistsChangeAndWritesProfileUpdatedEvent` proves the event actually lands in `outbox`, not just that the profile update itself persists.
+
 ## Bugs found during review, and what they teach
 
 Three real bugs were caught reviewing this module against the baseline requirements, each fixed alongside a test that would fail without the fix:
@@ -45,6 +47,7 @@ Three real bugs were caught reviewing this module against the baseline requireme
 ## Testing
 
 - **Unit** (`internal/platform/auth/*_test.go`): password hashing, JWT issue/parse, alg-confusion rejection — no database.
-- **Integration** (`service_integration_test.go`, build tag `integration`): duplicate/case-insensitive email rejection, login failure-path equivalence, refresh rotation, reuse detection, and the Redis token-version cache write — against real Postgres and Redis via `test/integration/testenv`.
+- **Integration** (`service_integration_test.go`, build tag `integration`): duplicate/case-insensitive email rejection, login failure-path equivalence, refresh rotation, reuse detection, the Redis token-version cache write, and — since this module's HTTP tier was added (below) alongside the rest of its `Service` surface — `Logout` (real revocation, and a no-op on an already-unknown token), `GetMe`/`UpdateMe` (including the `identity.user_profile_updated` outbox write), and email verification's resend/confirm pair (no email-enumeration on resend, a no-op once already verified) — all against real Postgres and Redis via `test/integration/testenv`.
+- **HTTP-level** (`identity_http_test.go`, build tag `integration`): this repo's first tier that boots a real `gin.Engine` and drives it with real `httptest` requests, rather than calling `Service` methods directly — route registration actually succeeding (the regression test for a gin router-panic bug class found live in `internal/course`, ADR-0025), request binding/validation over real HTTP (not just that a DTO declares `binding` tags), and `RequireAuth`/`RequireRole` rejecting requests at the HTTP layer exactly where the route table says they should (`/me` with no token, `/admin/users/{id}/role` with no token and with a non-admin token).
 
 Run: `make test` (unit) or `make test-integration` (integration, needs Docker). Full index: `docs/guides/testing.md`.

@@ -129,6 +129,39 @@ type CourseDetailResponse struct {
 	Modules []ModuleWithLessons `json:"modules"`
 }
 
+// PublishAcceptedResponse is POST /courses/{id}/publish's body as of M2
+// (RFC §7.5) — 202, not 200: publishing now starts a workflow instead of
+// running to completion inline. Clients poll GetPublishStatus with
+// WorkflowID until State is terminal (ready or publish_failed).
+type PublishAcceptedResponse struct {
+	WorkflowID string `json:"workflow_id"`
+	State      string `json:"state"`
+}
+
+// PublishStatusResponse backs GET /courses/{id}/publish-status (RFC §7.5).
+// Deliberately its own type rather than VersionResponse: WorkflowID and
+// Error are publish-specific and meaningless on a ready, never-republished
+// version, so folding them into VersionResponse would mean every other
+// caller of toVersionResponse carries two fields it never sets.
+type PublishStatusResponse struct {
+	WorkflowID *string `json:"workflow_id,omitempty"`
+	State      string  `json:"state"`
+	Error      *string `json:"error,omitempty"`
+}
+
+// SearchResultResponse is one row of GET /courses/search (RFC §7.4's
+// IndexSearch, pulled forward from M3 per ADR-0025) — ranked by full-text
+// relevance, not the catalogue's plain substring match.
+type SearchResultResponse struct {
+	CourseID        string  `json:"course_id"`
+	Slug            string  `json:"slug"`
+	Title           string  `json:"title"`
+	InstructorName  string  `json:"instructor_name"`
+	Category        *string `json:"category,omitempty"`
+	Level           *string `json:"level,omitempty"`
+	EnrollmentCount int     `json:"enrollment_count"`
+}
+
 func toCourseResponse(c *Course) CourseResponse {
 	resp := CourseResponse{
 		ID: c.ID.String(), Slug: c.Slug, InstructorID: c.InstructorID.String(),

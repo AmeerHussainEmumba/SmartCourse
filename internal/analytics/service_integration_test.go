@@ -14,6 +14,7 @@ package analytics_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -66,5 +67,91 @@ func TestGetPlatformSnapshot_ReflectsRecompute(t *testing.T) {
 	}
 	if snap.TotalInstructors != 1 {
 		t.Errorf("expected 1 instructor, got %d", snap.TotalInstructors)
+	}
+}
+
+// TestGetCourseStats_ReflectsRecompute closes a gap found during the
+// baseline-compliance audit: RecomputeCourseStats has been writing this
+// row since ADR-0024, but nothing ever read it back — no repository
+// method, no Service method, no route. Proves the full read path now
+// exists and actually reflects what a recompute wrote, the same way
+// TestGetPlatformSnapshot_ReflectsRecompute does for the platform row.
+func TestGetCourseStats_ReflectsRecompute(t *testing.T) {
+	env := testenv.Setup(t)
+	ctx := context.Background()
+	svc := analytics.NewService(analytics.NewRepository(env.DB))
+	courseID := uuid.Must(uuid.NewV7())
+
+	// No course_stats row yet — zeros, not an error (same tradeoff
+	// GetPlatformSnapshot makes, and for the same cross-schema reason —
+	// see GetCourseStats' doc comment in repository.go).
+	stats, err := svc.GetCourseStats(ctx, courseID)
+	if err != nil {
+		t.Fatalf("GetCourseStats before any data: %v", err)
+	}
+	if stats.TotalEnrollments != 0 || stats.AvgCompletionS != nil {
+		t.Fatalf("expected zeros/nil before any recompute, got %+v", stats)
+	}
+
+	studentA, studentB := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	now := time.Now().UTC()
+	env.DB.Exec(`INSERT INTO enrollment_mirror (enrollment_id, course_id, student_id, status, enrolled_at, completed_at) VALUES (?, ?, ?, 'completed', ?, ?)`,
+		uuid.Must(uuid.NewV7()), courseID, studentA, now.Add(-time.Hour), now)
+	env.DB.Exec(`INSERT INTO enrollment_mirror (enrollment_id, course_id, student_id, status, enrolled_at) VALUES (?, ?, ?, 'active', ?)`,
+		uuid.Must(uuid.NewV7()), courseID, studentB, now)
+
+	if err := env.DB.Transaction(func(tx *gorm.DB) error {
+		return analytics.RecomputeCourseStats(ctx, tx, courseID)
+	}); err != nil {
+		t.Fatalf("RecomputeCourseStats: %v", err)
+	}
+
+	stats, err = svc.GetCourseStats(ctx, courseID)
+	if err != nil {
+		t.Fatalf("GetCourseStats after recompute: %v", err)
+	}
+	if stats.TotalEnrollments != 2 || stats.ActiveEnrollments != 1 || stats.Completions != 1 {
+		t.Fatalf("expected 2 total/1 active/1 completed, got %+v", stats)
+	}
+	if stats.AvgCompletionS == nil || *stats.AvgCompletionS <= 0 {
+		t.Fatalf("expected a positive avg_completion_s now that one student has completed, got %+v", stats)
+	}
+}
+
+// TestListDailyEnrollments_ReturnsTimeSeries is the same gap, for FR-5's
+// "New Enrollments Over Time" — IncrementDailyEnrollment has written this
+// table since M0/M1; nothing ever read it back before this.
+func TestListDailyEnrollments_ReturnsTimeSeries(t *testing.T) {
+	env := testenv.Setup(t)
+	ctx := context.Background()
+	svc := analytics.NewService(analytics.NewRepository(env.DB))
+	courseID := uuid.Must(uuid.NewV7())
+
+	empty, err := svc.ListDailyEnrollments(ctx, courseID)
+	if err != nil {
+		t.Fatalf("ListDailyEnrollments before any data: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("expected no rows before any enrollment, got %+v", empty)
+	}
+
+	if err := env.DB.Transaction(func(tx *gorm.DB) error {
+		if err := analytics.IncrementDailyEnrollment(ctx, tx, courseID); err != nil {
+			return err
+		}
+		return analytics.IncrementDailyEnrollment(ctx, tx, courseID)
+	}); err != nil {
+		t.Fatalf("IncrementDailyEnrollment: %v", err)
+	}
+
+	rows, err := svc.ListDailyEnrollments(ctx, courseID)
+	if err != nil {
+		t.Fatalf("ListDailyEnrollments after increments: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected exactly 1 day bucket for two same-day increments, got %+v", rows)
+	}
+	if rows[0].Count != 2 {
+		t.Fatalf("expected today's bucket to count 2, got %d", rows[0].Count)
 	}
 }

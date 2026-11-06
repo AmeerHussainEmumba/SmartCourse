@@ -8,8 +8,13 @@ a working system with data in one command:
 make seed    # go run ./cmd/seed
 ```
 
-Requires `make dev-core` (or any profile including Postgres/Redis) already
-running, and migrations applied (`make migrate-up`).
+Requires `make dev-workflow` (not just `dev-core`) already running, and
+migrations applied (`make migrate-up`) — `Publish` starts a real Temporal
+workflow as of M2 (ADR-0025), and `dev-core` alone doesn't bring Temporal
+up. Retries the publish call itself a few times on a transient
+`temporarily_unavailable` error, since bringing up the whole stack at once
+means this script's own first real Temporal RPC can race the server's own
+startup — see `publishWithRetry` in `main.go`.
 
 ## Why it goes through the service layer, not raw SQL
 

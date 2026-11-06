@@ -21,6 +21,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+	temporalclient "go.temporal.io/sdk/client"
+	temporalworker "go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 	"gorm.io/gorm"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/analytics"
@@ -33,6 +36,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/router"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/progress"
+	"github.com/AmeerHussainEmumba/SmartCourse/internal/workflows"
 )
 
 // Dependencies holds the shared infrastructure clients every service
@@ -54,6 +58,27 @@ func Connect(cfg *config.Config) (*Dependencies, error) {
 		return nil, fmt.Errorf("connect to redis: %w", err)
 	}
 	return &Dependencies{DB: gdb, RDB: rdb}, nil
+}
+
+// ConnectTemporal builds a Temporal client for course-api (to start the
+// publish workflow) and worker (to run it) only — identity-api and
+// analytics-api never call this (ADR-0009: Temporal backs publishing and
+// nothing else). client.NewLazyClient, not client.Dial: Dial eagerly
+// contacts the server and fails if it's unreachable, which would make
+// course-api's boot depend on Temporal for catalogue/detail/CRUD routes
+// that have nothing to do with it. A lazy client defers that connection to
+// the first actual publish, matching ADR-0009's own stated consequence —
+// "Temporal down means publishing unavailable — though nothing else is
+// affected."
+func ConnectTemporal(cfg *config.Config) (temporalclient.Client, error) {
+	c, err := temporalclient.NewLazyClient(temporalclient.Options{
+		HostPort:  cfg.Temporal.HostPort,
+		Namespace: cfg.Temporal.Namespace,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build temporal client: %w", err)
+	}
+	return c, nil
 }
 
 // HealthCheckers returns the dependency checks for /health/ready
@@ -87,10 +112,13 @@ func RegisterIdentityRoutes(r *gin.Engine, deps *Dependencies, cfg *config.Confi
 // writes an enrollment row in (ADR-0012's seat-limit guarantee) — that
 // requires both to run in one process against one connection; splitting
 // them would force that lock into a network call. See ADR-0023.
-func RegisterCourseRoutes(r *gin.Engine, deps *Dependencies, cfg *config.Config) {
+// temporal is passed in explicitly, not read off deps, because it's not a
+// Dependencies field — see ConnectTemporal's doc comment for why
+// identity-api/analytics-api never acquire one.
+func RegisterCourseRoutes(r *gin.Engine, deps *Dependencies, cfg *config.Config, temporal temporalclient.Client) {
 	api := r.Group("/api/v1")
 
-	courseSvc := course.NewService(course.NewRepository(deps.DB))
+	courseSvc := course.NewService(course.NewRepository(deps.DB), deps.RDB, temporal, cfg.Temporal.TaskQueue)
 	course.RegisterRoutes(api, courseSvc, cfg.JWT)
 
 	enrollmentSvc := enrollment.NewService(enrollment.NewRepository(deps.DB))
@@ -133,4 +161,26 @@ func BuildRelay(deps *Dependencies) *relay.Relay {
 		rl.Register(h)
 	}
 	return rl
+}
+
+// BuildPublishWorker wires internal/workflows' PublishCourseWorkflow and its
+// Activities onto a Temporal worker.Worker, polling cfg.Temporal.TaskQueue.
+// Called only by cmd/worker, the same way BuildRelay is — the two are
+// independent (one Temporal, one the in-process outbox relay) and are run
+// as two separate goroutines in cmd/worker/main.go so a Temporal outage
+// never takes the relay down with it (ADR-0009/0025).
+func BuildPublishWorker(deps *Dependencies, cfg *config.Config, temporal temporalclient.Client) temporalworker.Worker {
+	courseSvc := course.NewService(course.NewRepository(deps.DB), deps.RDB, temporal, cfg.Temporal.TaskQueue)
+	activities := workflows.NewActivities(courseSvc)
+
+	w := temporalworker.New(temporal, cfg.Temporal.TaskQueue, temporalworker.Options{})
+	// Registered under course.PublishWorkflowName explicitly, rather than
+	// relying on the default (the Go function's own name) — that's the
+	// same string course.Service.Publish uses to start it by name, which
+	// is how it starts a workflow without importing this package (course
+	// must not import internal/workflows; internal/workflows imports
+	// course for Activities, so the dependency can only run one way).
+	w.RegisterWorkflowWithOptions(workflows.PublishCourseWorkflow, workflow.RegisterOptions{Name: course.PublishWorkflowName})
+	w.RegisterActivity(activities)
+	return w
 }
