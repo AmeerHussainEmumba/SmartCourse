@@ -4,19 +4,20 @@
 # module (and the Temporal SDK) through one shared composition root. See
 # docs/plans/module-split.md.
 #
-# Each rule is: <binary> <forbidden internal modules, comma-separated> <forbid Temporal SDK: yes|no>
+# Each rule is: <binary> <forbidden packages, comma-separated, relative to the
+# module root> <forbid the Temporal SDK: yes|no>
 # Add a line here when a new binary is created. When a binary legitimately
 # starts using another module, change its line in the same PR.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-mod=$(go list -m)
+mod=$(awk '/^module /{print $2; exit}' go.mod)
 
 rules=(
-  "identity-api  course,enrollment,progress,analytics,workflows  yes"
-  "analytics-api identity,course,enrollment,progress,workflows   yes"
-  "course-api    identity,analytics,workflows                    no"
-  "worker        identity                                        no"
+  "identity-api  internal/course,internal/enrollment,internal/progress,internal/analytics,internal/workflows,libs/temporal  yes"
+  "analytics-api internal/identity,internal/course,internal/enrollment,internal/progress,internal/workflows,libs/temporal   yes"
+  "course-api    internal/identity,internal/analytics,internal/workflows                                                    no"
+  "worker        internal/identity                                                                                          no"
 )
 
 fail=0
@@ -24,7 +25,7 @@ for rule in "${rules[@]}"; do
   read -r bin forbidden no_temporal <<<"$rule"
   deps=$(go list -deps "./cmd/$bin")
 
-  pattern="^${mod}/internal/(${forbidden//,/|})\$"
+  pattern="^${mod}/(${forbidden//,/|})\$"
   if [ "$no_temporal" = "yes" ]; then
     pattern="${pattern}|^go\\.temporal\\.io/"
   fi

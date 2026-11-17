@@ -23,7 +23,7 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/course"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/workflows"
-	"github.com/AmeerHussainEmumba/SmartCourse/test/integration/testenv"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 // seedWorkflowInstructor seeds a real instructor row plus its

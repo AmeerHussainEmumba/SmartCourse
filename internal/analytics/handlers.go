@@ -1,5 +1,5 @@
 // Relay handler registrations (RFC §6.5's consumer table, "analytics-
-// aggregator"). Each function has the internal/platform/relay.HandlerFunc
+// aggregator"). Each function has the libs/relay.HandlerFunc
 // signature: it receives the transaction the idempotency marker will
 // commit in, so its effect and "I've processed this" become atomic
 // together (RFC §6.6).
@@ -20,7 +20,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/relay"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 )
 
 const consumerName = "analytics-aggregator"

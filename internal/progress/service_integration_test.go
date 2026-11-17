@@ -13,9 +13,9 @@ import (
 
 	"github.com/google/uuid"
 
-	apperrors "github.com/AmeerHussainEmumba/SmartCourse/internal/platform/errors"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/progress"
-	"github.com/AmeerHussainEmumba/SmartCourse/test/integration/testenv"
+	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 // seedEnrollmentWithTwoLessons builds a published course with two lessons

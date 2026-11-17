@@ -3,7 +3,7 @@
 # through a consumer-declared interface; cross-module writes go through
 # events. A violation here fails the build, not review vigilance.
 #
-# internal/platform/** is the shared kernel and is exempt — every module may
+# libs/** is the shared kernel and is exempt — every module may
 # import it. Add a new module's rule here when it's created; an unlisted
 # module is NOT protected by this file.
 

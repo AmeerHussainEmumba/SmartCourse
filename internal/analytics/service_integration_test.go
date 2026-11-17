@@ -20,7 +20,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/analytics"
-	"github.com/AmeerHussainEmumba/SmartCourse/test/integration/testenv"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 func TestGetPlatformSnapshot_ReflectsRecompute(t *testing.T) {

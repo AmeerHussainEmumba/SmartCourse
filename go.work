@@ -1,0 +1,19 @@
+go 1.26.5
+
+use (
+	.
+	./libs/auth
+	./libs/cache
+	./libs/config
+	./libs/db
+	./libs/errors
+	./libs/httpx
+	./libs/infra
+	./libs/logging
+	./libs/outbox
+	./libs/ratelimit
+	./libs/relay
+	./libs/router
+	./libs/temporal
+	./libs/testenv
+)

@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 
-	apperrors "github.com/AmeerHussainEmumba/SmartCourse/internal/platform/errors"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/outbox"
+	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 )
 
 var (

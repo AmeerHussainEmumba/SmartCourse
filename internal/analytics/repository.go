@@ -1,6 +1,6 @@
 // Package analytics owns the aggregate/counter tables (RFC §4.3, §9) and,
 // for now, is the first real consumer registered with
-// internal/platform/relay — see README.md for why this module exists this
+// libs/relay — see README.md for why this module exists this
 // early relative to the original M3 plan.
 //
 // Schema-per-service (ADR-0024): this module's tables live in the

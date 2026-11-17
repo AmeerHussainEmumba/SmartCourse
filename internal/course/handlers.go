@@ -1,6 +1,6 @@
 // Relay handler registrations (RFC §6.5's consumer table). Same shape as
 // internal/analytics/handlers.go and internal/enrollment/handlers.go: each
-// function has the internal/platform/relay.HandlerFunc signature, receiving
+// function has the libs/relay.HandlerFunc signature, receiving
 // the transaction the idempotency marker will commit in, so the effect and
 // "I've processed this" become atomic together (RFC §6.6).
 //
@@ -19,7 +19,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/relay"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 )
 
 const consumerName = "course-instructor-mirror"

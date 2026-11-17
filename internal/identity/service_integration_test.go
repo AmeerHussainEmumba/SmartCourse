@@ -17,10 +17,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/identity"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/auth"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
-	apperrors "github.com/AmeerHussainEmumba/SmartCourse/internal/platform/errors"
-	"github.com/AmeerHussainEmumba/SmartCourse/test/integration/testenv"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 func newTestService(t *testing.T) (*identity.Service, *testenv.Env) {

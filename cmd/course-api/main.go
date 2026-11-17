@@ -19,11 +19,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/infra"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/logging"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/router"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/temporal"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/logging"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/router"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/temporal"
 )
 
 func main() {

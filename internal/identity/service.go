@@ -16,11 +16,11 @@ import (
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/auth"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
-	apperrors "github.com/AmeerHussainEmumba/SmartCourse/internal/platform/errors"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/outbox"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/ratelimit"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/ratelimit"
 )
 
 var errInvalidCredentials = apperrors.New(401, "invalid_credentials", "Invalid email or password.")

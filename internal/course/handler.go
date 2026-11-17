@@ -9,10 +9,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	identityauth "github.com/AmeerHussainEmumba/SmartCourse/internal/platform/auth"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
-	apperrors "github.com/AmeerHussainEmumba/SmartCourse/internal/platform/errors"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/httpx"
+	identityauth "github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/httpx"
 )
 
 type Handler struct{ svc *Service }

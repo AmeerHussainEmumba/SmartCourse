@@ -6,9 +6,9 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/course"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/enrollment"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/progress"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 )
 
 // registerRoutes wires internal/course, internal/enrollment, and
@@ -19,7 +19,7 @@ import (
 // one connection; splitting them would force that lock into a network call.
 // See ADR-0023.
 // temporal is passed in explicitly, not read off deps — see
-// internal/platform/temporal for why identity-api/analytics-api never
+// libs/temporal for why identity-api/analytics-api never
 // acquire one.
 func registerRoutes(r *gin.Engine, deps *infra.Dependencies, cfg *config.Config, temporal temporalclient.Client) {
 	api := r.Group("/api/v1")

@@ -8,10 +8,10 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/analytics"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/course"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/enrollment"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/infra"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/workflows"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 )
 
 // buildRelay wires every module's relay handlers into one Relay instance.

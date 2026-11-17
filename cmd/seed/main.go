@@ -26,13 +26,13 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/course"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/enrollment"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/identity"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/cache"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/db"
-	apperrors "github.com/AmeerHussainEmumba/SmartCourse/internal/platform/errors"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/logging"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/temporal"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/progress"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/cache"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/db"
+	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/logging"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/temporal"
 )
 
 // seedPassword is shared by every account this script creates. It's printed

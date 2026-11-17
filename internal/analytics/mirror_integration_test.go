@@ -19,7 +19,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/analytics"
-	"github.com/AmeerHussainEmumba/SmartCourse/test/integration/testenv"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 func TestRecomputeCourseStats_ReflectsEnrollmentMirror(t *testing.T) {
@@ -98,7 +98,7 @@ func TestRecomputeCourseStats_ReflectsEnrollmentMirror(t *testing.T) {
 }
 
 // TestUpsertUserRoleMirror_IgnoresOutOfOrderDelivery is a regression test:
-// the relay's worker pool (default 4 workers, internal/platform/relay) has
+// the relay's worker pool (default 4 workers, libs/relay) has
 // no per-aggregate ordering, so a user's identity.user_registered and a
 // later identity.user_role_changed can have their handlers finish in
 // either order. Without last_event_id's ordering guard, whichever commits

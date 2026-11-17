@@ -25,7 +25,7 @@ Enrollments, seat limits, and prerequisites (RFC §4.3, §8.1). The module whose
 - **`TestHandleCourseArchived_WithdrawsActiveEnrollments`** (`handlers_integration_test.go`) — end to end through the real outbox → relay → handler path, not a direct call to the unexported handler: writes `course.course_archived`, runs a real `relay.Relay` with `enrollment.Handlers()` registered, and asserts every active enrollment becomes `withdrawn` and `enrollment_count` reaches 0 — while a student withdrawn *before* the archive keeps their original `withdrawn_at`, proving the handler only touches what's still active rather than stamping every row indiscriminately.
 - **`TestGetByID_ReturnsOwnEnrollment_RejectsOthers`** / **`TestListMine_ReturnsOnlyCallersOwnEnrollments`** — the two reads: `GetByID`'s ownership check actually rejects a different student's request (not just that it happens to work for the owner), and `ListMine` returns exactly the caller's own enrollments across more than one course, never another student's.
 
-All in `service_integration_test.go` / `handlers_integration_test.go` (build tag `integration`), against real Postgres via `test/integration/testenv`. Run: `make test-integration`. Full index: `docs/guides/testing.md`.
+All in `service_integration_test.go` / `handlers_integration_test.go` (build tag `integration`), against real Postgres via `libs/testenv`. Run: `make test-integration`. Full index: `docs/guides/testing.md`.
 
 ### HTTP-level tests (`enrollment_http_test.go`, build tag `integration`)
 
