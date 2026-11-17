@@ -1050,7 +1050,7 @@ On unrecoverable failure: mark the version `publish_failed`, record the error, e
 
 `POST /courses/{id}/publish` starts the workflow and returns `202 Accepted` with the workflow ID. The client polls `GET /courses/{id}/publish-status`. Publishing takes seconds; holding an HTTP connection open for it would be a poor contract and a resource leak under load.
 
-The workflow ID is deterministic — `publish-{course_id}-{version_number}` — so a duplicate publish request attaches to the running workflow rather than starting a second one. Idempotency at the orchestration layer, complementing the database constraint in §5.3.2.
+The workflow ID is deterministic — `publish-{course_id}-{version_number}`. The draft version is **claimed before the workflow starts**: one conditional `UPDATE` moves it to `publishing` (ADR-0028), so a duplicate publish request while one is running gets `409 publish_in_progress` rather than attaching to the running workflow, and the workflow's own `publish_failed`/`ready` writes can never be overwritten by a late `publishing` write. If the workflow cannot be started the claim is released; a claim older than 15 minutes is treated as abandoned and may be reclaimed. This complements the database constraint in §5.3.2.
 
 ---
 

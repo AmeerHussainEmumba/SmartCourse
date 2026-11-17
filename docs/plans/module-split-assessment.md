@@ -104,10 +104,13 @@ What this work did **not** do, and the supervisor may expect: per-service event 
 | Live stack on a freshly reset database from the final images: migrations including the new analytics one, full seed, health, security headers, uniform register 202, login, `/me`, 413 on a 2 MiB body, spoofed `X-Forwarded-For` now rate-limited, non-owner 404, analytics rules (student: platform totals and enrolled courses only), worker log quiet after startup | pass |
 | Tests | 314 test functions now (125 before the adversarial phase) plus 4 fuzz targets; 48 new test files |
 | Bug reproducers | all 46 now pass and run as normal regression tests; no `bugrepro`-tagged test remains |
-| Defects found by the adversarial phase | **36 found, 36 fixed** (`docs/plans/module-split-findings.md`, with how each was fixed and what stays imperfect) |
-| Not verified | CI on a GitHub runner; a real Temporal server under fault; a true `kill -9` of the relay; dependency CVEs; a second adversarial pass after the fixes |
+| Defects found | **38 found, 38 fixed** (`docs/plans/module-split-findings.md`): 36 by the adversarial testers, one (F-37, publish state ordering and no 409) reported by the supervisor and **missed by our scan**, and one (F-38, instructors locked out of `course-api` after a Redis restart) **introduced by our own F-11 fix** and found only in live verification |
+| Real Temporal, live | the publish claim (202 then 409 on a duplicate; a fast-failing workflow's `publish_failed` is not overwritten; retry after fixing succeeds) was exercised against the real Temporal server in the compose stack |
+| Not verified | CI on a GitHub runner; Temporal under fault injection (worker killed mid-publish); a true `kill -9` of the relay; dependency CVEs; a second adversarial pass after the fixes |
 
-Two things went wrong and were caught while verifying, which is worth recording: two tests asserted pre-fix behaviour once the real request-body cap applied (a 1 MiB token and a 1 MiB password now get 413), and a relay test checked too early after the new retry cooldown. Both were test assumptions, not product defects, and were corrected without weakening what they assert.
+**Two defects were missed by the scan and are worth being straight about.** F-37 was missed because the scan's publish test asserted the old attach-and-202 behaviour instead of questioning it. F-38 was introduced by fixing F-11 and F-03 separately: each fix was correct alone, and the tests populated Redis themselves, so only a live restart of the stack exposed the lockout. A second adversarial pass after the next feature should include restarting dependencies, not only attacking inputs.
+
+Three things went wrong and were caught while verifying, which is worth recording: two tests asserted pre-fix behaviour once the real request-body cap applied (a 1 MiB token and a 1 MiB password now get 413), and a relay test checked too early after the new retry cooldown. Both were test assumptions, not product defects, and were corrected without weakening what they assert.
 
 ## F. Rating
 

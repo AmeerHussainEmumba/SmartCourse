@@ -33,10 +33,18 @@ func isUniqueViolation(err error) bool {
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
+// publishClaimStaleAfter is how long a `publishing` claim is trusted before
+// another Publish may reclaim it. The workflow's activities are capped at 30s
+// each with at most 5 attempts, so a live publish finishes in minutes; this
+// only matters when the process that took the claim died before the workflow
+// ran to completion.
+const publishClaimStaleAfter = 15 * time.Minute
+
 var (
 	errSlugFormat      = apperrors.New(400, "invalid_slug", "Slug must be lowercase letters, numbers, and hyphens only.")
 	errCourseArchived  = apperrors.New(409, "course_archived", "This course is archived and cannot be published.")
 	errNoDraft         = apperrors.New(409, "no_draft", "This course has no draft version to edit.")
+	errPublishRunning  = apperrors.New(409, "publish_in_progress", "A publish is already running for this course. Poll GET /courses/{id}/publish-status for the result.")
 	errContentTooLarge = apperrors.New(400, "content_too_large", "Lesson content exceeds the maximum allowed size.")
 )
 
@@ -462,13 +470,19 @@ func (s *Service) DeleteLesson(ctx context.Context, courseID, instructorID, less
 
 // Publish starts the publish workflow and returns immediately (RFC §7.5:
 // 202, not 200, as of M2) — it does not wait for ValidateMetadata or
-// anything else to run. The workflow ID is deterministic
-// (publish-{course_id}-{version_number}), so a duplicate publish request
-// while one is already running attaches to it rather than starting a
-// second one (client.ExecuteWorkflow's default WorkflowIDReusePolicy
-// returns the existing run's handle instead of erroring) — idempotency at
-// the orchestration layer, on top of idx_one_draft_per_course's
-// storage-layer guard against two different drafts racing.
+// anything else to run.
+//
+// The version is claimed first: one conditional UPDATE moves it from
+// draft/publish_failed to `publishing` (ClaimPublish) BEFORE the workflow is
+// started. A second publish while that claim is live gets 409
+// publish_in_progress rather than attaching to the running workflow, and the
+// workflow's own state writes (publish_failed, ready) can never be overwritten
+// by a late "publishing" write. If the workflow cannot be started the claim is
+// released (ReleasePublish) so the course is not left wedged; a claim older
+// than publishClaimStaleAfter is treated as abandoned and may be reclaimed.
+// The workflow ID stays deterministic (publish-{course_id}-{version_number},
+// RFC §7.5), on top of idx_one_draft_per_course's storage-layer guard against
+// two different drafts racing. ADR-0028 records the change.
 func (s *Service) Publish(ctx context.Context, courseID, instructorID uuid.UUID) (*PublishAcceptedResponse, error) {
 	c, err := s.requireOwner(ctx, courseID, instructorID)
 	if err != nil {
@@ -486,6 +500,20 @@ func (s *Service) Publish(ctx context.Context, courseID, instructorID uuid.UUID)
 	}
 
 	workflowID := fmt.Sprintf("publish-%s-%d", courseID, draft.VersionNumber)
+
+	// Claim the version BEFORE starting the workflow. One conditional UPDATE
+	// moves it to `publishing`; if another publish already holds it we say so
+	// (409) instead of attaching to the running workflow. Writing the state
+	// first also means the workflow's own transitions (publish_failed, ready)
+	// can never be overwritten by a late "publishing" write.
+	claim, claimed, err := s.repo.ClaimPublish(ctx, draft.ID, workflowID, publishClaimStaleAfter)
+	if err != nil {
+		return nil, apperrors.ErrInternal.Wrap(err)
+	}
+	if !claimed {
+		return nil, errPublishRunning
+	}
+
 	_, err = s.temporal.ExecuteWorkflow(ctx, temporalclient.StartWorkflowOptions{
 		ID:        workflowID,
 		TaskQueue: s.taskQueue,
@@ -493,11 +521,16 @@ func (s *Service) Publish(ctx context.Context, courseID, instructorID uuid.UUID)
 		CourseID: courseID, VersionID: draft.ID, OldVersionID: c.PublishedVersionID, Title: draft.Title,
 	})
 	if err != nil {
+		// The workflow did not start, so nothing will ever move this version
+		// out of `publishing`: put it back, or the course would be wedged
+		// until the claim goes stale. Use a fresh context, since ctx may be
+		// the very thing that failed (a cancelled request).
+		relCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if relErr := s.repo.ReleasePublish(relCtx, draft.ID, workflowID, claim); relErr != nil {
+			return nil, apperrors.ErrUnavailable.Wrap(fmt.Errorf("start publish workflow: %w (and releasing the publish claim failed: %v)", err, relErr))
+		}
 		return nil, apperrors.ErrUnavailable.Wrap(fmt.Errorf("start publish workflow: %w", err))
-	}
-
-	if err := s.repo.SetVersionPublishing(ctx, draft.ID, workflowID); err != nil {
-		return nil, apperrors.ErrInternal.Wrap(err)
 	}
 	return &PublishAcceptedResponse{WorkflowID: workflowID, State: string(StatePublishing)}, nil
 }

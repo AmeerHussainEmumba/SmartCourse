@@ -56,9 +56,10 @@ The distinction matters when something changes. Six months from now, a contribut
 | [0022](#adr-0022--separate-api-and-worker-binaries-one-shared-codebase-and-database) | Separate API and worker binaries, one shared codebase and database | Accepted — extended by ADR-0026 | §4.2 |
 | [0023](#adr-0023--split-cmdapi-into-identity-api-course-api-and-analytics-api) | Split cmd/api into identity-api, course-api, and analytics-api | Accepted — extended by ADR-0026 | §4.2 |
 | [0024](#adr-0024--schema-per-service-within-one-shared-database) | Schema-per-service within one shared database | Accepted — deferred `go.mod` item resolved by ADR-0026 | §5.3 |
-| [0025](#adr-0025--course-publishing-as-a-temporal-workflow-m2) | Course publishing as a Temporal workflow (M2) | Accepted | §7.4 |
+| [0025](#adr-0025--course-publishing-as-a-temporal-workflow-m2) | Course publishing as a Temporal workflow (M2) | Accepted — amended by ADR-0028 | §7.4 |
 | [0026](#adr-0026--one-go-module-per-service-and-per-shared-library) | One Go module per service and per shared library | Accepted | §4.1, §4.2, §4.4 |
 | [0027](#adr-0027--the-relay-holds-each-rows-claim-through-handling) | The relay holds each row's claim through handling | Accepted | §6.3 |
+| [0028](#adr-0028--publish-claims-the-version-before-starting-the-workflow) | Publish claims the version before starting the workflow | Accepted | §7.5 |
 
 ---
 
@@ -994,7 +995,7 @@ If the deferred `go.mod`/`libs/common` split (tracked for a later record) turns 
 
 ## ADR-0025 — Course publishing as a Temporal workflow (M2)
 
-**Status:** Accepted · **Date:** 2026-11-05 · **RFC:** §7.4, §21
+**Status:** Accepted (duplicate-request handling and state-write ordering amended by ADR-0028) · **Date:** 2026-11-05 · **RFC:** §7.4, §21
 
 ### Context
 
@@ -1156,6 +1157,50 @@ ADR-0006 and ADR-0021 both rely on `FOR UPDATE SKIP LOCKED` so that several rela
 ### Reversal trigger
 
 If handlers become slow enough that held transactions hurt (long idle-in-transaction sessions, connection pressure), move to a lease column (option B). In M3 the poll-and-dispatch loop is replaced by Kafka consumption, where per-consumer offsets make this claim mechanism unnecessary.
+
+---
+
+## ADR-0028 — Publish claims the version before starting the workflow
+
+**Status:** Accepted · **Date:** 2026-11-17 · **RFC:** §7.5 · **Amends:** ADR-0025 (the duplicate-request and state-write ordering only)
+
+### Context
+
+ADR-0025 made `POST /courses/{id}/publish` start a Temporal workflow and return 202, and said a duplicate request "attaches to the running workflow" because the workflow ID is deterministic. The implementation started the workflow first and wrote the `publishing` state afterwards with an unconditional `UPDATE`. The supervisor's review of the Week 2 work flagged the ordering: set the state before starting the workflow, and return 409 if a publish is already running. Checking the code showed the ordering was worse than a style point:
+
+- **No way to tell a duplicate from a fresh publish.** A second request while one was running attached to it and also returned 202, so the client could not know it had not started anything.
+- **A state-overwrite race.** A workflow that fails fast (for example `ValidateMetadata`) writes `publish_failed` from inside an activity, possibly before `Publish` has returned. The late unconditional write then set the version back to `publishing` and cleared `publish_error`, leaving it stuck "publishing" with a workflow that had already finished. `TestPublishClaim_FastFailingWorkflow_FailureNotOverwritten` reproduces it against the old code.
+- **A failed write after a successful start** left a running workflow with a version that never said so.
+
+The adversarial test phase did not catch this: its publish test asserted that 20 concurrent calls share one workflow ID, which encoded the attach-and-202 behaviour instead of questioning it.
+
+### Options
+
+**A. Keep attach-and-202, fix only the ordering.** Removes the overwrite race but leaves duplicates indistinguishable from fresh publishes. Rejected: it ignores the 409 the supervisor asked for.
+
+**B. Claim in the database, then start the workflow (chosen).** One conditional `UPDATE ... RETURNING` moves the version to `publishing` and records the workflow ID and claim time; a duplicate gets 409; a failed workflow start releases the claim.
+
+**C. Ask Temporal whether a run is live** before every publish. Truthful about the workflow, but couples every publish (and the 409 decision) to Temporal's availability, which ADR-0009 deliberately avoids.
+
+### Decision
+
+**Option B.** `Repository.ClaimPublish` runs a single `UPDATE` (guarded by a `SELECT ... FOR UPDATE` in a CTE) that succeeds only from `draft` or `publish_failed`, or from `publishing` when the existing claim is stale. If it claims nothing, `Publish` returns **409 `publish_in_progress`**. Only then does it start the workflow, and it never writes the state again, so the workflow's own transitions cannot be overwritten. If the start fails, `ReleasePublish` restores the previous state, workflow ID and error (and only if this claim is still the current one), and the request fails with 503 as before, so a retry works.
+
+To stop a crash between claiming and starting from wedging a course forever, a `publishing` claim older than 15 minutes (`publishClaimStaleAfter`) may be reclaimed. The workflow's activities are capped at 30 seconds each with at most five attempts, so a live publish finishes in minutes. This needs one column: migration `migrations/course/000006_publish_started_at` adds `course_versions.publish_started_at` (nullable; rows from before the migration have none and are treated as reclaimable).
+
+### Consequences
+
+**Positive.** A client can tell a duplicate (409) from a started publish (202). The fast-failing-workflow overwrite is impossible. A failed start no longer leaves the course stuck. No dependency on Temporal for the 409 decision.
+
+**Negative.**
+- **API contract change:** a duplicate publish is now 409, not 202. Clients that retried blindly on 202 must handle 409 (poll `publish-status` instead).
+- **One migration** and one more column.
+- **The 15-minute lease is a heuristic.** If a workflow genuinely ran longer than that, a second publish could reclaim it and start a second workflow with the same ID, which Temporal would reject or attach to. Activity timeouts make this unlikely, but it is a number someone chose.
+- **Process death after claiming and before starting** leaves the version `publishing` until the lease expires, so that course cannot be republished for up to 15 minutes.
+
+### Reversal trigger
+
+If publishes legitimately approach the lease (longer activities, queueing behind a busy worker pool) or the stuck-for-15-minutes window proves painful, replace the lease with a liveness check against Temporal (option C) used only when the claim is old, not on the hot path.
 
 ---
 

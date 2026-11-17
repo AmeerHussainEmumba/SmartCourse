@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Login and refresh now seed the user's current `token_version` in Redis when it is missing (`SET NX`, never overwriting a newer value). Fixes instructors whose version is above 1 being rejected by `course-api` with `token_stale`, even on a freshly issued token, after a Redis restart (F-38).
+
 - `POST /auth/register` now answers 202 with `{"message": ...}` and no session, identically for new and existing emails (F-32); sign in via `/auth/login`. `Service.Register` (direct callers, e.g. tools/seed) is unchanged; the route uses the new `Service.RegisterPublic`.
 - Login: a suspended/deleted account answers 401 `invalid_credentials` like a wrong password (F-32); only failed attempts count toward limits: 5/min per account+IP and 20/min per account across IPs (F-31); dummy hash uses configured Argon2 (F-30).
 - `/me` and `/admin/users/{id}/role` use `RequireFreshPrivilegeWithSource` (Postgres fallback on Redis miss) (F-03, F-11).

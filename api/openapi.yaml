@@ -293,15 +293,18 @@ paths:
       summary: >
         Start publishing the draft (instructor, owner only). Async as of M2
         (ADR-0025): starts services/course/workflows.PublishCourseWorkflow and
-        returns immediately. A duplicate call while one is already running
-        attaches to it (same workflow ID) rather than starting a second
-        one. Poll GET /courses/{id}/publish-status for the result.
+        returns immediately. The draft is claimed (state publishing) before
+        the workflow starts, so a duplicate call while a publish is running
+        gets 409 publish_in_progress instead of attaching to it (ADR-0028).
+        If the workflow cannot be started (503) the claim is released and the
+        call can simply be retried. Poll GET /courses/{id}/publish-status for
+        the result.
       security: [{ bearerAuth: [] }]
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         '202': { description: Publish workflow started, content: { application/json: { schema: { $ref: '#/components/schemas/PublishAccepted' } } } }
         '404': { description: "Course not found, or not owned by the caller", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '409': { description: "No draft to publish (no_draft), or the course is archived (course_archived)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: "No draft to publish (no_draft), the course is archived (course_archived), or a publish is already running for it (publish_in_progress)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /courses/{id}/publish-status:
     get:

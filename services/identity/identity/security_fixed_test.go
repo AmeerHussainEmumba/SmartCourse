@@ -8,6 +8,7 @@ package identity_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -16,6 +17,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/AmeerHussainEmumba/SmartCourse/services/identity/identity"
 )
 
 // service.go documents the account limit as capping FAILED logins. It used to
@@ -415,5 +418,58 @@ func TestFix_RefreshLogoutConfirm_PerIPLimits(t *testing.T) {
 		if !limited {
 			t.Errorf("%s: no 429 after %d requests from one IP", tc.name, tc.burst+5)
 		}
+	}
+}
+
+// After a Redis flush, a user whose token_version is above 1 must not be locked
+// out of services that cannot read identity.users (course-api). Login and
+// refresh therefore seed the version in Redis when it is missing. Without this,
+// the cached version read as 1 and even a freshly issued token (version 2) was
+// rejected as stale until a role change happened to rewrite the key.
+func TestFix_LoginAndRefreshAfterRedisFlush_SeedTokenVersion(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	email := uniq("seedtv")
+	reg := h.mustRegister(email, "correct-horse-battery")
+	// a user whose version has moved on (promoted/demoted/suspended-then-restored)
+	h.env.DB.Exec(`UPDATE users SET token_version = 3 WHERE id = ?`, reg.User.ID)
+	key := "user:tv:" + reg.User.ID
+
+	get := func() string { v, _ := h.env.RDB.Get(ctx, key).Result(); return v }
+
+	if err := h.env.RDB.FlushAll(ctx).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if got := get(); got != "" {
+		t.Fatalf("precondition: key should be gone after flush, got %q", got)
+	}
+
+	// login repopulates
+	rec := h.login(email, "correct-horse-battery", withIP("203.0.113.120"))
+	if rec.Code != 200 {
+		t.Fatalf("login: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := get(); got != "3" {
+		t.Fatalf("login did not seed the token version: redis=%q, want 3", got)
+	}
+
+	// refresh repopulates too
+	var auth identity.AuthResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &auth)
+	h.env.RDB.FlushAll(ctx)
+	if rr := h.refresh(auth.RefreshToken); rr.Code != 200 {
+		t.Fatalf("refresh: %d %s", rr.Code, rr.Body.String())
+	}
+	if got := get(); got != "3" {
+		t.Fatalf("refresh did not seed the token version: redis=%q, want 3", got)
+	}
+
+	// and it never overwrites a newer value written by a role change
+	h.env.RDB.Set(ctx, key, 7, 0)
+	if rr := h.login(email, "correct-horse-battery", withIP("203.0.113.121")); rr.Code != 200 {
+		t.Fatalf("login: %d", rr.Code)
+	}
+	if got := get(); got != "7" {
+		t.Fatalf("seeding overwrote a newer cached version: redis=%q, want 7", got)
 	}
 }

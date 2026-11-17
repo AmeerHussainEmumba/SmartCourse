@@ -14,7 +14,7 @@ Two separate testing sessions, one on behaviour and concurrency and one on secur
 - **Verification:** the full default suite passes with all the new tests merged. Reproducers live behind the build tag `bugrepro` and **fail today by design**; run one with `cd services/course && go test -tags='integration bugrepro' -run <Name> ./enrollment/`. Three of the reproducers (F-01, F-06, F-08) were re-run independently by the lead and failed with exactly the described symptom; the rest are the testers' reports.
 - **F-01 was found independently by both testers** (the behaviour tester and the security tester reached it from different directions), which raises confidence in it.
 - **Reachability caveat:** no production code creates a second course version today (only `CreateCourse` creates a version), so findings that need a republish (F-07, and the republish halves of F-08 and F-20) are reachable only through direct SQL until a republish feature exists. They are latent defects in code that will matter once republish lands. F-08's other half (a failed first publish leaving the course searchable) is reachable today.
-- 36 open findings: 3 high, 16 medium, 2 low-medium, 14 low, 1 informational. Two further issues the testers found in this repository's own guard scripts were fixed (listed at the end).
+- 36 open findings at the time of writing: 3 high, 16 medium, 2 low-medium, 14 low, 1 informational. A 37th (F-37, below) was reported afterwards by the supervisor; all 37 are now fixed. Two further issues the testers found in this repository's own guard scripts were fixed (listed at the end).
 
 ## High
 
@@ -150,3 +150,30 @@ Tests that pinned the old behaviour were updated, with the reason recorded in th
 ### Still open, by design
 
 Instructor ownership of analytics (F-18), argon2 concurrency (F-26), a dead-letter store (F-28), and the follow-ups noted above. None blocks the findings being closed; each is listed so it is not forgotten.
+
+## Reported by the supervisor after the scan (2026-11-17)
+
+The supervisor's Week 2 review raised two points: set the publishing state before starting the workflow and return 409 if a publish is already running, and withdraw can still double-decrement the seat count. Whether the QA scan had already covered each was checked against the code, not assumed.
+
+| Point | Covered by the scan? | Status |
+|---|---|---|
+| **Withdraw can double-decrement the seat count** | **Yes: F-01**, found independently by both testers. The review most likely observed the pre-fix Week 2 code | Fixed. Re-verified on the current code: `Withdraw` decrements only when its guarded `UPDATE` changed a row, under the course row lock; the course-archive handler, the only other decrement, locks the same row and decrements by rows actually changed. The double-withdraw, churn and archive-race tests pass three times in a row with `-race` |
+| **Set the publishing state before starting the workflow; 409 if a publish is already running** | **No.** Not in the register. The scan's publish test asserted that 20 concurrent calls share one workflow ID, which encoded the old attach-and-202 behaviour instead of questioning it | **F-37, fixed (ADR-0028).** See below |
+
+### F-37 — publish wrote its state after starting the workflow, and never refused a duplicate (medium)
+
+- **Where:** `services/course/course/service.go` (`Publish`) and `repository.go` (`SetVersionPublishing`, now removed).
+- **What was wrong:** the workflow was started first and the `publishing` state written afterwards with an unconditional `UPDATE`. (1) A second publish while one was running attached to the running workflow and also returned 202, so a client could not tell a duplicate from a fresh publish. (2) A workflow that failed fast wrote `publish_failed` from inside an activity, and the late `publishing` write then overwrote it and cleared the error, leaving the version stuck "publishing" with a finished workflow. (3) A failed state write after a successful start left a running workflow with no record of it.
+- **Fix:** `Publish` now claims the version with one conditional `UPDATE` (`ClaimPublish`) before starting the workflow; a duplicate gets **409 `publish_in_progress`**; a failed workflow start releases the claim and restores the previous state and error; a claim older than 15 minutes is treated as abandoned and may be reclaimed. New migration `migrations/course/000006_publish_started_at` (round-trip checked up, down, up).
+- **Tests:** seven new tests in `publish_claim_integration_test.go` and `TestAdvPublish_ConcurrentPublishRequests_OneWinsRestGet409` (the old test, rewritten: exactly one of 20 concurrent calls wins, 19 get 409). Run against the old code the duplicate and fast-failing tests fail (`ok=20 conflict=0`; state overwritten to `publishing` with the error cleared), so they do detect the defect.
+- **Contract change:** a duplicate `POST /courses/{id}/publish` is now 409, not 202.
+- **Trade-offs:** the 15-minute lease is a chosen number; a process that dies between claiming and starting blocks that course's publish for up to 15 minutes. ADR-0028 records both and the trigger for replacing the lease with a Temporal liveness check.
+
+### F-38 — instructors locked out of `course-api` after a Redis restart (caused by our own fix; found in live verification)
+
+- **Found:** while smoke-testing F-37 against the real stack. After the compose stack was recreated (empty Redis, persistent Postgres), every instructor call to `course-api` returned `401 token_stale`, **including with a token issued seconds earlier**. The token's version (2) matched the database (2).
+- **Cause:** a cross-effect of two fixes. F-11 put `RequireFreshPrivilege` on all instructor write routes. That variant has no durable source (`course-api` cannot read `identity.users` under ADR-0024), so on a Redis miss it assumes version 1 and rejects any token with a higher version. F-03 repopulates Redis from Postgres only on identity's own routes. Nothing repopulated it at login, so any user whose version is above 1 (anyone ever promoted, demoted or suspended-then-restored) stayed locked out of every course write after a Redis flush, until a role change happened to rewrite the key.
+- **Why the tests missed it:** the course and security tests populate Redis themselves, and the live checks earlier in the session ran on a stack whose Redis still held the keys.
+- **Fix:** identity now seeds the user's current token version in Redis at login and at refresh, with `SET NX`, so it can never overwrite a newer value written by a role change; it is best effort and cannot fail a login. After a flush, a user holding an old token gets one `token_stale` and a re-login restores access. `course-api` stays strict (a revoked token is still refused whenever Redis holds the current version). The tempting alternative, trusting the token on a miss, was rejected: it would let a revoked token through whenever Redis is empty, which is exactly the hole F-03 closed.
+- **Test:** `TestFix_LoginAndRefreshAfterRedisFlush_SeedTokenVersion`; it fails without the fix (`redis="", want 3`).
+- **Still imperfect:** between a Redis flush and a user's next login, their existing instructor token is refused on `course-api` writes (one `401 token_stale`, then re-login). A durable version source for `course-api`, for example a `token_version` column on `instructor_mirror` fed by identity events, would remove that window; it is a larger change and is not done.

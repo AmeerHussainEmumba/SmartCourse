@@ -147,15 +147,70 @@ func (r *Repository) PromoteVersion(ctx context.Context, courseID, newVersionID 
 	return nil
 }
 
-// SetVersionPublishing records that a publish workflow has started —
-// transitions the draft to `publishing` and stores its Temporal workflow
-// ID, so GetPublishStatus (and idx_one_draft_per_course, already in place
-// since M0) both have something real to read. Called once, right after
-// Service.Publish starts the workflow; never from inside the workflow
-// itself.
-func (r *Repository) SetVersionPublishing(ctx context.Context, id uuid.UUID, workflowID string) error {
-	return r.db.WithContext(ctx).Model(&CourseVersion{}).Where("id = ?", id).
-		Updates(map[string]any{"state": StatePublishing, "workflow_id": workflowID, "publish_error": nil}).Error
+// PublishClaim is what ClaimPublish took the version from, so a failed
+// workflow start can put it back exactly as it was.
+type PublishClaim struct {
+	PrevState      VersionState
+	PrevWorkflowID *string
+	PrevError      *string
+}
+
+// ClaimPublish atomically moves a version to `publishing` and records its
+// workflow ID and claim time, in ONE conditional UPDATE that runs before the
+// Temporal workflow is started. It returns claimed=false when another publish
+// already holds the version, which Service.Publish turns into a 409.
+//
+// A version can be claimed from `draft` or `publish_failed` (a retry), or from
+// `publishing` only when that earlier claim is older than staleAfter (or has
+// no timestamp), i.e. the process that took it died before the workflow ran
+// to completion. Doing this before the workflow starts, and never again after,
+// is what keeps a fast-failing workflow's own `publish_failed` write from being
+// overwritten by a late "publishing" write.
+func (r *Repository) ClaimPublish(ctx context.Context, id uuid.UUID, workflowID string, staleAfter time.Duration) (PublishClaim, bool, error) {
+	var prevState string
+	var prevWorkflow, prevError sql.NullString
+	err := r.db.WithContext(ctx).Raw(`
+		WITH prev AS (
+			SELECT id, state, workflow_id, publish_error, publish_started_at
+			FROM course_versions WHERE id = ? FOR UPDATE
+		)
+		UPDATE course_versions v
+		SET state = 'publishing', workflow_id = ?, publish_error = NULL, publish_started_at = now()
+		FROM prev
+		WHERE v.id = prev.id
+		  AND (prev.state IN ('draft', 'publish_failed')
+		       OR (prev.state = 'publishing'
+		           AND (prev.publish_started_at IS NULL
+		                OR prev.publish_started_at < now() - make_interval(secs => ?))))
+		RETURNING prev.state::text, prev.workflow_id, prev.publish_error`,
+		id, workflowID, staleAfter.Seconds()).Row().Scan(&prevState, &prevWorkflow, &prevError)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PublishClaim{}, false, nil
+	}
+	if err != nil {
+		return PublishClaim{}, false, err
+	}
+	c := PublishClaim{PrevState: VersionState(prevState)}
+	if prevWorkflow.Valid {
+		c.PrevWorkflowID = &prevWorkflow.String
+	}
+	if prevError.Valid {
+		c.PrevError = &prevError.String
+	}
+	return c, true, nil
+}
+
+// ReleasePublish undoes ClaimPublish when the workflow could not be started,
+// restoring the version's previous state, workflow ID and error. It only acts
+// if this claim is still the current one (state `publishing` with the same
+// workflow ID), so it can never clobber a newer claim or the workflow's own
+// terminal state.
+func (r *Repository) ReleasePublish(ctx context.Context, id uuid.UUID, workflowID string, c PublishClaim) error {
+	return r.db.WithContext(ctx).Exec(`
+		UPDATE course_versions
+		SET state = ?::version_state, workflow_id = ?, publish_error = ?, publish_started_at = NULL
+		WHERE id = ? AND state = 'publishing' AND workflow_id = ?`,
+		string(c.PrevState), c.PrevWorkflowID, c.PrevError, id, workflowID).Error
 }
 
 // GetInstructorName reads instructor_mirror the same way ListCatalogue's

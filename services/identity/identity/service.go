@@ -316,6 +316,7 @@ func (s *Service) Refresh(ctx context.Context, req RefreshRequest) (*AuthRespons
 		if err != nil {
 			return apperrors.ErrInternal.Wrap(err)
 		}
+		s.seedTokenVersion(ctx, user)
 		result = &AuthResponse{
 			AccessToken:  access,
 			RefreshToken: newRaw,
@@ -637,11 +638,27 @@ func (s *Service) ConfirmEmailVerification(ctx context.Context, rawToken string)
 
 // --- shared helpers ----------------------------------------------------------
 
+// seedTokenVersion writes the user's current token_version to Redis if (and only
+// if) there is no entry yet. Redis is a cache and can be restarted or flushed;
+// services without a durable source for the version (course-api cannot read
+// identity.users, ADR-0024) reject any token whose version differs from the
+// cached one, and a missing entry reads as version 1. Without this, a user
+// whose version is above 1 (anyone ever promoted, demoted or suspended) is
+// rejected by those services after a Redis flush even with a freshly issued
+// token, until another role change happens to rewrite the key. Seeding it at
+// login and refresh turns that into a one-time token_stale and a re-login.
+// SET NX, so it can never overwrite a newer value written by a role change.
+// Best effort: a Redis error here must not fail a login.
+func (s *Service) seedTokenVersion(ctx context.Context, user *User) {
+	_ = s.rdb.SetNX(ctx, auth.TokenVersionRedisKey(user.ID.String()), int(user.TokenVersion), 0).Err()
+}
+
 func (s *Service) issueAuthResponse(ctx context.Context, user *User) (*AuthResponse, error) {
 	access, err := auth.IssueAccessToken(s.jwtCfg, user.ID, string(user.Role), user.TokenVersion)
 	if err != nil {
 		return nil, apperrors.ErrInternal.Wrap(err)
 	}
+	s.seedTokenVersion(ctx, user)
 
 	rawRefresh, refreshHash, err := auth.GenerateOpaqueToken()
 	if err != nil {
