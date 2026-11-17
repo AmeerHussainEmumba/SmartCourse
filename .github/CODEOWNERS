@@ -19,6 +19,7 @@
 /services/analytics/      @AmeerHussainEmumba
 /services/worker/         @AmeerHussainEmumba
 /tools/seed/              @AmeerHussainEmumba
+/test/e2e/                @AmeerHussainEmumba
 /libs/                    @AmeerHussainEmumba
 
 # Boundary enforcement and release tooling: changes here change what the

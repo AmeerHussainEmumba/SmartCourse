@@ -194,7 +194,7 @@ This rule is what keeps the p95 targets in §13 achievable, and it is checkable 
 
 The honest cost is failure isolation: a runaway goroutine in one module degrades the whole process. §10.4 addresses this with bounded concurrency; it does not eliminate it.
 
-**One repository, many Go modules (ADR-0026).** "Modular monolith" in this document describes the transactional and deployment shape, not a single `go.mod`. The code is a monorepo of 19 Go modules — one per service, one per shared library, plus a seed tool — so that each service's binary links only the code it runs and the boundaries between services are enforced by the module graph. This partly supersedes ADR-0001's single-`go.mod` aspect; its reasoning about the shared database and the local enrollment transaction is unchanged.
+**One repository, many Go modules (ADR-0026).** "Modular monolith" in this document describes the transactional and deployment shape, not a single `go.mod`. The code is a monorepo of 20 Go modules — one per service, one per shared library, plus a seed tool — so that each service's binary links only the code it runs and the boundaries between services are enforced by the module graph. This partly supersedes ADR-0001's single-`go.mod` aspect; its reasoning about the shared database and the local enrollment transaction is unchanged.
 
 ### 4.2 Run modes
 

@@ -1114,6 +1114,8 @@ A second, separate input shaped one choice: the project owner expects that on a 
 - **The worker couples two services** until M3 (above).
 - **`tools/seed` couples identity and course** by design; it is a development tool.
 
+**Addendum (2026-11-17).** The count above (19) was true when this was decided. A 20th module, `test/e2e`, was added later for tests that must run identity and course together; it is allowed to depend on more than one service in the same way `tools/seed` is (`scripts/check-module-graph.sh`). Nothing else in this decision changes.
+
 ### Reversal trigger
 
 If, six months in, every module still has the same owner and the cascade and `replace` overhead is being paid with no ownership benefit, collapse the 13 libraries into three grouped modules by dependency footprint — `core` (config, errors, logging), `web` (httpx, router, auth, ratelimit) and `data` (db, cache, outbox, relay) — which keeps most of the dependency hygiene with a fraction of the modules. If M3's Kafka consumers land, the worker stops needing to import service handler packages, and the worker coupling above should be removed in the record that introduces them. If the review's single `libs/common` is still what the supervisor wants, merge the libraries back into one module; nothing in the layout prevents it.

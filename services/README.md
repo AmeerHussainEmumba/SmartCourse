@@ -9,7 +9,7 @@ One Go module per deployable service. Each service has its own `go.mod`, its own
 | `services/analytics` | `analytics` | `cmd/analytics-api` | HTTP, read-only. Learns about the rest of the system through the relay/outbox. |
 | `services/worker` | `audit`, `notification`, `search` (README-only plans) | `cmd/worker` | No HTTP. Runs the outbox relay and the Temporal worker for course publishing (ADR-0021, ADR-0025). |
 
-[`tools/seed`](../tools/seed/README.md) is a separate module that drives the real service layer to populate a local database (`make seed`).
+[`tools/seed`](../tools/seed/README.md) is a separate module that drives the real service layer to populate a local database (`make seed`). [`test/e2e`](../test/README.md) is a separate module of tests that run identity and course together against one Postgres and one Redis.
 
 ## Domain modules
 
@@ -32,7 +32,7 @@ Each domain package follows the same internal shape — `handler.go` (HTTP), `se
 
 There are three layers, strongest first:
 
-1. **Between services — Go modules.** `identity`, `course` and `analytics` can't import each other: a service's `go.mod` doesn't list the others, and `scripts/check-module-graph.sh` (`make check-module-graph`, run in CI) fails if one is added. Only `services/worker` (it runs `analytics` and `course` relay handlers and the publish workflow) and `tools/seed` may require other service modules. Libraries can't require any service.
+1. **Between services — Go modules.** `identity`, `course` and `analytics` can't import each other: a service's `go.mod` doesn't list the others, and `scripts/check-module-graph.sh` (`make check-module-graph`, run in CI) fails if one is added. Only `services/worker` (it runs `analytics` and `course` relay handlers and the publish workflow), `tools/seed` and `test/e2e` may require other service modules. Libraries can't require any service.
 2. **What each binary links — `scripts/check-link-graph.sh`** (`make check-link-graph`). `identity-api` and `analytics-api` must not link the Temporal SDK or another service; this is what the Week 2 review asked for.
 3. **Inside `services/course` — `.golangci.yml` `depguard`.** `course`, `enrollment`, `progress` and `workflows` share one module because ADR-0012 needs them in one process, so Go can't separate them. No package there imports another's repository, domain, or GORM models (RFC §4.4); `course` never imports `workflows`.
 

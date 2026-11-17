@@ -94,13 +94,13 @@ What this work did **not** do, and the supervisor may expect: per-service event 
 
 | What | Result |
 |---|---|
-| Full integration suite, every module, `-race -tags=integration`, on the final code | passes (exit 0), 19 modules |
+| Full integration suite, every module, `-race -tags=integration`, on the final code | passes (exit 0), 20 modules |
 | Link-graph, module-graph, Dockerfile-modules, module-hygiene guards | pass |
 | `scripts/test-guards.sh` (injects 9 violations; checks the right guard fails) | 18 passed, 0 failed |
 | Static policy scans `check-dev-defaults.sh`, `check-http-hardening.sh` | pass (both failed before the fixes) |
 | `go vet -tags=integration` in every module; `gofmt` | clean |
 | `golangci-lint` v2.14.0 in every module | 0 issues, re-run after the bug fixes (it found three small issues, an unchecked `rows.Close`, a redundant embedded-field selector and an unescaped Unicode literal, all fixed) |
-| Standalone `GOWORK=off` build of all 19 modules; four Docker images (non-root) | pass |
+| Standalone `GOWORK=off` build of all 20 modules; four Docker images (non-root) | pass |
 | Live stack on a freshly reset database from the final images: migrations including the new analytics one, full seed, health, security headers, uniform register 202, login, `/me`, 413 on a 2 MiB body, spoofed `X-Forwarded-For` now rate-limited, non-owner 404, analytics rules (student: platform totals and enrolled courses only), worker log quiet after startup | pass |
 | Tests | 314 test functions now (125 before the adversarial phase) plus 4 fuzz targets; 48 new test files |
 | Bug reproducers | all 46 now pass and run as normal regression tests; no `bugrepro`-tagged test remains |
