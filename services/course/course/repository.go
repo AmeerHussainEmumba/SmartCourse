@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Repository struct {
@@ -67,6 +68,26 @@ func (r *Repository) GetCourseByID(ctx context.Context, id uuid.UUID) (*Course, 
 		return nil, wrapNotFound(err)
 	}
 	return &c, nil
+}
+
+// GetCourseForUpdate loads the course row under a row lock; it must be
+// called on a transaction-scoped repository (WithTx).
+func (r *Repository) GetCourseForUpdate(ctx context.Context, id uuid.UUID) (*Course, error) {
+	var c Course
+	err := r.db.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).First(&c).Error
+	if err != nil {
+		return nil, wrapNotFound(err)
+	}
+	return &c, nil
+}
+
+// CountLessons counts the lessons of one version.
+func (r *Repository) CountLessons(ctx context.Context, versionID uuid.UUID) (int64, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT count(*) FROM lessons l JOIN modules m ON m.id = l.module_id
+		WHERE m.course_version_id = ?`, versionID).Row().Scan(&n)
+	return n, err
 }
 
 func (r *Repository) GetCourseBySlug(ctx context.Context, slug string) (*Course, error) {
@@ -175,6 +196,12 @@ func (r *Repository) UpsertSearchIndex(ctx context.Context, o *PublishOutline) e
 			instructor_name = EXCLUDED.instructor_name, category = EXCLUDED.category, level = EXCLUDED.level,
 			tags = EXCLUDED.tags, enrollment_count = EXCLUDED.enrollment_count,
 			search_vector = EXCLUDED.search_vector, indexed_at = EXCLUDED.indexed_at
+		-- Never replace the row serving the live version with a version that
+		-- is not promoted yet (F-08, ADR-0010): PromoteAndPublish re-runs
+		-- this upsert inside the promotion transaction.
+		WHERE NOT EXISTS (
+			SELECT 1 FROM courses c WHERE c.id = EXCLUDED.course_id
+			AND c.published_version_id IS NOT NULL AND c.published_version_id <> EXCLUDED.version_id)
 	`, o.CourseID, o.VersionID, o.Title, o.Description, o.InstructorName, o.Category, o.Level,
 		pq.StringArray(tags), o.EnrollmentCount, o.Title, o.Description).Error
 }
@@ -198,11 +225,11 @@ type SearchRow struct {
 // actually needs to link to; course_search_index itself doesn't carry it.
 func (r *Repository) SearchCourses(ctx context.Context, query string, limit int) ([]SearchRow, error) {
 	rows, err := r.db.WithContext(ctx).Raw(`
-		SELECT c.id, c.slug, csi.title, csi.instructor_name, csi.category, csi.level, csi.enrollment_count
+		SELECT c.id, c.slug, csi.title, csi.instructor_name, csi.category, csi.level, c.enrollment_count
 		FROM course_search_index csi
-		JOIN courses c ON c.id = csi.course_id
+		JOIN courses c ON c.id = csi.course_id AND c.published_version_id = csi.version_id
 		WHERE csi.search_vector @@ plainto_tsquery('english', ?) AND c.archived_at IS NULL
-		ORDER BY ts_rank(csi.search_vector, plainto_tsquery('english', ?)) DESC, csi.enrollment_count DESC
+		ORDER BY ts_rank(csi.search_vector, plainto_tsquery('english', ?)) DESC, c.enrollment_count DESC
 		LIMIT ?
 	`, query, query, limit).Rows()
 	if err != nil {
@@ -376,8 +403,8 @@ func (r *Repository) ListCatalogue(ctx context.Context, limit int, afterCreatedA
 		args = append(args, *filter.Level)
 	}
 	if filter.Search != "" {
-		q += ` AND cv.title ILIKE ?`
-		args = append(args, "%"+filter.Search+"%")
+		q += ` AND cv.title ILIKE ? ESCAPE '\'`
+		args = append(args, "%"+escapeLike(filter.Search)+"%")
 	}
 	if afterID != nil && afterCreatedAt != nil {
 		q += ` AND (c.created_at, c.id) < (?, ?)`

@@ -82,7 +82,7 @@ func TestIDOR_InstructorB_CannotModifyInstructorA_Course(t *testing.T) {
 
 // Even the OWNER must not be able to rewrite a published (immutable) version
 // by addressing its module/lesson ids directly (PATCH/POST variants; the DELETE
-// variants are the bug reproduced in security_bugrepro_test.go).
+// variants are the bug reproduced in security_regression_integration_test.go).
 func TestPublishedVersionIsImmutable_EvenForOwner(t *testing.T) {
 	w := newWorld(t)
 	pub := w.newPublished(instrA)
