@@ -21,19 +21,85 @@ import (
 
 const RequestIDHeader = "X-Request-Id"
 
-// RequestID assigns a request ID (reusing an inbound one if a trusted proxy
-// already set it) and makes it available via gin.Context and response
-// header. trace_id/span_id propagation via OpenTelemetry is layered on top
-// of this in M4 (RFC §12.2); this is the minimum needed to correlate log
-// lines today.
+// maxRequestIDLen bounds an accepted inbound request ID.
+const maxRequestIDLen = 64
+
+// validRequestID reports whether id is safe to echo in a response header and
+// write to logs: 1..64 characters of [A-Za-z0-9._-]. Anything else (control
+// characters, JSON, very long values) is replaced by a generated UUID so a
+// client cannot forge log lines or bloat headers (F-29).
+func validRequestID(id string) bool {
+	if id == "" || len(id) > maxRequestIDLen {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_', c == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// RequestID assigns a request ID (reusing an inbound one only if it matches
+// the bounded charset/length of validRequestID) and makes it available via
+// gin.Context and response header. trace_id/span_id propagation via
+// OpenTelemetry is layered on top of this in M4 (RFC §12.2); this is the
+// minimum needed to correlate log lines today.
 func RequestID() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.GetHeader(RequestIDHeader)
-		if id == "" {
+		if !validRequestID(id) {
 			id = uuid.NewString()
 		}
 		c.Set("request_id", id)
 		c.Writer.Header().Set(RequestIDHeader, id)
+		c.Next()
+	}
+}
+
+// SecurityHeaders sets conservative response headers for a JSON API:
+// nosniff, no framing, no referrer, a CSP that forbids everything, and
+// Cache-Control: no-store (token responses must never be cached). HSTS is
+// sent only when hsts is true or the request itself arrived over TLS, so
+// plain-HTTP local development is unaffected (F-29).
+func SecurityHeaders(hsts bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		h := c.Writer.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		h.Set("Cache-Control", "no-store")
+		if hsts || c.Request.TLS != nil {
+			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		}
+		c.Next()
+	}
+}
+
+// DefaultMaxBodyBytes is the request-body cap applied when none is configured.
+const DefaultMaxBodyBytes int64 = 1 << 20
+
+// MaxBodyBytes caps request bodies at limit bytes (F-16). A declared
+// Content-Length above the cap is rejected up front with 413; undeclared or
+// understated bodies are cut off by http.MaxBytesReader when read.
+func MaxBodyBytes(limit int64) gin.HandlerFunc {
+	if limit <= 0 {
+		limit = DefaultMaxBodyBytes
+	}
+	return func(c *gin.Context) {
+		if c.Request.ContentLength > limit {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, errorResponse{
+				Code: "PAYLOAD_TOO_LARGE", Message: "request body too large",
+			})
+			return
+		}
+		if c.Request.Body != nil {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
+		}
 		c.Next()
 	}
 }

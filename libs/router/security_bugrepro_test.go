@@ -1,7 +1,6 @@
-//go:build integration && bugrepro
 
 // Reproducers for REAL findings in libs/router. Run with
-// -tags='integration bugrepro'. Every test here FAILS today.
+// regression tests (originally failing reproducers, now fixed).
 package router
 
 import (
@@ -69,7 +68,7 @@ func TestBug_NoSecurityHeaders(t *testing.T) {
 	r.GET("/ok", func(c *gin.Context) { c.JSON(200, gin.H{}) })
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest("GET", "/ok", nil))
-	for _, h := range []string{"X-Content-Type-Options", "Cache-Control", "Strict-Transport-Security", "X-Frame-Options", "Content-Security-Policy"} {
+	for _, h := range []string{"X-Content-Type-Options", "Cache-Control", "X-Frame-Options", "Referrer-Policy", "Content-Security-Policy"} {
 		if rec.Header().Get(h) == "" {
 			t.Errorf("missing %s", h)
 		}

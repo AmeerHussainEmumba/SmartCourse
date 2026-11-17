@@ -1,7 +1,5 @@
-//go:build integration && bugrepro
 
-// Reproducers for REAL config-validation gaps. Not part of the default
-// suite; run with -tags='integration bugrepro'. Each test FAILS today.
+// Regression tests for config-validation gaps (originally failing reproducers).
 package config
 
 import "testing"
