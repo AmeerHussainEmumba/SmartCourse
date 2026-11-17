@@ -85,6 +85,32 @@ Without ADR-0012's row lock, this test doesn't reliably fail — it's *flaky*, w
 
 Run: `cd services/course && go test ./workflows/...` (no tag needed).
 
+### Adversarial tests — written to break the system (module-split phase 5)
+
+Added after the module split by two separate review sessions with a deliberate "assume the code and the ADRs are wrong until a test proves otherwise" brief: 42 new test files and 4 fuzz targets (159 new top-level tests: 113 in the default suite and 46 bug reproducers). They are named `*adversarial*`, `*security*` and `*bugrepro*`. What they found, and what is still open, is in `docs/plans/module-split-findings.md`; what held up is listed there too.
+
+**Two tiers, by build tag.**
+
+- `//go:build integration` — runs in the default suite (`make test-integration`) and must stay green and deterministic. Each file was run with `-race -count=3` before being committed.
+- `//go:build integration && bugrepro` — a reproducer for a **known, unfixed defect**. It fails today by design and is excluded from the default suite so CI stays meaningful. Run one with `cd services/course && go test -tags='integration bugrepro' -run TestBugrepro_ConcurrentDoubleWithdraw ./enrollment/`. When a bug is fixed, its reproducer should pass; move it into the default suite by dropping the `bugrepro` tag in the same change.
+
+| Area | Where | What it attacks |
+|---|---|---|
+| Seat limit (ADR-0012) | `services/course/enrollment/seatlimit_adversarial_integration_test.go`, `cancel_adversarial_integration_test.go` | 150 contenders for 25 seats; enroll/withdraw/re-enroll churn; archive racing with enrollers; prerequisites under concurrency; limit lowered below the count; random context cancellation mid-transaction |
+| Outbox and relay | `libs/relay/relay_adversarial_integration_test.go` | rolled-back events never delivered; two relays with no loss or double effect; partial failure re-runs only the failed consumer; poison event does not starve the queue; cancel-and-restart gives exactly-once effects; 8 MiB payloads; no goroutine leak (`goleak`) |
+| Publish workflow and blue-green | `services/course/course/publish_adversarial_integration_test.go`, `services/course/workflows/publish_adversarial_integration_test.go` | readers never see a half-published version; corrupt or flushed Redis falls back to Postgres; 20 concurrent publishes use one workflow ID; activity faults injected inside Temporal's test environment (flapping, lost ack, permanent failure) |
+| Analytics and mirrors | `services/analytics/analytics/replay_adversarial_integration_test.go`, `services/course/course/instructor_mirror_adversarial_integration_test.go` | replaying history is a no-op; shuffled and duplicated events converge; counters never go negative |
+| Pagination and resources | `services/course/course/pagination_adversarial_integration_test.go`, `resource_adversarial_integration_test.go` | identical sort keys across 7 page sizes; forged cursors; 1,600 randomly cancelled requests leave no connection, transaction or goroutine |
+| Schema isolation (ADR-0024) | `services/{identity,course,analytics}/schemaisolation/` | each service's main flows on a connection restricted to exactly its own `search_path` (`libs/testenv.OpenWithSearchPath`); a `go/ast` scan of production Go for schema-qualified or cross-schema SQL |
+| Worker wiring | `services/worker/cmd/worker/wire_test.go`, `wire_integration_test.go` | `buildRelay` registers exactly the expected handlers; every emitted event type has a consumer; `buildPublishWorker` registers the expected workflow and all 8 activities; checked by mutation (dropping a handler fails 3 tests) |
+| Auth and sessions | `libs/auth/security_jwt_test.go`, `services/identity/identity/security_*_test.go` | about 35 forged tokens; refresh rotation and reuse; 25 parallel refreshes with one token; reset and verification replay; enumeration; rate limits under concurrency; Redis down |
+| Authorization | `services/course/securitytest/` (a test-only package that wires course, enrollment and progress as `course-api` does), `services/analytics/analytics/security_test.go` | 22 cases across 37 route shapes for 6 actors; IDOR; mass assignment; hostile input (SQL, NUL bytes, forged cursors, out-of-range integers) |
+| Fuzzing | `FuzzParseAccessToken`, `FuzzDecodeCursor`, `FuzzBindIdentityDTOs`, `FuzzBindCourseDTOs` | seeds are inline (`f.Add`); run with `go test -fuzz=FuzzDecodeCursor -fuzztime=60s ./...` in the module. None crashed in the testers' runs |
+| Repository guards | `scripts/test-guards.sh`, `check-dockerfile-modules.sh`, `check-module-hygiene.sh` | `test-guards.sh` copies the tree, injects 9 violations and checks the right guard fails with the right message (18 checks, all pass). In CI as `make test-guards`, `check-dockerfile-modules`, `check-module-hygiene` |
+| Static policy scans (not in CI) | `scripts/check-dev-defaults.sh`, `check-http-hardening.sh` | fail today by design: known dev defaults, containers as root, missing server timeouts and body cap. Not wired into CI because they would fail on the open findings |
+
+**Not covered:** a real Temporal server (only the test environment and a fake client), a true `kill -9` of the relay, a non-UTC database timezone, Redis down on the data path, real network behaviour such as slow bodies, and dependency CVE scanning.
+
 ### Contract and query-shape tiers — not yet implemented
 
 Two tiers RFC §18 specifies that don't exist yet, tracked here rather than silently absent:
