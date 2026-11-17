@@ -29,9 +29,15 @@ allowed_services() { # module dir -> space-separated allowed services/* modules
 fail=0
 for dir in $(awk '/^\t/{print $1}' go.work | sed 's#^\./##'); do
   allowed=" $(allowed_services "$dir") "
-  # Only the module's own require lines — replace lines legitimately mention
-  # the same paths, and their closure is checked implicitly by the require.
-  reqs=$(awk '/^require \(/{f=1;next} f&&/^\)/{f=0} f&&/SmartCourse\/services\//{print $1}' "$dir/go.mod" | sed "s#^$mod/##")
+  # Handles both `require (` block entries and a hand-written single-line
+  # `require <mod> <ver>`; skips replace stanzas and the module line.
+  reqs=$(awk '
+    /^replace \(/ {r=1; next}
+    r && /^\)/ {r=0; next}
+    r {next}
+    /^replace / || /^module / {next}
+    /SmartCourse\/services\// { print ($1=="require" ? $2 : $1) }
+  ' "$dir/go.mod" | sed "s#^$mod/##")
   for r in $reqs; do
     if [[ "$allowed" != *" $r "* ]]; then
       echo "FAIL $dir requires $r, which it may not (see scripts/check-module-graph.sh)"

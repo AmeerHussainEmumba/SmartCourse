@@ -107,7 +107,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.temporal.io/api v1.63.5 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
-	go.uber.org/goleak v1.3.0 // indirect
 	golang.org/x/arch v0.22.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
@@ -134,6 +133,7 @@ require (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/temporal v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/testenv v0.0.0
 	github.com/stretchr/testify v1.11.1
+	go.uber.org/goleak v1.3.0
 )
 
 replace (

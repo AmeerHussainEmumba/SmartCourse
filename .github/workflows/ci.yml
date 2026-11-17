@@ -47,6 +47,15 @@ jobs:
       - name: Module graph (which modules may depend on which)
         run: make check-module-graph
 
+      - name: Dockerfile COPY lists match each module's dependencies
+        run: make check-dockerfile-modules
+
+      - name: Module hygiene (go mod tidy no-op, replace targets, no version skew)
+        run: make check-module-hygiene
+
+      - name: Guards fail on injected violations
+        run: make test-guards
+
       - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
