@@ -9,7 +9,7 @@ docker compose --profile core up -d   # or containerized, alongside course-api, 
 
 ## What's here
 
-`main.go` is deliberately thin, same shape as every other `cmd/*-api`: load config, connect to Postgres/Redis (`internal/platform/bootstrap.Connect`), build the Gin engine, register health checks, register only `internal/identity`'s routes (`bootstrap.RegisterIdentityRoutes`), serve, handle `SIGTERM` for graceful shutdown.
+`main.go` is deliberately thin, same shape as every other `cmd/*-api`: load config, connect to Postgres/Redis (`internal/platform/infra.Connect`), build the Gin engine, register health checks, register only `internal/identity`'s routes (`registerRoutes` in `wire.go`), serve, handle `SIGTERM` for graceful shutdown.
 
 ## Why this split out cleanly
 

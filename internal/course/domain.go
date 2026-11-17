@@ -71,7 +71,7 @@ func (CourseVersion) TableName() string { return "course_versions" }
 // internal/workflows — that import can only run the other way, since
 // internal/workflows imports internal/course for its Activities (RFC
 // §4.4's no-cross-module-import rule, extended to this new package the
-// same way bootstrap is exempt from it: the one place allowed to depend on
+// same way cmd/worker/wire.go is exempt from it: the one place allowed to depend on
 // both sides of a boundary because wiring them together is its entire job).
 const PublishWorkflowName = "PublishCourseWorkflow"
 

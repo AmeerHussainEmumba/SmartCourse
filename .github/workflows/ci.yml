@@ -40,6 +40,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Link graph (each binary links only the modules it uses)
+        run: make check-link-graph
+
       - name: golangci-lint (module boundaries, RFC §4.4)
         uses: golangci/golangci-lint-action@v9
         with:

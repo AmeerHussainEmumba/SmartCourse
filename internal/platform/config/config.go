@@ -60,7 +60,7 @@ type MinIOConfig struct {
 // Temporal backs course publishing only (ADR-0009, ADR-0025) — identity-api
 // and analytics-api never touch it, and even course-api/worker only need a
 // reachable server at the moment a publish actually runs, not at boot
-// (bootstrap.ConnectTemporal uses client.NewLazyClient for exactly this
+// (temporal.Connect uses client.NewLazyClient for exactly this
 // reason). Requiring these at startup the way POSTGRES_DSN is required
 // would make every binary's boot depend on a service only one workflow
 // uses.

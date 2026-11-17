@@ -19,10 +19,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/bootstrap"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/logging"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/router"
+	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/temporal"
 )
 
 func main() {
@@ -35,16 +36,16 @@ func main() {
 	logger := logging.New(cfg.Env, logging.LevelFromEnv())
 	logger.Info("starting", slog.String("service", "course-api"), slog.String("env", cfg.Env))
 
-	deps, err := bootstrap.Connect(cfg)
+	deps, err := infra.Connect(cfg)
 	if err != nil {
 		logger.Error("failed to connect to dependencies", slog.Any("error", err))
 		os.Exit(1)
 	}
 
-	// Built with client.NewLazyClient (bootstrap.ConnectTemporal) — never
+	// Built with client.NewLazyClient (temporal.Connect) — never
 	// fails here even if Temporal isn't reachable yet; only an actual
 	// publish call would (ADR-0009/0025).
-	temporalClient, err := bootstrap.ConnectTemporal(cfg)
+	temporalClient, err := temporal.Connect(cfg)
 	if err != nil {
 		logger.Error("failed to build temporal client", slog.Any("error", err))
 		os.Exit(1)
@@ -53,7 +54,7 @@ func main() {
 
 	r := router.New(cfg.Env, cfg.CORSAllowedOrigins)
 	router.RegisterHealth(r, deps.HealthCheckers())
-	bootstrap.RegisterCourseRoutes(r, deps, cfg, temporalClient)
+	registerRoutes(r, deps, cfg, temporalClient)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),

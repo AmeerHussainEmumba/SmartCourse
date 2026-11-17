@@ -1,6 +1,6 @@
 # internal/workflows
 
-SmartCourse's one Temporal workflow — course publishing (RFC §7, ADR-0009, ADR-0025). Not a domain module and not shaped like one (no `handler.go`/`dto.go`/`domain.go`): it's an orchestration layer over `internal/course`'s own exported, Temporal-agnostic `Service` methods, the same way `internal/platform/bootstrap` is an orchestration layer over every domain module's wiring.
+SmartCourse's one Temporal workflow — course publishing (RFC §7, ADR-0009, ADR-0025). Not a domain module and not shaped like one (no `handler.go`/`dto.go`/`domain.go`): it's an orchestration layer over `internal/course`'s own exported, Temporal-agnostic `Service` methods, like a thin wiring layer, not a module with its own handlers or tables.
 
 ## What's here
 
@@ -9,7 +9,7 @@ SmartCourse's one Temporal workflow — course publishing (RFC §7, ADR-0009, AD
 
 ## Why the dependency only runs one way
 
-`internal/workflows` imports `internal/course`; `course` must never import `workflows` back (RFC §4.4's module-boundary discipline, extended to this package the same way `bootstrap` is the one exception allowed to see every domain module). `course.Service.Publish` starts this workflow by its registered name (`course.PublishWorkflowName`, a shared string constant both packages reference), not by importing the workflow function — see that constant's doc comment in `internal/course/domain.go` for the full reasoning.
+`internal/workflows` imports `internal/course`; `course` must never import `workflows` back (RFC §4.4's module-boundary discipline, extended to this package the one place that imports both is `cmd/worker/wire.go`, which wires them together). `course.Service.Publish` starts this workflow by its registered name (`course.PublishWorkflowName`, a shared string constant both packages reference), not by importing the workflow function — see that constant's doc comment in `internal/course/domain.go` for the full reasoning.
 
 ## Testing
 

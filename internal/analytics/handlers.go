@@ -26,10 +26,8 @@ import (
 const consumerName = "analytics-aggregator"
 
 // Handlers returns every relay.Handler this module registers. Called once
-// at worker startup (internal/platform/bootstrap.BuildRelay, called from
-// cmd/worker — ADR-0022) — see that package for why wiring lives there and
-// not here (RFC §4.4: the composition root is the only place allowed to
-// see every module).
+// at worker startup (buildRelay in cmd/worker/wire.go — ADR-0022) — wiring lives there, not
+// here, so a binary only links the modules it actually runs.
 func Handlers() []relay.Handler {
 	return []relay.Handler{
 		relay.NewHandler(consumerName, []string{"identity.user_registered", "identity.user_role_changed"}, handlePlatformCounts),

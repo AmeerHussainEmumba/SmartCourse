@@ -17,6 +17,8 @@ Everything every domain module is allowed to depend on (RFC §4.3). Nothing in h
 | `outbox` | The only path from a state change to a published event (ADR-0006). See its own README. |
 | `relay` | The bounded worker pool that drains `outbox` and dispatches to registered handlers (ADR-0021) — goroutines, a channel, `sync.WaitGroup`-drained shutdown, `sync.Mutex`-guarded claim tracking, `sync/atomic` counters, all against real work. See its own README. |
 | `router` | Assembles the Gin engine: middleware chain, health endpoints. |
+| `infra` | Opens the shared Postgres and Redis clients (`Connect`) and builds the `/health/ready` checks. Imports no domain module. |
+| `temporal` | Builds the lazy Temporal client. Separate from `infra` so identity-api and analytics-api never link the Temporal SDK. |
 
 ## Why this exists as a separate layer
 
