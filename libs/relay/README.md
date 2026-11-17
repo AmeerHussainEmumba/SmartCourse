@@ -14,7 +14,7 @@ A fixed-size worker pool reads from a buffered channel the poller writes to. If 
 
 - **Goroutines + channel** — the worker pool itself. This is the actual mechanism, not a wrapper around something sequential.
 - **`sync.WaitGroup`** — waits for in-flight workers to finish their current job (and commit its result — see below) before `Run()` returns.
-- **`sync.Mutex`** guarding `inFlight` — a legitimately process-local set: which outbox rows *this* relay instance currently has a worker on. Not Redis, on purpose — no other replica needs to see it; `FOR UPDATE SKIP LOCKED` already gives cross-replica safety at the database level, and `inFlight` only closes the narrower single-process gap between "claimed" and "a worker finished it."
+- **`sync.Mutex`** guarding `cooldown` — a process-local map of rows this instance just failed, so a failing row is not re-claimed in a hot loop. Cross-replica safety comes from each worker holding the `FOR UPDATE SKIP LOCKED` row lock in its own transaction until the handlers finish and the row is marked published.
 - **`sync/atomic`** — processed/failed/given-up counters. A poor-man's metric ahead of Prometheus (M4).
 
 ## The bug this package's own tests caught
@@ -41,7 +41,7 @@ When Kafka lands, this package's poll-and-dispatch loop is replaced by "publish 
 ## Known limitations (honest, not hidden)
 
 - **No dead-letter store.** A poison event past `maxAttempts` is marked published anyway rather than parked for inspection — MongoDB's `failed_events` collection (RFC §6.9) is M3 scope. Logged at `ERROR`, not silent, but not recoverable today.
-- **Single relay instance assumed.** `SKIP LOCKED` is safe across multiple relay processes at the SQL level; `inFlight` protects only against one process's own re-polling. Running two relay instances today would rely on `SKIP LOCKED` alone, which is sufficient but untested here.
+- **Multiple replicas are safe**: the claim transaction stays open through handling, so a second replica skips a row being handled (F-04). A crashed replica releases the lock and the row is redelivered (idempotent via `processed_events`).
 
 ## Testing
 
