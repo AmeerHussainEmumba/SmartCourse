@@ -25,7 +25,7 @@ func TestSecurity_RateLimit_RegisterPerIP_BlocksSixth_AndRoutesDoNotShareBuckets
 	ip := "203.0.113.50"
 	for i := 1; i <= 5; i++ {
 		rec := h.call("POST", "/api/v1/auth/register", map[string]any{"email": uniq("rl"), "password": "correct-horse-battery", "full_name": "R"}, withIP(ip))
-		if rec.Code != 201 {
+		if rec.Code != 202 {
 			t.Fatalf("request %d: %d %s", i, rec.Code, rec.Body.String())
 		}
 	}
@@ -35,7 +35,7 @@ func TestSecurity_RateLimit_RegisterPerIP_BlocksSixth_AndRoutesDoNotShareBuckets
 	}
 	assertNoInternalLeak(t, "429", rec.Body.String())
 	// A different IP is unaffected.
-	if rec := h.call("POST", "/api/v1/auth/register", map[string]any{"email": uniq("rl"), "password": "correct-horse-battery", "full_name": "R"}, withIP("203.0.113.51")); rec.Code != 201 {
+	if rec := h.call("POST", "/api/v1/auth/register", map[string]any{"email": uniq("rl"), "password": "correct-horse-battery", "full_name": "R"}, withIP("203.0.113.51")); rec.Code != 202 {
 		t.Fatalf("other IP got %d", rec.Code)
 	}
 	// Exhausting /register must not throttle /login for the same IP (no key collision between routes).
@@ -105,7 +105,11 @@ func TestSecurity_RateLimit_AccountLimit_StopsDistributedStuffing(t *testing.T) 
 	h := newHarness(t)
 	email := uniq("stuff")
 	h.mustRegister(email, "correct-horse-battery")
-	for i := 0; i < 5; i++ {
+	// Updated for F-31: only failures count and the all-IP cap is now 20/min
+	// (loginPerAccountLimit), so five bad guesses from elsewhere can no longer
+	// lock the owner out (TestBug_RateLimit_AnyoneCanLockOutAnyKnownEmail),
+	// while sustained stuffing across many IPs is still stopped.
+	for i := 0; i < 20; i++ {
 		rec := h.login(email, fmt.Sprintf("guess-%d-aaaa", i), withIP(fmt.Sprintf("203.0.113.%d", 100+i)))
 		if rec.Code != 401 {
 			t.Fatalf("attempt %d: %d", i, rec.Code)
@@ -113,7 +117,7 @@ func TestSecurity_RateLimit_AccountLimit_StopsDistributedStuffing(t *testing.T) 
 	}
 	rec := h.login(email, "correct-horse-battery", withIP("203.0.113.200"))
 	if rec.Code != 429 {
-		t.Fatalf("6th attempt (correct password, brand-new IP) must be blocked by the account limit, got %d", rec.Code)
+		t.Fatalf("21st failed-attempt (correct password, brand-new IP) must be blocked by the account limit, got %d", rec.Code)
 	}
 	// Case, plus-tag and whitespace variants must hit the same bucket for the case-insensitive part.
 	for _, v := range []string{strings.ToUpper(email), strings.ToUpper(email[:1]) + email[1:]} {
@@ -133,7 +137,7 @@ func TestSecurity_RateLimit_RedisDown_LimiterFailsOpen_PrivilegeCheckFailsClosed
 	t.Cleanup(func() { _ = dead.Close() })
 	h := newHarnessRDB(t, env, dead, lightArgon)
 
-	// 8 logins for ONE account (limit 5/min) all reach the credential check.
+	// 8 failed logins for ONE account (limit 5/min per account+IP) all reach the credential check with Redis down.
 	email := uniq("down")
 	for i := 0; i < 8; i++ {
 		rec := h.login(email, "wrong-password-1", withIP("203.0.113.70"))

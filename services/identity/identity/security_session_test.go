@@ -221,10 +221,10 @@ func TestSecurity_MassAssignment_RegisterAndUpdateMe(t *testing.T) {
 		"role": "admin", "id": evilID, "status": "active", "token_version": 99,
 		"email_verified_at": "2020-01-01T00:00:00Z", "password_hash": "x", "is_admin": true,
 	}, withIP("198.51.100.20"))
-	if rec.Code != 201 {
+	if rec.Code != 202 {
 		t.Fatalf("register: %d %s", rec.Code, rec.Body.String())
 	}
-	reg := decodeAuth(t, rec)
+	reg := decodeAuth(t, h.login(email, "correct-horse-battery", withIP("198.51.100.21")))
 	if reg.User.Role != "student" || reg.User.ID == evilID || reg.User.EmailVerifiedAt != nil {
 		t.Fatalf("mass assignment on register succeeded: %+v", reg.User)
 	}
@@ -338,14 +338,14 @@ func TestSecurity_PasswordPolicy_Boundaries(t *testing.T) {
 	}{
 		{"empty", "", 400},
 		{"7 chars", "1234567", 400},
-		{"8 chars", "12345678", 201},
-		{"128 chars", strings.Repeat("a", 128), 201},
+		{"8 chars", "12345678", 202},
+		{"128 chars", strings.Repeat("a", 128), 202},
 		{"129 chars", strings.Repeat("a", 129), 400},
-		{"128 runes of 4 bytes (512 bytes)", strings.Repeat("\U0001F600", 128), 201},
+		{"128 runes of 4 bytes (512 bytes)", strings.Repeat("\U0001F600", 128), 202},
 		{"129 runes of 4 bytes", strings.Repeat("\U0001F600", 129), 400},
 		{"1 MiB", strings.Repeat("a", 1<<20), 400},
-		{"nul bytes inside", "pass\x00word123", 201}, // stored as bytes; argon2 handles NUL
-		{"only whitespace", "        ", 201},         // accepted: policy is length only (documented gap, low)
+		{"nul bytes inside", "pass\x00word123", 202}, // stored as bytes; argon2 handles NUL
+		{"only whitespace", "        ", 202},         // accepted: policy is length only (documented gap, low)
 	}
 	for _, c := range cases {
 		if got := reg(c.pw); got != c.want {
@@ -497,7 +497,9 @@ func TestSecurity_RefreshForSuspendedUser_IsDenied_AndLoginToo(t *testing.T) {
 	if rec := h.refresh(reg.RefreshToken); rec.Code != 403 {
 		t.Fatalf("suspended user refreshed: %d", rec.Code)
 	}
-	if rec := h.login(email, "correct-horse-battery", withIP("198.51.100.51")); rec.Code != 403 {
+	// F-32: a suspended account answers like a wrong password (401
+	// invalid_credentials) so login does not confirm password correctness.
+	if rec := h.login(email, "correct-horse-battery", withIP("198.51.100.51")); rec.Code != 401 {
 		t.Fatalf("suspended user logged in: %d", rec.Code)
 	}
 }

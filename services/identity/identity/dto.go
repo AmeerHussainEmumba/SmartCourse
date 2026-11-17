@@ -20,6 +20,9 @@ type RegisterRequest struct {
 type LoginRequest struct {
 	Email    string `json:"email" binding:"required,email"`
 	Password string `json:"password" binding:"required"`
+	// ClientIP is set by the handler (never bound from JSON); it scopes the
+	// failed-login budget to the account+IP pair.
+	ClientIP string `json:"-"`
 }
 
 type RefreshRequest struct {
