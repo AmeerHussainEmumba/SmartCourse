@@ -1,11 +1,11 @@
-//go:build integration && bugrepro
+//go:build integration
 
 // Reproducers for REAL findings in the course module (course, enrollment,
 // progress). Excluded from the default suite; run with
 //
-//	GOWORK=off go test -tags='integration bugrepro' -run TestBug ./...
+//	GOWORK=off go test -tags=integration -run TestBug ./...
 //
-// Each test FAILS against the current code and should pass once fixed.
+// Each test is a regression test for a fixed defect.
 package securitytest_test
 
 import (

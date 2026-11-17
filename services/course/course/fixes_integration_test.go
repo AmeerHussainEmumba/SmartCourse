@@ -1,7 +1,7 @@
-//go:build integration && bugrepro
+//go:build integration
 
 // Reproducers for real defects in the course service found by adversarial
-// testing. They fail today by design; run with -tags='integration bugrepro'.
+// testing. Regression tests for fixed defects.
 package course_test
 
 import (
@@ -147,7 +147,7 @@ func TestBugrepro_ConcurrentPromoteAndPublish_EmitsDuplicateCoursePublishedEvent
 		}()
 	}
 	deadline := time.Now().Add(15 * time.Second)
-	for count(t, env, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query ILIKE 'UPDATE%courses%'`) < 2 {
+	for count(t, env, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND (query ILIKE 'UPDATE%courses%' OR query ILIKE '%FROM "courses"%FOR UPDATE%')`) < 2 {
 		if time.Now().After(deadline) {
 			hold.Rollback()
 			t.Fatal("both promotions never parked on the row lock")

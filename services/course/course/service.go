@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,7 +35,7 @@ var slugPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 var (
 	errSlugFormat      = apperrors.New(400, "invalid_slug", "Slug must be lowercase letters, numbers, and hyphens only.")
-	errNotOwner        = apperrors.New(403, "not_owner", "You do not own this course.")
+	errCourseArchived  = apperrors.New(409, "course_archived", "This course is archived and cannot be published.")
 	errNoDraft         = apperrors.New(409, "no_draft", "This course has no draft version to edit.")
 	errContentTooLarge = apperrors.New(400, "content_too_large", "Lesson content exceeds the maximum allowed size.")
 )
@@ -75,6 +76,9 @@ func (s *Service) CreateCourse(ctx context.Context, instructorID uuid.UUID, req 
 	if !slugPattern.MatchString(req.Slug) {
 		return nil, nil, errSlugFormat
 	}
+	if err := rejectNUL(req.Title, req.Description, ptrStr(req.Category), ptrStr(req.Level)); err != nil {
+		return nil, nil, err
+	}
 
 	courseID := uuid.Must(uuid.NewV7())
 	versionID := uuid.Must(uuid.NewV7())
@@ -109,7 +113,7 @@ func (s *Service) CreateCourse(ctx context.Context, instructorID uuid.UUID, req 
 		return nil, nil, apperrors.ErrConflict.Wrap(fmt.Errorf("slug already in use"))
 	}
 	if err != nil {
-		return nil, nil, apperrors.ErrInternal.Wrap(err)
+		return nil, nil, dbError(err)
 	}
 	course.DraftVersionID = &versionID
 
@@ -132,7 +136,9 @@ func (s *Service) GetCourse(ctx context.Context, id uuid.UUID) (*Course, error) 
 // requireOwner loads the course and asserts instructorID owns it —
 // ownership is checked here, in the service layer, never inferred from a
 // client-supplied ID (RFC §11.4). Every draft-mutating method below calls
-// this first.
+// this first. A caller who does not own an existing course gets the same
+// 404 as for an unknown id, so the response does not reveal whether a
+// course id exists (F-36).
 func (s *Service) requireOwner(ctx context.Context, courseID, instructorID uuid.UUID) (*Course, error) {
 	c, err := s.repo.GetCourseByID(ctx, courseID)
 	if errors.Is(err, ErrNotFound) {
@@ -142,12 +148,15 @@ func (s *Service) requireOwner(ctx context.Context, courseID, instructorID uuid.
 		return nil, apperrors.ErrInternal.Wrap(err)
 	}
 	if c.InstructorID != instructorID {
-		return nil, errNotOwner
+		return nil, apperrors.ErrNotFound
 	}
 	return c, nil
 }
 
 func (s *Service) UpdateDraft(ctx context.Context, courseID, instructorID uuid.UUID, req UpdateDraftRequest) (*VersionResponse, error) {
+	if err := rejectNUL(append([]string{req.Title, req.Description, ptrStr(req.Category), ptrStr(req.Level)}, req.Tags...)...); err != nil {
+		return nil, err
+	}
 	c, err := s.requireOwner(ctx, courseID, instructorID)
 	if err != nil {
 		return nil, err
@@ -156,7 +165,7 @@ func (s *Service) UpdateDraft(ctx context.Context, courseID, instructorID uuid.U
 		return nil, errNoDraft
 	}
 	if err := s.repo.UpdateVersionMetadata(ctx, *c.DraftVersionID, req.Title, req.Description, req.Category, req.Level, req.Tags); err != nil {
-		return nil, apperrors.ErrInternal.Wrap(err)
+		return nil, dbError(err)
 	}
 	v, err := s.repo.GetVersionByID(ctx, *c.DraftVersionID)
 	if err != nil {
@@ -204,6 +213,9 @@ func (s *Service) ArchiveCourse(ctx context.Context, courseID, instructorID uuid
 // --- modules -----------------------------------------------------------------
 
 func (s *Service) AddModule(ctx context.Context, courseID, instructorID uuid.UUID, req CreateModuleRequest) (*ModuleResponse, error) {
+	if err := rejectNUL(req.Title); err != nil {
+		return nil, err
+	}
 	c, err := s.requireOwner(ctx, courseID, instructorID)
 	if err != nil {
 		return nil, err
@@ -219,7 +231,7 @@ func (s *Service) AddModule(ctx context.Context, courseID, instructorID uuid.UUI
 		if isUniqueViolation(err) {
 			return nil, apperrors.ErrConflict.Wrap(fmt.Errorf("a module already occupies this position"))
 		}
-		return nil, apperrors.ErrInternal.Wrap(err)
+		return nil, dbError(err)
 	}
 	resp := toModuleResponse(m)
 	return &resp, nil
@@ -231,6 +243,9 @@ func (s *Service) AddModule(ctx context.Context, courseID, instructorID uuid.UUI
 // outbox write, nothing. moduleID identifying a module on a non-draft
 // version is rejected the same way AddLesson rejects it.
 func (s *Service) UpdateModule(ctx context.Context, courseID, instructorID, moduleID uuid.UUID, req UpdateModuleRequest) (*ModuleResponse, error) {
+	if err := rejectNUL(req.Title); err != nil {
+		return nil, err
+	}
 	c, err := s.requireOwner(ctx, courseID, instructorID)
 	if err != nil {
 		return nil, err
@@ -246,26 +261,48 @@ func (s *Service) UpdateModule(ctx context.Context, courseID, instructorID, modu
 		return nil, errNoDraft
 	}
 	if err := s.repo.UpdateModule(ctx, moduleID, req.Title); err != nil {
-		return nil, apperrors.ErrInternal.Wrap(err)
+		return nil, dbError(err)
 	}
 	mod.Title = req.Title
 	resp := toModuleResponse(mod)
 	return &resp, nil
 }
 
+// DeleteModule, like UpdateModule, only touches the draft version: a
+// published version is immutable (ADR-0010), and deleting its modules would
+// cascade away live lessons and change enrolled students' completion
+// denominators (F-10).
 func (s *Service) DeleteModule(ctx context.Context, courseID, instructorID, moduleID uuid.UUID) error {
-	if _, err := s.requireOwner(ctx, courseID, instructorID); err != nil {
+	c, err := s.requireOwner(ctx, courseID, instructorID)
+	if err != nil {
 		return err
+	}
+	mod, err := s.repo.GetModuleByID(ctx, moduleID)
+	if errors.Is(err, ErrNotFound) {
+		return apperrors.ErrNotFound
+	}
+	if err != nil {
+		return apperrors.ErrInternal.Wrap(err)
+	}
+	if c.DraftVersionID == nil || mod.CourseVersionID != *c.DraftVersionID {
+		return errNoDraft
 	}
 	if err := s.repo.DeleteModule(ctx, moduleID); err != nil {
 		return apperrors.ErrInternal.Wrap(err)
 	}
+	_ = s.repo.RecomputeVersionTotals(ctx, *c.DraftVersionID)
 	return nil
 }
 
 // --- lessons -------------------------------------------------------------
 
 func (s *Service) AddLesson(ctx context.Context, courseID, instructorID, moduleID uuid.UUID, req CreateLessonRequest) (*LessonResponse, error) {
+	if err := rejectNUL(req.Title, req.ContentType, ptrStr(req.AssetKey)); err != nil {
+		return nil, err
+	}
+	if err := validateContent(req.Content); err != nil {
+		return nil, err
+	}
 	c, err := s.requireOwner(ctx, courseID, instructorID)
 	if err != nil {
 		return nil, err
@@ -301,7 +338,7 @@ func (s *Service) AddLesson(ctx context.Context, courseID, instructorID, moduleI
 		if isUniqueViolation(err) {
 			return nil, apperrors.ErrConflict.Wrap(fmt.Errorf("a lesson already occupies this position"))
 		}
-		return nil, apperrors.ErrInternal.Wrap(err)
+		return nil, dbError(err)
 	}
 	_ = s.repo.RecomputeVersionTotals(ctx, *c.DraftVersionID)
 
@@ -314,6 +351,12 @@ func (s *Service) AddLesson(ctx context.Context, courseID, instructorID, moduleI
 // UpdateLesson is UpdateModule's sibling: draft-only, same reasoning.
 // RecomputeVersionTotals runs afterward because duration_s can change.
 func (s *Service) UpdateLesson(ctx context.Context, courseID, instructorID, lessonID uuid.UUID, req UpdateLessonRequest) (*LessonResponse, error) {
+	if err := rejectNUL(req.Title, req.ContentType); err != nil {
+		return nil, err
+	}
+	if err := validateContent(req.Content); err != nil {
+		return nil, err
+	}
 	c, err := s.requireOwner(ctx, courseID, instructorID)
 	if err != nil {
 		return nil, err
@@ -356,7 +399,7 @@ func (s *Service) UpdateLesson(ctx context.Context, courseID, instructorID, less
 		_ = json.Unmarshal(lesson.Content, &respContent)
 	}
 	if err := s.repo.UpdateLesson(ctx, lessonID, req.Title, req.ContentType, contentJSON, req.DurationS); err != nil {
-		return nil, apperrors.ErrInternal.Wrap(err)
+		return nil, dbError(err)
 	}
 	_ = s.repo.RecomputeVersionTotals(ctx, *c.DraftVersionID)
 
@@ -371,12 +414,24 @@ func (s *Service) DeleteLesson(ctx context.Context, courseID, instructorID, less
 	if err != nil {
 		return err
 	}
+	lesson, err := s.repo.GetLessonByID(ctx, lessonID)
+	if errors.Is(err, ErrNotFound) {
+		return apperrors.ErrNotFound
+	}
+	if err != nil {
+		return apperrors.ErrInternal.Wrap(err)
+	}
+	mod, err := s.repo.GetModuleByID(ctx, lesson.ModuleID)
+	if err != nil {
+		return apperrors.ErrInternal.Wrap(err)
+	}
+	if c.DraftVersionID == nil || mod.CourseVersionID != *c.DraftVersionID {
+		return errNoDraft // published versions are immutable (ADR-0010, F-10)
+	}
 	if err := s.repo.DeleteLesson(ctx, lessonID); err != nil {
 		return apperrors.ErrInternal.Wrap(err)
 	}
-	if c.DraftVersionID != nil {
-		_ = s.repo.RecomputeVersionTotals(ctx, *c.DraftVersionID)
-	}
+	_ = s.repo.RecomputeVersionTotals(ctx, *c.DraftVersionID)
 	return nil
 }
 
@@ -418,6 +473,9 @@ func (s *Service) Publish(ctx context.Context, courseID, instructorID uuid.UUID)
 	c, err := s.requireOwner(ctx, courseID, instructorID)
 	if err != nil {
 		return nil, err
+	}
+	if c.ArchivedAt != nil {
+		return nil, errCourseArchived
 	}
 	if c.DraftVersionID == nil {
 		return nil, errNoDraft
@@ -492,6 +550,13 @@ func (s *Service) ValidateMetadata(ctx context.Context, versionID uuid.UUID) err
 	}
 	if len(mods) == 0 {
 		return apperrors.ErrValidation.Wrap(fmt.Errorf("at least one module is required to publish"))
+	}
+	lessons, err := s.repo.CountLessons(ctx, v.ID)
+	if err != nil {
+		return apperrors.ErrInternal.Wrap(err)
+	}
+	if lessons == 0 {
+		return apperrors.ErrValidation.Wrap(fmt.Errorf("at least one lesson is required to publish"))
 	}
 	return nil
 }
@@ -609,27 +674,38 @@ func (s *Service) WarmCache(ctx context.Context, o *PublishOutline) error {
 }
 
 // PromoteAndPublish is the PromoteVersion activity — must run last (RFC
-// §7.4: "the only one whose effect students can observe"). Promotion and
-// the course.course_published outbox write happen in one transaction
-// (repository.go's PromoteVersion no longer opens its own, precisely so
-// this method can wrap both in one) — a fix over M1's two separate
-// transactions, needed here because Temporal's at-least-once activity
-// execution means this method must be safe to run twice. The idempotency
-// guard is a check, not a transaction-level dedupe: if courseID's
-// published_version_id already equals versionID, promotion (and the event
-// announcing it) already happened on a previous attempt, so this is a
-// no-op rather than a duplicate outbox row.
+// §7.4: "the only one whose effect students can observe"). Promotion, the
+// search-index refresh for the promoted version, and the
+// course.course_published outbox write happen in one transaction, so they
+// either all happen or none does. Temporal's at-least-once activity
+// execution means this method must be safe to run twice, including two
+// executions overlapping: the idempotency guard therefore runs INSIDE the
+// transaction, after taking the course row lock, so exactly one execution
+// promotes and emits the event (F-23). An archived course is never promoted
+// (F-21).
 func (s *Service) PromoteAndPublish(ctx context.Context, courseID, versionID uuid.UUID, oldVersionID *uuid.UUID, title string) error {
-	c, err := s.repo.GetCourseByID(ctx, courseID)
+	// Read-only assembly of the index row (draft content does not change
+	// under us); the write happens inside the transaction below.
+	outline, err := s.BuildOutline(ctx, courseID, versionID)
 	if err != nil {
-		return apperrors.ErrInternal.Wrap(err)
-	}
-	if c.PublishedVersionID != nil && *c.PublishedVersionID == versionID {
-		return nil
+		return err
 	}
 	err = s.repo.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		txRepo := s.repo.WithTx(tx)
+		c, err := txRepo.GetCourseForUpdate(ctx, courseID)
+		if err != nil {
+			return err
+		}
+		if c.PublishedVersionID != nil && *c.PublishedVersionID == versionID {
+			return nil // already promoted by a previous or concurrent attempt
+		}
+		if c.ArchivedAt != nil {
+			return errCourseArchived
+		}
 		if err := txRepo.PromoteVersion(ctx, courseID, versionID, oldVersionID); err != nil {
+			return err
+		}
+		if err := txRepo.UpsertSearchIndex(ctx, outline); err != nil {
 			return err
 		}
 		return outbox.Write(ctx, tx, outbox.Event{
@@ -641,6 +717,10 @@ func (s *Service) PromoteAndPublish(ctx context.Context, courseID, versionID uui
 		})
 	})
 	if err != nil {
+		var appErr *apperrors.AppError
+		if errors.As(err, &appErr) {
+			return err
+		}
 		return apperrors.ErrInternal.Wrap(err)
 	}
 	return nil
@@ -662,6 +742,9 @@ func (s *Service) MarkPublishFailed(ctx context.Context, versionID uuid.UUID, re
 // --- catalogue & detail ----------------------------------------------------
 
 func (s *Service) ListCatalogue(ctx context.Context, limit int, cursor, category, level, search string) (*CatalogueResponse, error) {
+	if err := rejectNUL(cursor, category, level, search); err != nil {
+		return nil, err
+	}
 	var afterCreatedAt *time.Time
 	var afterID *uuid.UUID
 	if cursor != "" {
@@ -727,6 +810,9 @@ func (s *Service) ListCatalogue(ctx context.Context, limit int, cursor, category
 // WarmCache's activity finishes) still gets a correct answer, just a
 // slower one.
 func (s *Service) GetPublishedDetail(ctx context.Context, slug string) (*CourseDetailResponse, error) {
+	if strings.ContainsRune(slug, 0) {
+		return nil, apperrors.ErrNotFound // no slug can contain NUL
+	}
 	c, err := s.repo.GetCourseBySlug(ctx, slug)
 	if errors.Is(err, ErrNotFound) {
 		return nil, apperrors.ErrNotFound
@@ -747,6 +833,10 @@ func (s *Service) GetPublishedDetail(ctx context.Context, slug string) (*CourseD
 	if cached, err := s.rdb.Get(ctx, key).Bytes(); err == nil {
 		var resp CourseDetailResponse
 		if json.Unmarshal(cached, &resp) == nil {
+			// enrollment_count/enrollment_limit change on every
+			// enrollment and are not version data: never serve the
+			// cached copy of them (F-20). c was read live above.
+			resp.Course = toCourseResponse(c)
 			return &resp, nil
 		}
 	}
@@ -796,6 +886,9 @@ func (s *Service) loadDetail(ctx context.Context, c *Course, v *CourseVersion) (
 // side) — ranked full-text search over course_search_index, distinct from
 // ListCatalogue's plain ILIKE substring filter.
 func (s *Service) SearchCourses(ctx context.Context, query string, limit int) ([]SearchResultResponse, error) {
+	if err := rejectNUL(query); err != nil {
+		return nil, err
+	}
 	rows, err := s.repo.SearchCourses(ctx, query, limit)
 	if err != nil {
 		return nil, apperrors.ErrInternal.Wrap(err)
@@ -839,4 +932,83 @@ func (s *Service) ResolveLessonCourseID(ctx context.Context, lessonID uuid.UUID)
 		return uuid.Nil, apperrors.ErrInternal.Wrap(err)
 	}
 	return s.ResolveModuleCourseID(ctx, lesson.ModuleID)
+}
+
+// --- input validation helpers (F-17) -----------------------------------------
+
+// maxContentDepth bounds nesting of lesson content. Deeply nested JSON can
+// pass the text-size check yet blow the jsonb size CHECK, and costs a lot to
+// decode; real lesson content is nowhere near this deep.
+const maxContentDepth = 32
+
+var errNUL = apperrors.ErrValidation.Wrap(fmt.Errorf("NUL characters are not allowed"))
+
+// rejectNUL fails with a 400 when any value contains a NUL byte, which
+// Postgres text/jsonb cannot store (SQLSTATE 22021).
+func rejectNUL(vals ...string) error {
+	for _, v := range vals {
+		if strings.ContainsRune(v, 0) {
+			return errNUL
+		}
+	}
+	return nil
+}
+
+func ptrStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+// validateContent rejects NUL in any key or string value and nesting deeper
+// than maxContentDepth.
+func validateContent(content map[string]any) error {
+	return walkContent(content, 1)
+}
+
+func walkContent(v any, depth int) error {
+	if depth > maxContentDepth {
+		return apperrors.ErrValidation.Wrap(fmt.Errorf("content is nested too deeply (max %d levels)", maxContentDepth))
+	}
+	switch t := v.(type) {
+	case string:
+		return rejectNUL(t)
+	case map[string]any:
+		for k, e := range t {
+			if err := rejectNUL(k); err != nil {
+				return err
+			}
+			if err := walkContent(e, depth+1); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, e := range t {
+			if err := walkContent(e, depth+1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// dbError maps Postgres data errors that bad input can still provoke
+// (22021 invalid byte sequence, 22003 numeric out of range, 23514 check
+// violation) to a 400 instead of a 500.
+func dbError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "22021", "22003", "23514":
+			return apperrors.ErrValidation.Wrap(err)
+		}
+	}
+	return apperrors.ErrInternal.Wrap(err)
+}
+
+// escapeLike escapes LIKE/ILIKE metacharacters so user input matches
+// literally (Postgres' default escape character is backslash).
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }

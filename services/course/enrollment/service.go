@@ -136,8 +136,16 @@ func (s *Service) Withdraw(ctx context.Context, studentID, enrollmentID uuid.UUI
 		if _, err := lockCourseForEnrollment(ctx, tx, e.CourseID); err != nil {
 			return apperrors.ErrInternal.Wrap(err)
 		}
-		if err := s.repo.UpdateStatusWithdrawn(ctx, tx, enrollmentID); err != nil {
+		// The status read above happened before the lock, so a concurrent
+		// withdrawal may have won. The guarded UPDATE is the authority: only
+		// the call that actually changed a row frees the seat and emits the
+		// event (F-01).
+		changed, err := s.repo.UpdateStatusWithdrawn(ctx, tx, enrollmentID)
+		if err != nil {
 			return apperrors.ErrInternal.Wrap(err)
+		}
+		if !changed {
+			return nil
 		}
 		if err := incrementEnrollmentCount(ctx, tx, e.CourseID, -1); err != nil {
 			return apperrors.ErrInternal.Wrap(err)

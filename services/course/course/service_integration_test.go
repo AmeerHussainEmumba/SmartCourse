@@ -215,8 +215,8 @@ func TestUpdateDraft_RejectsNonOwner(t *testing.T) {
 		t.Fatal("expected a non-owning instructor to be rejected")
 	}
 	appErr, ok := apperrors.As(err)
-	if !ok || appErr.Code != "not_owner" {
-		t.Fatalf("expected not_owner error, got: %v", err)
+	if !ok || appErr.Code != "not_found" {
+		t.Fatalf("expected not_found error (F-36: ownership denial must not reveal existence), got: %v", err)
 	}
 }
 

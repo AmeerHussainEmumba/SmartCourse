@@ -1,4 +1,4 @@
-//go:build integration && bugrepro
+//go:build integration
 
 // Reproducer: Service.Withdraw reads the enrollment's status BEFORE taking
 // the course row lock (service.go: GetByID + status check, then

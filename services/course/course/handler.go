@@ -29,7 +29,11 @@ func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig) {
 
 	// Authoring — instructor-owned, ownership itself checked in service.go.
 	instructor := r.Group("/courses")
-	instructor.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"))
+	// RequireFreshPrivilege (token-version check) on every instructor write:
+	// a demoted or suspended instructor's old access token must not keep
+	// authoring, publishing or archiving until its TTL runs out (F-11).
+	fresh := identityauth.RequireFreshPrivilege(svc.rdb)
+	instructor.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"), fresh)
 	instructor.POST("", h.createCourse)
 	instructor.PATCH("/:id", h.updateDraft)
 	instructor.POST("/:id/modules", h.addModule)
@@ -47,13 +51,13 @@ func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig) {
 	instructor.POST("/:id/archive", h.archiveCourse)
 
 	modules := r.Group("/modules")
-	modules.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"))
+	modules.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"), fresh)
 	modules.POST("/:id/lessons", h.addLesson)
 	modules.PATCH("/:id", h.updateModule)
 	modules.DELETE("/:id", h.deleteModule)
 
 	lessons := r.Group("/lessons")
-	lessons.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"))
+	lessons.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"), fresh)
 	lessons.PATCH("/:id", h.updateLesson)
 	lessons.DELETE("/:id", h.deleteLesson)
 }
