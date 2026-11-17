@@ -117,6 +117,14 @@ func TestBug_NULBytes_Cause500(t *testing.T) {
 		}
 	}
 	fx := w.newDraft(instrA)
+	for name, tgt := range map[string][2]string{
+		"PATCH /courses/:id title NUL": {"PATCH", "/api/v1/courses/" + fx.CourseID.String()},
+		"PATCH /modules/:id title NUL": {"PATCH", "/api/v1/modules/" + fx.ModuleID.String()},
+	} {
+		if rec := w.do(instrA, tgt[0], tgt[1], map[string]any{"title": "a\u0000b"}); rec.Code >= 500 {
+			t.Errorf("%s -> %d", name, rec.Code)
+		}
+	}
 	for name, c := range map[string]map[string]any{
 		"lesson content NUL value": {"a": "x\u0000y"},
 		"lesson content NUL key":   {"\u0000": "v"},

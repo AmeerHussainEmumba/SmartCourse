@@ -10,6 +10,7 @@
 package identity_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -243,6 +244,68 @@ func TestBug_AdminCanSelfDemote_NoLastAdminGuard(t *testing.T) {
 	rec := h.call("PATCH", "/api/v1/admin/users/"+admin.User.ID+"/role", map[string]any{"role": "student", "status": "deleted"}, withToken(adm))
 	if rec.Code == 200 {
 		t.Fatalf("the only admin deleted themself via the API (%d): platform is now unadministrable", rec.Code)
+	}
+}
+
+// The privilege-revocation state lives only in Redis, and RequireFreshPrivilege
+// treats a MISSING key as token_version 1. After a Redis restart / flush /
+// eviction (no persistence is configured in compose or testenv) every
+// previously revoked token whose tv is 1 is valid again on the admin routes,
+// while a freshly issued token for the same admin (tv=2) is rejected as
+// "stale" until the key is rewritten. Fail-open on the one control that
+// revokes privilege.
+func TestBug_RedisFlush_ResurrectsRevokedAdminToken(t *testing.T) {
+	h := newHarness(t)
+	victim := h.mustRegister(uniq("adm1"), "correct-horse-battery")
+	other := h.mustRegister(uniq("adm2"), "correct-horse-battery")
+	h.setRoleSQL(victim.User.ID, "admin")
+	h.setRoleSQL(other.User.ID, "admin")
+	victimOld := mustAccess(t, h, uuid.MustParse(victim.User.ID), "admin", 1)
+	otherTok := mustAccess(t, h, uuid.MustParse(other.User.ID), "admin", 1)
+
+	// other demotes victim: token_version 1 -> 2 in Postgres and Redis.
+	if rec := h.call("PATCH", "/api/v1/admin/users/"+victim.User.ID+"/role", map[string]any{"role": "student", "status": "active"}, withToken(otherTok)); rec.Code != 200 {
+		t.Fatalf("demote: %d %s", rec.Code, rec.Body.String())
+	}
+	probe := func(tok string) int {
+		return h.call("PATCH", "/api/v1/admin/users/"+other.User.ID+"/role", map[string]any{"role": "admin", "status": "active"}, withToken(tok)).Code
+	}
+	if c := probe(victimOld); c != 401 {
+		t.Fatalf("precondition: the revoked token must be rejected before the flush, got %d", c)
+	}
+
+	if err := h.env.RDB.FlushAll(context.Background()).Err(); err != nil { // what a Redis restart without persistence does
+		t.Fatal(err)
+	}
+	if c := probe(victimOld); c == 200 {
+		t.Fatalf("after a Redis flush the demoted admin's OLD token works again on an admin route (%d): a missing key is treated as version 1; consult Postgres (source of truth) on a miss", c)
+	}
+}
+
+// /auth/password-reset/request and /auth/verify-email/resend (and /refresh,
+// /logout, /password-reset/confirm, /verify-email/confirm) have NO rate limit:
+// only register and login are wrapped in limiter.Middleware. Anyone can make the
+// system send unlimited reset/verification e-mails to a victim address and
+// mint unlimited valid reset tokens (earlier tokens are not invalidated).
+func TestBug_PasswordResetAndResend_NoRateLimit_EmailBombing(t *testing.T) {
+	h := newHarness(t)
+	email := uniq("bomb")
+	h.mustRegister(email, "correct-horse-battery")
+	var limited, accepted int
+	for i := 0; i < 40; i++ {
+		for _, p := range []string{"/api/v1/auth/password-reset/request", "/api/v1/auth/verify-email/resend"} {
+			if h.call("POST", p, map[string]any{"email": email}, withIP("203.0.113.99")).Code == 429 {
+				limited++
+			} else {
+				accepted++
+			}
+		}
+	}
+	var active int64
+	h.env.DB.Raw(`SELECT count(*) FROM password_reset_tokens WHERE used_at IS NULL AND expires_at > now()`).Row().Scan(&active)
+	t.Logf("accepted=%d limited=%d simultaneously valid reset tokens=%d", accepted, limited, active)
+	if limited == 0 {
+		t.Fatalf("80 reset/resend requests for one address from one IP were all accepted (%d valid reset tokens now exist for the victim)", active)
 	}
 }
 
