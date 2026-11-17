@@ -1,8 +1,8 @@
-//go:build integration && bugrepro
+//go:build integration
 
 // Reproducers for real defects in services/course/progress found by
-// adversarial testing. They fail today by design; run with
-// -tags='integration bugrepro'.
+// adversarial testing. Regression tests; run with
+// -tags=integration.
 package progress_test
 
 import (
@@ -59,7 +59,7 @@ func TestBugrepro_ConcurrentFinalLessons_EnrollmentNeverCompletes(t *testing.T) 
 		}(k)
 	}
 	deadline := time.Now().Add(20 * time.Second)
-	for scalarInt(t, env, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database() AND query ILIKE '%FROM lessons%'`) < 2 {
+	for scalarInt(t, env, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database() AND (query ILIKE '%FROM lessons%' OR query ILIKE '%FOR UPDATE%')`) < 2 {
 		if time.Now().After(deadline) {
 			hold.Rollback()
 			t.Fatal("both transactions never reached the lessons read")
@@ -112,7 +112,7 @@ func TestBugrepro_ConcurrentSameFinalLesson_EmitsDuplicateCompletionEvents(t *te
 		}()
 	}
 	deadline := time.Now().Add(20 * time.Second)
-	for scalarInt(t, env, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database() AND query ILIKE '%UPDATE lesson_progress%'`) < 2 {
+	for scalarInt(t, env, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database() AND (query ILIKE '%UPDATE lesson_progress%' OR query ILIKE '%FOR UPDATE OF e%')`) < 2 {
 		if time.Now().After(deadline) {
 			hold.Rollback()
 			t.Fatal("both transactions never parked on the lesson_progress row")
