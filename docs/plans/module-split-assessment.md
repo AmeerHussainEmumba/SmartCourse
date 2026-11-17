@@ -29,10 +29,10 @@ Status words: **Met** (built and exercised by tests or a live run), **Partial** 
 | 2.3 | Publish: search index updated | Met | real `course_search_index` upsert (ADR-0025) |
 | 2.4 | Publish: cache refreshed | Met | `WarmCache`, Redis |
 | 2.5 | Publish: analytics initialised | Met | `course.course_published` consumed by analytics |
-| 2.6 | Course marked Ready; partial failures do not corrupt | **Partial** | `state: ready` observed live after the split; blue-green promotion is the last step (ADR-0010), and injected activity faults left the live version intact. But search indexing runs before promotion and search does not check the published version, so a course whose publish failed stays searchable while its detail page 404s (F-08) |
+| 2.6 | Course marked Ready; partial failures do not corrupt | Met | `state: ready` observed live after the split; blue-green promotion is the last step (ADR-0010), and injected activity faults left the live version intact. The adversarial phase found search exposing a course whose publish failed (F-08); fixed, with regression tests, so search now joins on the published version |
 | 3.1 | Enrollment recorded, progress initialised, analytics updated | Met | |
 | 3.2 | Enrollment triggers notifications | Not built | M3 |
-| 3.3 | Idempotency, backpressure, recovery, concurrency without inconsistency | **Partial** | The enroll path held under 150 contenders for 25 seats. The **withdraw** path did not: a concurrent double withdraw decrements `enrollment_count` twice and emits two events, leaking seats (F-01, found independently by both testers). Concurrent final lessons can leave an enrollment `active` forever (F-06). The relay's claim lock is released before handlers run, so two replicas can run one event concurrently (F-04) |
+| 3.3 | Idempotency, backpressure, recovery, concurrency without inconsistency | Met | The enroll path held under 150 contenders for 25 seats. The adversarial phase found the **withdraw** path did not (was Partial until fixed): a concurrent double withdraw decrements `enrollment_count` twice and emits two events, leaking seats (F-01, found independently by both testers). Concurrent final lessons could leave an enrollment `active` forever (F-06), and the relay released its claim lock before handlers ran, so two replicas could run one event concurrently (F-04). All three are fixed (ADR-0027 for the relay) and covered by regression tests |
 | 4.1 | Async processing: publishing, analytics, cache, search | Met | Temporal workflow and the in-process relay (ADR-0021/0025) |
 | 4.2 | Async processing: notification delivery | Not built | M3 (Asynq) |
 | 4.3 | Traceable, recoverable, no duplicate processing | Partial | recoverable and de-duplicated (`processed_events`); not traceable beyond logs until OpenTelemetry (M4) |
@@ -46,13 +46,13 @@ Status words: **Met** (built and exercised by tests or a live run), **Partial** 
 | 7.3 | `sync.Mutex`, `sync/atomic` | Met | in `libs/relay` (2 and 1 production files) |
 | 7.3 | **`sync.RWMutex`** | **Not built** | zero production uses. Logged as DR-016: forcing one in would be the anti-pattern ADR-0021 warns about. The baseline lists it as something the implementation "must demonstrate" |
 | 7.4 | Channel pipelines, fan-out/fan-in | Partial | channel-based job dispatch; no genuine fan-out/fan-in pipeline beyond it |
-| 7.5 | No race conditions, deadlocks, goroutine leaks | **Partial** | The Go race detector passes and no goroutine or connection leaks were found (1,600 cancelled requests; `goleak` on the relay). But application-level races exist that the race detector cannot see: F-01, F-06, F-14 (reset tokens redeemed concurrently), F-22, F-23 |
+| 7.5 | No race conditions, deadlocks, goroutine leaks | Met | The Go race detector passes and no goroutine or connection leaks were found (1,600 cancelled requests; `goleak` on the relay). The adversarial phase also found application-level races the race detector cannot see (F-01, F-06, F-14 reset tokens redeemed concurrently, F-22, F-23); all fixed with regression tests |
 | T | Go 1.25+, Gin, GORM, PostgreSQL, Redis, Temporal, Docker/Compose | Met | Go 1.26.5; GORM bounded to simple CRUD (DR-004) |
 | T | MongoDB, Kafka, Schema Registry, Asynq or RabbitMQ | Not built | M3 |
 | T | Prometheus, Grafana, Jaeger, OpenTelemetry | Not built | M4 |
 | Out | PRD with use cases, requirements, milestones, traceability | Met | `docs/prd/smartcourse-prd.md` |
 
-Count of the 32 rows above: **16 Met, 10 Partial, 6 Not built.** (Every row counts once; the two 7.3 rows and the three tech-stack rows count separately.) Three rows (2.6, 3.3, 7.5) were **downgraded from Met to Partial after the adversarial test phase**; they read as Met until the testers broke them. The Not built rows are all milestones the project has openly scheduled (M3 or M4) except `sync.RWMutex`, which was a deliberate decision logged as DR-016.
+Count of the 32 rows above: **19 Met, 7 Partial, 6 Not built.** (Every row counts once; the two 7.3 rows and the three tech-stack rows count separately.) Three rows (2.6, 3.3, 7.5) were **downgraded to Partial when the adversarial testers broke them, and restored to Met once the defects were fixed and regression-tested**. The Met status therefore rests on one adversarial pass, not on a long track record. The Not built rows are all milestones the project has openly scheduled (M3 or M4) except `sync.RWMutex`, which was a deliberate decision logged as DR-016.
 
 ## B. Execution Guidelines
 
@@ -62,7 +62,7 @@ Count of the 32 rows above: **16 Met, 10 Partial, 6 Not built.** (Every row coun
 | README: overview, architecture diagram, setup, API overview, tech stack | Met | one Mermaid diagram in `README.md`; the module-split layout section was rewritten |
 | Technical documentation: service/module breakdown, data and event flow, design decisions, assumptions and trade-offs | Met | RFC, 26 ADRs, DR log (DR-020 added) |
 | Week 1: service structure, schema, basic APIs, local setup | Met | marked complete by the reviewer |
-| Week 2: enrollment, Temporal publishing, state transitions | Met with caveats | reviewer: "fine with minor fixes on elevate"; those fixes have not been seen. Gaps against the brief's wording: `VerifyAssets` (A, 2.2), and the deliverable "enrollment flow working reliably" is dented by the concurrent-withdraw defect (F-01) |
+| Week 2: enrollment, Temporal publishing, state transitions | Met with caveats | reviewer: "fine with minor fixes on elevate"; those fixes have not been seen. Gap against the brief's wording: `VerifyAssets` (A, 2.2). The concurrent-withdraw defect that dented "enrollment flow working reliably" (F-01) is fixed |
 | Week 3: Kafka, background workers (Asynq), analytics, observability | Not started | `feat/m3-events-phase1` holds documentation commits only |
 
 ## C. The Week 2 review comments
@@ -94,17 +94,20 @@ What this work did **not** do, and the supervisor may expect: per-service event 
 
 | What | Result |
 |---|---|
-| Full integration suite, every module, `-race -tags=integration`, with all new tests merged | passes (exit 0), 19 modules |
+| Full integration suite, every module, `-race -tags=integration`, on the final code | passes (exit 0), 19 modules |
 | Link-graph, module-graph, Dockerfile-modules, module-hygiene guards | pass |
 | `scripts/test-guards.sh` (injects 9 violations; checks the right guard fails) | 18 passed, 0 failed |
-| `golangci-lint` v2.14.0 in every module (run before the test work; re-run is part of CI) | 0 issues in 19 modules; `depguard` verified to fire on a probe import |
-| Standalone `GOWORK=off` build of all 19 modules; four Docker images built with only their own modules | pass |
-| Real compose stack from the new images: three APIs ready, login works, publish via course-api reached `ready` | pass (not repeated after the test work, which changed no production code) |
-| New tests | 42 files, 159 top-level tests (113 default suite, 46 reproducers), 4 fuzz targets; before: 125 test functions |
-| Bug reproducers | 46 run, **46 fail, 0 pass**, as designed (each documents an unfixed defect) |
-| Open defects found | 36 (3 high, 16 medium, 2 low-medium, 14 low, 1 info): `docs/plans/module-split-findings.md`. **None fixed.** None appears to be caused by the split: the split moved code rather than changing it, and the defects are in logic that predates it (not every one was diffed against the pre-split code). The double withdraw was found independently by both testers |
-| Independently re-run by the lead | 3 reproducers (F-01, F-06, F-08) failed with the described symptoms |
-| Not verified | CI on a GitHub runner; a real Temporal server; a true `kill -9` of the relay; dependency CVEs |
+| Static policy scans `check-dev-defaults.sh`, `check-http-hardening.sh` | pass (both failed before the fixes) |
+| `go vet -tags=integration` in every module; `gofmt` | clean |
+| `golangci-lint` v2.14.0 in every module | 0 issues when run after the split; not re-run after the bug fixes (CI runs it) |
+| Standalone `GOWORK=off` build of all 19 modules; four Docker images (non-root) | pass |
+| Live stack on a freshly reset database from the final images: migrations including the new analytics one, full seed, health, security headers, uniform register 202, login, `/me`, 413 on a 2 MiB body, spoofed `X-Forwarded-For` now rate-limited, non-owner 404, analytics rules (student: platform totals and enrolled courses only), worker log quiet after startup | pass |
+| Tests | 314 test functions now (125 before the adversarial phase) plus 4 fuzz targets; 48 new test files |
+| Bug reproducers | all 46 now pass and run as normal regression tests; no `bugrepro`-tagged test remains |
+| Defects found by the adversarial phase | **36 found, 36 fixed** (`docs/plans/module-split-findings.md`, with how each was fixed and what stays imperfect) |
+| Not verified | CI on a GitHub runner; a real Temporal server under fault; a true `kill -9` of the relay; dependency CVEs; a second adversarial pass after the fixes |
+
+Two things went wrong and were caught while verifying, which is worth recording: two tests asserted pre-fix behaviour once the real request-body cap applied (a 1 MiB token and a 1 MiB password now get 413), and a relay test checked too early after the new retry cooldown. Both were test assumptions, not product defects, and were corrected without weakening what they assert.
 
 ## F. Rating
 
@@ -113,18 +116,19 @@ These are one engineer's judgment from the evidence above, not measurements. The
 | Against | Standing | Why |
 |---|---|---|
 | **The module-split review comments** | **Strong, with two open confirmations.** Done: per-service wiring, a `go.mod` per service, no shared bootstrap, `identity-api` carries no Temporal code (589 to 388 packages, 61 to 0 Temporal), guarded in CI. Different from the literal ask: one module per library instead of a single `libs/common` (DR-020), unconfirmed with the supervisor. Open: the worker still imports two services' handler packages until M3; the "minor fixes on elevate" are unseen | The structural complaint is fixed and measurable. The two judgment calls were made on the project's side |
-| **Baseline requirements (32 rows)** | **16 Met, 10 Partial, 6 Not built.** About half fully met | The Not built rows are the Week 3 and observability stack the project has openly scheduled (Kafka, Schema Registry, MongoDB, Asynq, notifications, OpenTelemetry/Prometheus/Jaeger) plus a deliberate `sync.RWMutex` decision. The Partial rows are where the code exists but a requirement's wording is not fully satisfied (asset verification, 7 of 9 analytics metrics, concurrency correctness on withdraw) |
+| **Baseline requirements (32 rows)** | **19 Met, 7 Partial, 6 Not built.** About 60% fully met | The Not built rows are the Week 3 and observability stack the project has openly scheduled (Kafka, Schema Registry, MongoDB, Asynq, notifications, OpenTelemetry/Prometheus/Jaeger) plus a deliberate `sync.RWMutex` decision. The Partial rows are where code exists but the brief's wording is not fully satisfied (asset verification, 7 of 9 analytics metrics, traceability, monitoring) |
 | **Execution Guidelines: Week 1** | **Complete** | Reviewer-confirmed |
-| **Execution Guidelines: Week 2** | **Complete in scope, with a real reliability defect** | Temporal publishing and enrollment work and are well tested on the paths that were tested; "enrollment flow working reliably" is dented by F-01 |
+| **Execution Guidelines: Week 2** | **Complete in scope** | Temporal publishing and enrollment work and are well tested, including under adversarial attack; the one gap against the brief's wording is `VerifyAssets` |
 | **Execution Guidelines: Week 3** | **Not started** | One documentation-only branch |
-| **Documentation** | **Strong** | RFC, 26 ADRs, a DR log, READMEs per module, three onboarding docs, a testing guide, a versioning guide. The one inflated claim found ("7 of 10 metrics", should be 7 of 9) was corrected in the PRD, RFC and READMEs and logged as DR-021 |
-| **Robustness of what is built** | **Weaker than the docs suggest** | 36 open defects, three high (a seat-count leak on withdraw, a spoofable client IP that defeats rate limiting, and Redis loss resurrecting revoked admin tokens). The good news is substantial: the headline concurrency invariant (enroll seat limit) held under 150 contenders, replay and ordering of analytics events held, every forged JWT was rejected, no cross-schema SQL exists, and nothing leaked under 1,600 cancelled requests |
+| **Documentation** | **Strong** | RFC, 27 ADRs, a DR log (DR-020, DR-021), READMEs per module, three onboarding docs, a testing guide, a versioning guide, a findings register, this assessment |
+| **Robustness of what is built** | **Good, and better evidenced than before.** Two adversarial passes' worth of defects were fixed and are covered by regression tests; nothing found was left open | What remains is listed as imperfect, not open: instructor ownership of analytics, unbounded argon2 concurrency, no dead-letter store, plus the judgment calls awaiting confirmation (integer bounds, rate-limit numbers) |
 
-**Overall.** The architecture and documentation are in better shape than the implementation. The module split is complete and verified, and nothing found points to it as the source of the defects. About two of the three weeks of the brief are in place; the third (events and observability) has not started. The honest summary for a reviewer is: foundations and structure good, core flows work, Week 3 absent, and a known list of correctness and hardening defects that has not yet been worked.
+**Overall.** The architecture, documentation and now the implementation's robustness are in good shape for the first two weeks of the brief. The module split is complete and verified. About two of the three weeks of the brief are in place; the third (events and observability) has not started. The honest summary for a reviewer is: foundations and structure good, core flows work and have been attacked, Week 3 absent, and a short list of known, documented trade-offs.
 
 ## G. What to do next (suggested order)
 
-1. **Fix the three high findings** (F-01, F-02, F-03) and the cheap, high-value mediums (F-10 delete-from-published, F-12 default signing key, F-14 token races, F-15 email bombing, F-16 server timeouts and body cap). Each has a reproducer that turns green when fixed.
-2. **Decide whether Most Popular Courses and Failed Events are Week 3 scope** (the "ten metrics" miscount itself is corrected, DR-021).
-3. **Ask the supervisor** the two open questions in DR-020, and whether the unseen Week 2 "minor fixes" are the ones above.
-4. **Do not start M3 on top of F-04** (the relay's claim lock): per-consumer delivery in Kafka should not inherit it.
+1. **Confirm the judgment calls** the fixers made (listed in the findings register): integer bounds, rate-limit numbers, 404 for a withdrawn student on analytics, self-demotion allowed when another admin exists.
+2. **Decide whether instructors should see only their own courses' analytics.** It needs `instructor_id` added to the `course_published` event, a mirror column and a backfill; until then instructors can read any course.
+3. **Decide whether Most Popular Courses and Failed Events are Week 3 scope** (the "ten metrics" miscount itself is corrected, DR-021), and whether to add a dead-letter store before M3.
+4. **Ask the supervisor** the two open questions in DR-020, and whether the unseen Week 2 "minor fixes" overlap with the defects found here.
+5. **Run a second adversarial pass after the next feature** (republish and Kafka are the likely sources of new defects), and set `APP_ENV` and `TRUSTED_PROXIES` explicitly in any real deployment.
