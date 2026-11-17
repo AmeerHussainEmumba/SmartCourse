@@ -5,7 +5,7 @@ every lifecycle state, students with partial progress — so a contributor gets
 a working system with data in one command:
 
 ```
-make seed    # go run ./cmd/seed
+make seed    # go run ./tools/seed
 ```
 
 Requires `make dev-workflow` (not just `dev-core`) already running, and
