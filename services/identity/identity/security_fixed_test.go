@@ -2,8 +2,8 @@
 
 // Regression tests for findings fixed in identity (and libs/auth,
 // libs/ratelimit): F-03, F-11, F-14, F-15, F-30, F-31, F-32, F-33. They began
-// as bugrepro reproducers (security_bugrepro_test.go still holds the ones for
-// defects that remain open); test names are unchanged.
+// as bugrepro reproducers; test names are unchanged. The router-level ones
+// (F-02, F-16) are in security_router_integration_test.go.
 package identity_test
 
 import (

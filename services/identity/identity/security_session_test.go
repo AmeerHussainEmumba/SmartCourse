@@ -1,8 +1,9 @@
 //go:build integration
 
 // Adversarial session/credential tests over real HTTP, real Postgres and
-// real Redis (security tester, area A). Anything that exposes a real defect
-// lives in security_bugrepro_test.go behind the `bugrepro` tag.
+// real Redis (security tester, area A). Defects they exposed were fixed and
+// their regression tests live in security_fixed_test.go and
+// security_router_integration_test.go.
 package identity_test
 
 import (
