@@ -62,28 +62,57 @@ func UpsertCourseMirror(ctx context.Context, tx *gorm.DB, courseID uuid.UUID, pu
 }
 
 // InsertEnrollmentMirror records a new enrollment, fed by enrollment.
-// student_enrolled — the only event carrying enrolled_at. Idempotent
-// against redelivery of the same event (ON CONFLICT DO UPDATE with the
-// same values is a no-op in effect, not an error).
-func InsertEnrollmentMirror(ctx context.Context, tx *gorm.DB, enrollmentID, courseID, studentID uuid.UUID, enrolledAt time.Time) error {
+// student_enrolled — the only event carrying enrolled_at. eventID is the
+// outbox row id and orders this event against the enrollment's other
+// events (same scheme as user_role_mirror): if a newer status event
+// (withdrawn/completed) already created or updated the row, only the
+// facts enrolled carries (enrolled_at, course, student) are filled in and
+// the newer status is kept. Redelivery is a no-op in effect.
+func InsertEnrollmentMirror(ctx context.Context, tx *gorm.DB, enrollmentID, courseID, studentID uuid.UUID, enrolledAt time.Time, eventID int64) error {
 	return tx.WithContext(ctx).Exec(`
-		INSERT INTO enrollment_mirror (enrollment_id, course_id, student_id, status, enrolled_at, updated_at)
-		VALUES (?, ?, ?, 'active', ?, now())
+		INSERT INTO enrollment_mirror (enrollment_id, course_id, student_id, status, enrolled_at, last_event_id, updated_at)
+		VALUES (?, ?, ?, 'active', ?, ?, now())
 		ON CONFLICT (enrollment_id) DO UPDATE SET
+			course_id = EXCLUDED.course_id,
+			student_id = EXCLUDED.student_id,
 			enrolled_at = EXCLUDED.enrolled_at,
+			status = CASE WHEN EXCLUDED.last_event_id > enrollment_mirror.last_event_id THEN EXCLUDED.status ELSE enrollment_mirror.status END,
+			completed_at = CASE WHEN EXCLUDED.last_event_id > enrollment_mirror.last_event_id THEN NULL ELSE enrollment_mirror.completed_at END,
+			last_event_id = GREATEST(EXCLUDED.last_event_id, enrollment_mirror.last_event_id),
 			updated_at = EXCLUDED.updated_at
-	`, enrollmentID, courseID, studentID, enrolledAt).Error
+	`, enrollmentID, courseID, studentID, enrolledAt, eventID).Error
+}
+
+// WithdrawEnrollmentMirror applies enrollment.student_withdrawn. If the
+// row does not exist yet (the withdrawal overtook student_enrolled) it is
+// created with enrolled_at NULL so the withdrawal is not lost;
+// InsertEnrollmentMirror fills the rest in later and keeps this status
+// because the withdrawal's outbox id is newer. An older event never
+// overwrites a newer one.
+func WithdrawEnrollmentMirror(ctx context.Context, tx *gorm.DB, enrollmentID, courseID, studentID uuid.UUID, eventID int64) error {
+	return tx.WithContext(ctx).Exec(`
+		INSERT INTO enrollment_mirror (enrollment_id, course_id, student_id, status, enrolled_at, last_event_id, updated_at)
+		VALUES (?, ?, ?, 'withdrawn', NULL, ?, now())
+		ON CONFLICT (enrollment_id) DO UPDATE SET
+			status = 'withdrawn',
+			completed_at = NULL,
+			last_event_id = EXCLUDED.last_event_id,
+			updated_at = EXCLUDED.updated_at
+		WHERE EXCLUDED.last_event_id > enrollment_mirror.last_event_id
+	`, enrollmentID, courseID, studentID, eventID).Error
 }
 
 // UpdateEnrollmentMirrorStatus transitions an existing mirror row — fed by
-// enrollment.student_withdrawn and progress.course_completed, neither of
-// which carries enrolled_at, so this updates rather than upserts: the row
-// must already exist from InsertEnrollmentMirror.
-func UpdateEnrollmentMirrorStatus(ctx context.Context, tx *gorm.DB, enrollmentID uuid.UUID, status string, completedAt *time.Time) error {
+// progress.course_completed, which carries neither course_id nor
+// student_id, so it cannot create a placeholder: the row must already
+// exist (handleCourseCompleted errors, and the relay retries, until
+// student_enrolled has landed). Applied only when eventID is newer than
+// the last event applied to the row.
+func UpdateEnrollmentMirrorStatus(ctx context.Context, tx *gorm.DB, enrollmentID uuid.UUID, status string, completedAt *time.Time, eventID int64) error {
 	return tx.WithContext(ctx).Exec(`
-		UPDATE enrollment_mirror SET status = ?, completed_at = ?, updated_at = now()
-		WHERE enrollment_id = ?
-	`, status, completedAt, enrollmentID).Error
+		UPDATE enrollment_mirror SET status = ?, completed_at = ?, last_event_id = ?, updated_at = now()
+		WHERE enrollment_id = ? AND last_event_id < ?
+	`, status, completedAt, eventID, enrollmentID, eventID).Error
 }
 
 // CourseIDForEnrollment looks up course_id from this module's own mirror —
@@ -154,17 +183,18 @@ func RecomputeCourseStats(ctx context.Context, tx *gorm.DB, courseID uuid.UUID) 
 	`, courseID, courseID, courseID).Error
 }
 
-// IncrementDailyEnrollment bumps today's (day, course_id) bucket. Unlike
-// the recomputed aggregates above, an incremental bump is correct here:
-// "an enrollment happened on this UTC day" is an immutable historical
-// fact once true, so there's no drift risk a recompute would guard
-// against.
-func IncrementDailyEnrollment(ctx context.Context, tx *gorm.DB, courseID uuid.UUID) error {
+// IncrementDailyEnrollment bumps the (day, course_id) bucket for the UTC
+// day of enrolledAt (the event payload's enrolled_at), never the day the
+// event happens to be processed. Unlike the recomputed aggregates above,
+// an incremental bump is correct here: "an enrollment happened on this
+// UTC day" is an immutable historical fact once true. Exactly-once per
+// event is provided by the relay's processed_events marker.
+func IncrementDailyEnrollment(ctx context.Context, tx *gorm.DB, courseID uuid.UUID, enrolledAt time.Time) error {
 	return tx.WithContext(ctx).Exec(`
 		INSERT INTO daily_enrollments (day, course_id, count)
-		VALUES (current_date, ?, 1)
+		VALUES (?, ?, 1)
 		ON CONFLICT (day, course_id) DO UPDATE SET count = daily_enrollments.count + 1
-	`, courseID).Error
+	`, enrolledAt.UTC().Format("2006-01-02"), courseID).Error
 }
 
 // EnsureCourseStatsRow gives a just-published course a zeroed stats row
@@ -219,6 +249,18 @@ type Repository struct {
 }
 
 func NewRepository(db *gorm.DB) *Repository { return &Repository{db: db} }
+
+// StudentHasEnrollment reports whether the student has an active or
+// completed enrollment in the course, from this module's own mirror
+// (ADR-0024). Withdrawn enrollments do not count.
+func (r *Repository) StudentHasEnrollment(ctx context.Context, courseID, studentID uuid.UUID) (bool, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT count(*) FROM enrollment_mirror
+		WHERE course_id = ? AND student_id = ? AND status IN ('active','completed')
+	`, courseID, studentID).Row().Scan(&n)
+	return n > 0, err
+}
 
 func (r *Repository) GetPlatformSnapshot(ctx context.Context) (*PlatformSnapshot, error) {
 	var s PlatformSnapshot

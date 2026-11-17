@@ -79,7 +79,7 @@ func TestGetPlatformSnapshot_RealRequest_ReflectsSeededRow(t *testing.T) {
 		t.Fatalf("seed platform_snapshot: %v", err)
 	}
 
-	token, err := auth.IssueAccessToken(testJWTCfg(), uuid.New(), "student", 1)
+	token, err := auth.IssueAccessToken(testJWTCfg(), uuid.New(), "instructor", 1)
 	if err != nil {
 		t.Fatalf("IssueAccessToken: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestGetCourseStats_RealRequest_ReflectsSeededRow(t *testing.T) {
 		t.Fatalf("seed course_stats: %v", err)
 	}
 
-	token, err := auth.IssueAccessToken(testJWTCfg(), uuid.New(), "student", 1)
+	token, err := auth.IssueAccessToken(testJWTCfg(), uuid.New(), "instructor", 1)
 	if err != nil {
 		t.Fatalf("IssueAccessToken: %v", err)
 	}

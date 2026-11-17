@@ -1,7 +1,7 @@
-//go:build integration && bugrepro
+//go:build integration
 
 // Reproducers for real defects in analytics' event handling. These fail today
-// by design; run with -tags='integration bugrepro'.
+// (fixed; kept as regression tests).
 package analytics_test
 
 import (

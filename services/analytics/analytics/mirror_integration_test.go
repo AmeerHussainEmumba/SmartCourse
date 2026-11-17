@@ -41,18 +41,18 @@ func TestRecomputeCourseStats_ReflectsEnrollmentMirror(t *testing.T) {
 
 	// Mirrors what handleStudentEnrolled does for three enrollments.
 	run(func(tx *gorm.DB) error {
-		if err := analytics.InsertEnrollmentMirror(ctx, tx, enrolledA, courseID, uuid.Must(uuid.NewV7()), now); err != nil {
+		if err := analytics.InsertEnrollmentMirror(ctx, tx, enrolledA, courseID, uuid.Must(uuid.NewV7()), now, 1); err != nil {
 			return err
 		}
-		if err := analytics.InsertEnrollmentMirror(ctx, tx, enrolledB, courseID, uuid.Must(uuid.NewV7()), now); err != nil {
+		if err := analytics.InsertEnrollmentMirror(ctx, tx, enrolledB, courseID, uuid.Must(uuid.NewV7()), now, 1); err != nil {
 			return err
 		}
-		return analytics.InsertEnrollmentMirror(ctx, tx, withdrawn, courseID, uuid.Must(uuid.NewV7()), now)
+		return analytics.InsertEnrollmentMirror(ctx, tx, withdrawn, courseID, uuid.Must(uuid.NewV7()), now, 1)
 	})
 
 	// Mirrors handleStudentWithdrawn for one of the three.
 	run(func(tx *gorm.DB) error {
-		return analytics.UpdateEnrollmentMirrorStatus(ctx, tx, withdrawn, "withdrawn", nil)
+		return analytics.WithdrawEnrollmentMirror(ctx, tx, withdrawn, courseID, uuid.Must(uuid.NewV7()), 2)
 	})
 
 	// Mirrors handleCourseCompleted for one of the remaining two —
@@ -68,7 +68,7 @@ func TestRecomputeCourseStats_ReflectsEnrollmentMirror(t *testing.T) {
 			t.Fatalf("CourseIDForEnrollment: got %s, want %s", gotCourseID, courseID)
 		}
 		completedAt := now.Add(time.Hour)
-		return analytics.UpdateEnrollmentMirrorStatus(ctx, tx, enrolledA, "completed", &completedAt)
+		return analytics.UpdateEnrollmentMirrorStatus(ctx, tx, enrolledA, "completed", &completedAt, 3)
 	})
 
 	run(func(tx *gorm.DB) error {
