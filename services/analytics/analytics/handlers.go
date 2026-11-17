@@ -78,13 +78,13 @@ func handleStudentEnrolled(ctx context.Context, tx *gorm.DB, evt relay.DecodedEv
 	if err := json.Unmarshal(evt.Payload, &payload); err != nil {
 		return fmt.Errorf("decode enrollment.student_enrolled payload: %w", err)
 	}
-	if err := InsertEnrollmentMirror(ctx, tx, payload.EnrollmentID, payload.CourseID, payload.StudentID, payload.EnrolledAt); err != nil {
+	if err := InsertEnrollmentMirror(ctx, tx, payload.EnrollmentID, payload.CourseID, payload.StudentID, payload.EnrolledAt, evt.OutboxID); err != nil {
 		return err
 	}
 	if err := RecomputeCourseStats(ctx, tx, payload.CourseID); err != nil {
 		return err
 	}
-	if err := IncrementDailyEnrollment(ctx, tx, payload.CourseID); err != nil {
+	if err := IncrementDailyEnrollment(ctx, tx, payload.CourseID, payload.EnrolledAt); err != nil {
 		return err
 	}
 	return RecomputePlatformSnapshot(ctx, tx)
@@ -93,12 +93,13 @@ func handleStudentEnrolled(ctx context.Context, tx *gorm.DB, evt relay.DecodedEv
 func handleStudentWithdrawn(ctx context.Context, tx *gorm.DB, evt relay.DecodedEvent) error {
 	var payload struct {
 		EnrollmentID uuid.UUID `json:"enrollment_id"`
+		StudentID    uuid.UUID `json:"student_id"`
 		CourseID     uuid.UUID `json:"course_id"`
 	}
 	if err := json.Unmarshal(evt.Payload, &payload); err != nil {
 		return fmt.Errorf("decode enrollment.student_withdrawn payload: %w", err)
 	}
-	if err := UpdateEnrollmentMirrorStatus(ctx, tx, payload.EnrollmentID, "withdrawn", nil); err != nil {
+	if err := WithdrawEnrollmentMirror(ctx, tx, payload.EnrollmentID, payload.CourseID, payload.StudentID, evt.OutboxID); err != nil {
 		return err
 	}
 	if err := RecomputeCourseStats(ctx, tx, payload.CourseID); err != nil {
@@ -126,7 +127,7 @@ func handleCourseCompleted(ctx context.Context, tx *gorm.DB, evt relay.DecodedEv
 		return fmt.Errorf("look up course_id for enrollment %s: %w", payload.EnrollmentID, err)
 	}
 	completedAt := payload.CompletedAt
-	if err := UpdateEnrollmentMirrorStatus(ctx, tx, payload.EnrollmentID, "completed", &completedAt); err != nil {
+	if err := UpdateEnrollmentMirrorStatus(ctx, tx, payload.EnrollmentID, "completed", &completedAt, evt.OutboxID); err != nil {
 		return err
 	}
 	return RecomputeCourseStats(ctx, tx, courseID)

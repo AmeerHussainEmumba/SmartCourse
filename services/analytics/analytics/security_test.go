@@ -61,8 +61,8 @@ func TestSecurity_Analytics_AnonymousAndForgedTokens_Rejected_OnEveryRoute(t *te
 				t.Errorf("%s with token %.20q: want 401, got %d", p, tok, rec.Code)
 			}
 		}
-		if rec := s.get(p, s.token("student")); rec.Code != 200 {
-			t.Errorf("control: authenticated call to %s should currently be 200, got %d", p, rec.Code)
+		if rec := s.get(p, s.token("instructor")); rec.Code != 200 {
+			t.Errorf("control: instructor call to %s should be 200, got %d", p, rec.Code)
 		}
 	}
 }
@@ -90,7 +90,7 @@ func TestSecurity_Analytics_InvalidCourseIDs_AreClientErrors_AndLeakNothing(t *t
 // would let a caller distinguish existing from non-existing courses; and the daily series is empty.
 func TestSecurity_Analytics_UnknownCourse_NeutralResponse(t *testing.T) {
 	s := newSecEnv(t)
-	tok := s.token("student")
+	tok := s.token("instructor")
 	a := s.get("/api/v1/analytics/courses/"+uuid.NewString(), tok)
 	b := s.get("/api/v1/analytics/courses/"+uuid.NewString(), tok)
 	if a.Code != 200 || a.Body.String() != b.Body.String() {
