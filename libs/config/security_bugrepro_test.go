@@ -1,4 +1,3 @@
-
 // Regression tests for config-validation gaps (originally failing reproducers).
 package config
 
