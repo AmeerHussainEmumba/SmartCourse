@@ -81,6 +81,7 @@ require (
 require (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/testenv v0.0.0
+	go.uber.org/goleak v1.3.0
 )
 
 replace (
