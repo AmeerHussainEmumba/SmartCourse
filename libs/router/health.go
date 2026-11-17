@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -29,14 +30,22 @@ func RegisterHealth(r *gin.Engine, deps map[string]Checker) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 		defer cancel()
 
-		failures := map[string]string{}
+		// Per-dependency result is a bare ok/failed: raw driver errors carry
+		// host, port, user and database names and /health/ready is
+		// unauthenticated (F-13). The detail goes to the log instead.
+		checks := map[string]string{}
+		failed := false
 		for name, check := range deps {
 			if err := check(ctx); err != nil {
-				failures[name] = err.Error()
+				failed = true
+				checks[name] = "failed"
+				slog.Error("readiness check failed", slog.String("dependency", name), slog.Any("error", err))
+				continue
 			}
+			checks[name] = "ok"
 		}
-		if len(failures) > 0 {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "failures": failures})
+		if failed {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "checks": checks})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ready"})
