@@ -1,13 +1,9 @@
-//go:build integration && bugrepro
+//go:build integration
 
-// Reproducers for REAL findings that are still OPEN in identity (and the libs
-// it uses). They are excluded from the default suite; run with
-//
-//	GOWORK=off go test -tags='integration bugrepro' -run TestBug ./...
-//
-// Every test here is expected to FAIL against the current code and to pass
-// once the named defect is fixed. Reproducers for fixed findings live in
-// security_fixed_test.go.
+// Regression tests for two router-level findings (F-02 spoofable client IP,
+// F-16 no request-body cap). The fixes live in libs/router and libs/httpx; the
+// harness serves identity on the real router stack, so these assert the
+// behaviour end to end. Other fixed findings live in security_fixed_test.go.
 package identity_test
 
 import (
