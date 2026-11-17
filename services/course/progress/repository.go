@@ -79,7 +79,7 @@ func (r *Repository) missingLessonKeys(ctx context.Context, db *gorm.DB, enrollm
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var keys []uuid.UUID
 	for rows.Next() {
 		var k uuid.UUID

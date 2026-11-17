@@ -113,7 +113,7 @@ func TestRequireAuth_ForgedTokens_AllRejected(t *testing.T) {
 		"just dots":                         "..",
 		"bearer garbage":                    "not.a.jwt",
 		"nul bytes":                         "a\x00b.c\x00d.e\x00f",
-		"unicode":                           "‮.‮.‮",
+		"unicode":                           "\u202e.\u202e.\u202e",
 		"huge token 1MiB":                   strings.Repeat("A", 1<<20) + "." + strings.Repeat("B", 16) + "." + strings.Repeat("C", 16),
 		"huge header segment":               b64(strings.Repeat(`{"alg":"HS256","x":"`+strings.Repeat("y", 4096)+`"}`, 1)) + "." + parts[1] + "." + parts[2],
 		"deeply nested payload":             parts[0] + "." + b64(strings.Repeat("[", 5000)+strings.Repeat("]", 5000)) + "." + parts[2],
