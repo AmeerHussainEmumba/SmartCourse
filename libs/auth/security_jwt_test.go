@@ -236,7 +236,16 @@ func assertCleanErrorBody(t *testing.T, body []byte) {
 // was not signed with the configured key.
 func FuzzParseAccessToken(f *testing.F) {
 	cfg := testJWTCfg()
-	good, _ := IssueAccessToken(cfg, uuid.New(), "student", 1)
+	// Deterministic: fuzz workers are separate processes, so the "known good"
+	// token must be byte-identical in each (fixed sub/jti/times, far-future exp).
+	fixed := Claims{Role: "student", TokenVersion: 1, RegisteredClaims: jwt.RegisteredClaims{
+		Subject: "0192f0aa-0000-7000-8000-000000000001", Issuer: cfg.Issuer, ID: "fixed-jti",
+		IssuedAt: jwt.NewNumericDate(time.Unix(1700000000, 0)), ExpiresAt: jwt.NewNumericDate(time.Unix(4102444800, 0)),
+	}}
+	good, err := jwt.NewWithClaims(jwt.SigningMethodHS256, fixed).SignedString([]byte(cfg.SigningKey))
+	if err != nil {
+		f.Fatal(err)
+	}
 	f.Add(good)
 	f.Add("")
 	f.Add("a.b.c")
@@ -252,8 +261,10 @@ func FuzzParseAccessToken(f *testing.F) {
 			if claims == nil || claims.Issuer != cfg.Issuer {
 				t.Fatalf("accepted unexpected token %q", raw)
 			}
-			if !strings.HasPrefix(raw, good[:len(good)-2]) {
-				t.Fatalf("accepted a token that differs from the only valid seed: %q", raw)
+			gp := strings.Split(good, ".")
+			rp := strings.Split(raw, ".")
+			if len(rp) != 3 || rp[0] != gp[0] || rp[1] != gp[1] {
+				t.Fatalf("accepted a token whose header/payload differ from the only validly signed seed: %q", raw)
 			}
 		}
 	})
