@@ -117,7 +117,7 @@ These are one engineer's judgment from the evidence above, not measurements. The
 | **Execution Guidelines: Week 1** | **Complete** | Reviewer-confirmed |
 | **Execution Guidelines: Week 2** | **Complete in scope, with a real reliability defect** | Temporal publishing and enrollment work and are well tested on the paths that were tested; "enrollment flow working reliably" is dented by F-01 |
 | **Execution Guidelines: Week 3** | **Not started** | One documentation-only branch |
-| **Documentation** | **Strong** | RFC, 26 ADRs, a DR log, READMEs per module, three onboarding docs, a testing guide, a versioning guide. The one inflated claim found ("7 of 10 metrics", should be 7 of 9) is flagged here, not yet corrected in the PRD/RFC/README |
+| **Documentation** | **Strong** | RFC, 26 ADRs, a DR log, READMEs per module, three onboarding docs, a testing guide, a versioning guide. The one inflated claim found ("7 of 10 metrics", should be 7 of 9) was corrected in the PRD, RFC and READMEs and logged as DR-021 |
 | **Robustness of what is built** | **Weaker than the docs suggest** | 36 open defects, three high (a seat-count leak on withdraw, a spoofable client IP that defeats rate limiting, and Redis loss resurrecting revoked admin tokens). The good news is substantial: the headline concurrency invariant (enroll seat limit) held under 150 contenders, replay and ordering of analytics events held, every forged JWT was rejected, no cross-schema SQL exists, and nothing leaked under 1,600 cancelled requests |
 
 **Overall.** The architecture and documentation are in better shape than the implementation. The module split is complete and verified, and nothing found points to it as the source of the defects. About two of the three weeks of the brief are in place; the third (events and observability) has not started. The honest summary for a reviewer is: foundations and structure good, core flows work, Week 3 absent, and a known list of correctness and hardening defects that has not yet been worked.
@@ -125,6 +125,6 @@ These are one engineer's judgment from the evidence above, not measurements. The
 ## G. What to do next (suggested order)
 
 1. **Fix the three high findings** (F-01, F-02, F-03) and the cheap, high-value mediums (F-10 delete-from-published, F-12 default signing key, F-14 token races, F-15 email bombing, F-16 server timeouts and body cap). Each has a reproducer that turns green when fixed.
-2. **Correct the "ten metrics" claim** (7 of 9) in the PRD, RFC §21.0 and README, and decide whether Most Popular Courses and Failed Events are Week 3 scope.
+2. **Decide whether Most Popular Courses and Failed Events are Week 3 scope** (the "ten metrics" miscount itself is corrected, DR-021).
 3. **Ask the supervisor** the two open questions in DR-020, and whether the unseen Week 2 "minor fixes" are the ones above.
 4. **Do not start M3 on top of F-04** (the relay's claim lock): per-consumer delivery in Kafka should not inherit it.
