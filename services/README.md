@@ -21,7 +21,7 @@ Each domain package follows the same internal shape — `handler.go` (HTTP), `se
 | [`course`](course/course/README.md) | Courses, versions, modules, lessons, publish lifecycle (now a Temporal workflow, M2) | **Built** |
 | [`enrollment`](course/enrollment/README.md) | Enrollments, seat limits, prerequisites | **Built** — also a relay handler (`course.course_archived` → withdraw active enrollments), alongside `analytics` |
 | [`progress`](course/progress/README.md) | Lesson progress, course completion | **Built** |
-| [`analytics`](analytics/analytics/README.md) | Aggregates, platform/course-level counters | **Built (partial)** — pulled forward from M3 as the outbox relay's first handler (ADR-0021); 7 of 10 FR-5 metrics live |
+| [`analytics`](analytics/analytics/README.md) | Aggregates, platform/course-level counters | **Built (partial)** — pulled forward from M3 as the outbox relay's first handler (ADR-0021); 7 of the 9 FR-5 metrics live |
 | `search` | A standalone search module (own schema, own relay handler, ranking strategy) | Not started as its own module — but `course_search_index`'s write (`course.Service.IndexSearch`) and read (`GET /courses/search`) are both real and live today, built inside `services/course/course` as part of the M2 publish workflow (ADR-0025). See `services/course/course/README.md`. |
 | `notification` | Notification preferences and delivery records | Not started — M3 (Asynq-backed delivery) |
 | `audit` | Event archive, audit log (MongoDB) | Not started — M3 |

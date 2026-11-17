@@ -115,7 +115,7 @@ Numbered to match the brief's own FR groupings (`docs/baseline/SmartCourse.md` �
 
 ### FR-5 — Analytics metrics
 
-All ten metrics from the brief, each with a stated store and freshness target (RFC §9.1): total students, total instructors, total courses published, new enrollments over time, course completion rate, average time to complete, most popular courses, average courses per student, and failed events/workflow issues.
+All nine metrics the brief names, each with a stated store and freshness target (RFC §9.1): total students, total instructors, total courses published, new enrollments over time, course completion rate, average time to complete, most popular courses, average courses per student, and failed events/workflow issues.
 
 - **Acceptance criteria:** covered by UC-7; each metric has both an event-driven update path and a scheduled reconciliation path, and a test asserting they converge (RFC §9.2).
 
@@ -188,7 +188,7 @@ Maps each functional requirement to its architecture section, its governing ADR(
 | FR-2 Publishing workflow, partial-failure safety | §7 | ADR-0009, 0010, 0011 | Workflow, Integration |
 | FR-3 Enrollment idempotency & recovery | §5.3.5, §6.6, §8.1 | ADR-0006, 0012 | Concurrency, Integration |
 | FR-4 Event-driven, no duplicate processing | §6 | ADR-0006, 0007, 0008 | Concurrency, Contract |
-| FR-5 Analytics (all ten metrics) | §9 | ADR-0017 | Integration |
+| FR-5 Analytics (all nine metrics) | §9 | ADR-0017 | Integration |
 | FR-6 Observability & diagnosability | §12 | — | Manual (Jaeger/Grafana walkthrough), Integration |
 | FR-7 Concurrency primitives, no races/leaks/deadlocks | §10 | — | Concurrency (`-race`, `goleak`), Unit |
 | Security (§11 threat model) | §11 | ADR-0015 | Security, Unit, Integration |
