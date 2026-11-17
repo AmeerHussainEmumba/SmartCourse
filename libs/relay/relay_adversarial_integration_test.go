@@ -258,7 +258,12 @@ func TestRelayAdv_PoisonEventDoesNotBlockQueue_AndIsTriedExactlyMaxAttempts(t *t
 	}))
 	stop := startRelay(rl)
 	defer stop()
-	eventually(t, 15*time.Second, "all good events processed behind the poison head", func() bool { return goodCalls.Load() == 8 })
+	// Wait for the whole queue to drain, not just the good events: a failed
+	// row cools down briefly before it is retried, so the good events can
+	// finish before the poison event has used all of its attempts.
+	eventually(t, 15*time.Second, "all good events processed and the poison event given up", func() bool {
+		return goodCalls.Load() == 8 && countRows(t, env.DB, `SELECT count(*) FROM outbox WHERE published_at IS NULL`) == 0
+	})
 	stop()
 
 	if poisonCalls.Load() != 3 {

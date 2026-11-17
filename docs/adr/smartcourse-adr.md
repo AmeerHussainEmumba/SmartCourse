@@ -37,7 +37,7 @@ The distinction matters when something changes. Six months from now, a contribut
 | [0003](#adr-0003--course-content-in-postgresql-with-jsonb) | Course content in PostgreSQL with JSONB | Accepted | §5.5 |
 | [0004](#adr-0004--mongodb-for-event-archive-and-audit-only) | MongoDB for event archive and audit only | Accepted | §5.4 |
 | [0005](#adr-0005--uuidv7-for-primary-keys) | UUIDv7 for primary keys | Accepted | §5.2 |
-| [0006](#adr-0006--transactional-outbox-for-event-publication) | Transactional outbox for event publication | Accepted | §6.2 |
+| [0006](#adr-0006--transactional-outbox-for-event-publication) | Transactional outbox for event publication | Accepted — claim mechanism amended by ADR-0027 | §6.2 |
 | [0007](#adr-0007--topic-per-aggregate-partition-by-aggregate-id) | Topic per aggregate, partition by aggregate ID | Accepted | §6.5 |
 | [0008](#adr-0008--protobuf-with-schema-registry-backward-compatibility) | Protobuf with Schema Registry, BACKWARD compatibility | Accepted | §6.8 |
 | [0009](#adr-0009--temporal-for-publishing-only) | Temporal for publishing only | Accepted | §7.3 |
@@ -52,12 +52,13 @@ The distinction matters when something changes. Six months from now, a contribut
 | [0018](#adr-0018--docker-compose-profiles-for-tiered-local-development) | Docker Compose profiles for tiered local development | Accepted | §17.1 |
 | [0019](#adr-0019--minio-for-learning-asset-object-storage) | MinIO for learning-asset object storage | Accepted | §2.3 (A1), §4.7 |
 | [0020](#adr-0020--gcra-rate-limiting-over-fixed-window-counters) | GCRA rate limiting over fixed-window counters | Accepted | §5.7, §11.3 |
-| [0021](#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka) | In-process outbox relay with a worker pool, ahead of Kafka | Accepted | §6.3, §21.0 |
+| [0021](#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka) | In-process outbox relay with a worker pool, ahead of Kafka | Accepted — claim mechanism amended by ADR-0027 | §6.3, §21.0 |
 | [0022](#adr-0022--separate-api-and-worker-binaries-one-shared-codebase-and-database) | Separate API and worker binaries, one shared codebase and database | Accepted — extended by ADR-0026 | §4.2 |
 | [0023](#adr-0023--split-cmdapi-into-identity-api-course-api-and-analytics-api) | Split cmd/api into identity-api, course-api, and analytics-api | Accepted — extended by ADR-0026 | §4.2 |
 | [0024](#adr-0024--schema-per-service-within-one-shared-database) | Schema-per-service within one shared database | Accepted — deferred `go.mod` item resolved by ADR-0026 | §5.3 |
 | [0025](#adr-0025--course-publishing-as-a-temporal-workflow-m2) | Course publishing as a Temporal workflow (M2) | Accepted | §7.4 |
 | [0026](#adr-0026--one-go-module-per-service-and-per-shared-library) | One Go module per service and per shared library | Accepted | §4.1, §4.2, §4.4 |
+| [0027](#adr-0027--the-relay-holds-each-rows-claim-through-handling) | The relay holds each row's claim through handling | Accepted | §6.3 |
 
 ---
 
@@ -239,7 +240,7 @@ None anticipated. Changing this after data exists is a migration of every table 
 
 ## ADR-0006 — Transactional outbox for event publication
 
-**Status:** Accepted · **Date:** 2026-09-24 · **RFC:** §6.2
+**Status:** Accepted (claim mechanism amended by ADR-0027) · **Date:** 2026-09-24 · **RFC:** §6.2
 
 ### Context
 
@@ -825,7 +826,7 @@ None anticipated. If Redis itself is ever removed from the stack, rate limiting 
 
 ## ADR-0021 — In-process outbox relay with a worker pool, ahead of Kafka
 
-**Status:** Accepted · **Date:** 2026-09-25 · **RFC:** §6.3, §21.0
+**Status:** Accepted (claim mechanism amended by ADR-0027) · **Date:** 2026-09-25 · **RFC:** §6.3, §21.0
 
 ### Context
 
@@ -1117,6 +1118,44 @@ A second, separate input shaped one choice: the project owner expects that on a 
 If, six months in, every module still has the same owner and the cascade and `replace` overhead is being paid with no ownership benefit, collapse the 13 libraries into three grouped modules by dependency footprint — `core` (config, errors, logging), `web` (httpx, router, auth, ratelimit) and `data` (db, cache, outbox, relay) — which keeps most of the dependency hygiene with a fraction of the modules. If M3's Kafka consumers land, the worker stops needing to import service handler packages, and the worker coupling above should be removed in the record that introduces them. If the review's single `libs/common` is still what the supervisor wants, merge the libraries back into one module; nothing in the layout prevents it.
 
 **Open for confirmation.** Two points were decided on the project's side and should be confirmed with the supervisor: that one module per library package (rather than the single `libs/common` named in the review) is acceptable, and that the worker importing the two services' handler packages is acceptable until M3.
+
+---
+
+## ADR-0027 — The relay holds each row's claim through handling
+
+**Status:** Accepted · **Date:** 2026-11-17 · **RFC:** §6.3 · **Amends:** ADR-0006 and ADR-0021 (the claim mechanism only)
+
+### Context
+
+ADR-0006 and ADR-0021 both rely on `FOR UPDATE SKIP LOCKED` so that several relay replicas can poll the same outbox without handling an event twice. Adversarial testing after the module split (finding F-04, `docs/plans/module-split-findings.md`) showed the code did not deliver that. `poll` claimed a batch of rows inside a transaction that **committed immediately**, so the row locks were gone before any handler ran. A second replica could then claim the same rows and run the same handler concurrently; the loser failed on the `processed_events` unique violation, producing spurious failure counts and attempt bumps. Handlers that write only inside their own transaction stayed correct because `processed_events` made the duplicate harmless. A handler with a non-transactional side effect (an email, an external call) would have done it twice. The code comment claiming "without double-processing a row" was false for more than one replica.
+
+### Options
+
+**A. Leave it and rely on idempotency alone.** Correct for today's handlers, wrong for the next one, and it leaves the documented guarantee untrue. Rejected.
+
+**B. A lease column** (`claimed_by`, `claimed_until`) updated at claim time, with expiry for crashed claimers. Works across connections and survives long handlers, but needs a migration, clock assumptions, and a reaper for expired leases.
+
+**C. Hold the claim transaction open through handling.** Each worker claims one row (`SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1`) in its own transaction, runs its handlers, marks the row published (or records the failure), and commits. A crashed replica's connection drops, Postgres releases the lock, and the row becomes claimable again. No schema change.
+
+**D. Advisory locks per event id.** Same effect as C with a second lock mechanism to reason about. Rejected as redundant.
+
+### Decision
+
+**Option C.** Each worker in the bounded pool holds one claim transaction per row it is handling. Handlers still run their own transactions and write `processed_events`, so idempotency remains a second line of defence. Related changes made in the same fix: a `recover()` around handler execution so a panic is a failed delivery and not a crashed process (F-05); `outbox.last_error` and the final attempt count are now persisted on failure and give-up (F-28); shutdown stops claiming and lets the current row finish on a detached context with a 30-second timeout; the old in-process `inFlight` set is replaced by a short cooldown so a failing row is not retried in a hot loop.
+
+### Consequences
+
+**Positive.** The documented guarantee is now true across replicas: a second replica skips a row being handled (checked by `TestBugrepro_TwoRelays_SameEventRunsConcurrently`). A crashed replica releases its rows without any reaper. No migration.
+
+**Negative.**
+- **Each worker holds an extra database connection while handling**, so the pool needs roughly twice the worker count in connections.
+- **Throughput per replica is bounded by the worker count**; claiming is per row, not per batch. `WithBatchSize` remains in the API but does nothing.
+- **A slow handler holds a row lock and a transaction open** for its whole duration. Handlers should stay short; a long-running one would argue for option B.
+- Still no dead-letter store: a poison event past `maxAttempts` is marked published with its error recorded in `last_error`, not parked (ADR-0021's known gap, unchanged).
+
+### Reversal trigger
+
+If handlers become slow enough that held transactions hurt (long idle-in-transaction sessions, connection pressure), move to a lease column (option B). In M3 the poll-and-dispatch loop is replaced by Kafka consumption, where per-consumer offsets make this claim mechanism unnecessary.
 
 ---
 

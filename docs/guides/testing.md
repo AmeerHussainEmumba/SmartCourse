@@ -87,12 +87,12 @@ Run: `cd services/course && go test ./workflows/...` (no tag needed).
 
 ### Adversarial tests — written to break the system (module-split phase 5)
 
-Added after the module split by two separate review sessions with a deliberate "assume the code and the ADRs are wrong until a test proves otherwise" brief: 42 new test files and 4 fuzz targets (159 new top-level tests: 113 in the default suite and 46 bug reproducers). They are named `*adversarial*`, `*security*` and `*bugrepro*`. What they found, and what is still open, is in `docs/plans/module-split-findings.md`; what held up is listed there too.
+Added after the module split by two separate review sessions with a deliberate "assume the code and the ADRs are wrong until a test proves otherwise" brief: 42 new test files and 4 fuzz targets (159 new top-level tests: 113 in the default suite and 46 bug reproducers). They are named `*adversarial*`, `*security*` and `*bugrepro*`. What they found, how each defect was fixed, and what is still imperfect is in `docs/plans/module-split-findings.md`; what held up is listed there too.
 
-**Two tiers, by build tag.**
+**Build tags.**
 
 - `//go:build integration` — runs in the default suite (`make test-integration`) and must stay green and deterministic. Each file was run with `-race -count=3` before being committed.
-- `//go:build integration && bugrepro` — a reproducer for a **known, unfixed defect**. It fails today by design and is excluded from the default suite so CI stays meaningful. Run one with `cd services/course && go test -tags='integration bugrepro' -run TestBugrepro_ConcurrentDoubleWithdraw ./enrollment/`. When a bug is fixed, its reproducer should pass; move it into the default suite by dropping the `bugrepro` tag in the same change.
+- `//go:build integration && bugrepro` — reserved for a **reproducer of a known, unfixed defect**: a test that fails today by design and is excluded from the default suite so CI stays meaningful. **There are none at the moment**: all 46 reproducers written in this phase were fixed, lost the tag, and are now ordinary regression tests with their original names (`TestBug_*`, `TestBugrepro_*`). Use the tag again for the next bug you find before you fix it: write the failing test behind `bugrepro`, fix the code, then drop the tag in the same change. Run tagged tests with `go test -tags='integration bugrepro' -run TestBug ./...` in the module.
 
 | Area | Where | What it attacks |
 |---|---|---|
@@ -107,7 +107,7 @@ Added after the module split by two separate review sessions with a deliberate "
 | Authorization | `services/course/securitytest/` (a test-only package that wires course, enrollment and progress as `course-api` does), `services/analytics/analytics/security_test.go` | 22 cases across 37 route shapes for 6 actors; IDOR; mass assignment; hostile input (SQL, NUL bytes, forged cursors, out-of-range integers) |
 | Fuzzing | `FuzzParseAccessToken`, `FuzzDecodeCursor`, `FuzzBindIdentityDTOs`, `FuzzBindCourseDTOs` | seeds are inline (`f.Add`); run with `go test -fuzz=FuzzDecodeCursor -fuzztime=60s ./...` in the module. None crashed in the testers' runs |
 | Repository guards | `scripts/test-guards.sh`, `check-dockerfile-modules.sh`, `check-module-hygiene.sh` | `test-guards.sh` copies the tree, injects 9 violations and checks the right guard fails with the right message (18 checks, all pass). In CI as `make test-guards`, `check-dockerfile-modules`, `check-module-hygiene` |
-| Static policy scans (not in CI) | `scripts/check-dev-defaults.sh`, `check-http-hardening.sh` | fail today by design: known dev defaults, containers as root, missing server timeouts and body cap. Not wired into CI because they would fail on the open findings |
+| Static policy scans (not yet in CI) | `scripts/check-dev-defaults.sh`, `check-http-hardening.sh` | known dev defaults (placeholder keys, seed guard, root containers, published ports) and server hardening (timeouts, body cap, trusted proxies). They failed before the fixes and are meant to pass now; they are not wired into CI yet, so run them by hand |
 
 **Not covered:** a real Temporal server (only the test environment and a fake client), a true `kill -9` of the relay, a non-UTC database timezone, Redis down on the data path, real network behaviour such as slow bodies, and dependency CVE scanning.
 

@@ -80,8 +80,15 @@ func TestSecurity_RefreshToken_Garbage_Rejected_Cleanly(t *testing.T) {
 		"empty-space": " ",
 	} {
 		rec := h.refresh(tok)
-		if rec.Code != 401 {
-			t.Errorf("%s: want 401, got %d %.150s", name, rec.Code, rec.Body.String())
+		want := 401
+		if name == "long" {
+			// A 1 MiB token pushes the body past the request-body cap
+			// (libs/httpx.MaxBodyBytes, F-16), which now rejects it before the
+			// handler sees it.
+			want = 413
+		}
+		if rec.Code != want {
+			t.Errorf("%s: want %d, got %d %.150s", name, want, rec.Code, rec.Body.String())
 		}
 		assertNoInternalLeak(t, name, rec.Body.String())
 	}
@@ -344,7 +351,7 @@ func TestSecurity_PasswordPolicy_Boundaries(t *testing.T) {
 		{"129 chars", strings.Repeat("a", 129), 400},
 		{"128 runes of 4 bytes (512 bytes)", strings.Repeat("\U0001F600", 128), 202},
 		{"129 runes of 4 bytes", strings.Repeat("\U0001F600", 129), 400},
-		{"1 MiB", strings.Repeat("a", 1<<20), 400},
+		{"1 MiB", strings.Repeat("a", 1<<20), 413},   // over the request-body cap (F-16), rejected before validation
 		{"nul bytes inside", "pass\x00word123", 202}, // stored as bytes; argon2 handles NUL
 		{"only whitespace", "        ", 202},         // accepted: policy is length only (documented gap, low)
 	}

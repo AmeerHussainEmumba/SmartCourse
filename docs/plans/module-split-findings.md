@@ -1,5 +1,7 @@
 # Findings from the adversarial test phase
 
+> **Status update (2026-11-17, later the same day): all 36 findings are fixed** on branch `refactor/module-split-fixes`, by four fixing sessions with non-overlapping directory ownership, merged and verified (full suite green; every reproducer now passes and is a regular regression test with its original name). The register below is kept as the record of what was found. Read the section "How each was fixed, and what is still imperfect" at the end for the design choices and the trade-offs that remain. The original text, which says nothing is fixed, describes the state when the register was written.
+
 **Date:** 2026-11-17 · **Companion to:** `docs/plans/module-split.md` (phase 5), `docs/plans/module-split-assessment.md`
 
 ## Purpose
@@ -97,3 +99,54 @@ The testers also recorded what they attacked that did not break, which is what t
 ## Not tested
 
 A real Temporal server (only the test environment and a fake client); a true `kill -9` of the relay; a non-UTC database session timezone; Redis down entirely for the data path; real network behaviour (slow bodies, real proxy topology); MinIO and asset-key handling (no upload code exists); dependency CVE scanning; container runtime hardening beyond a static scan.
+
+## How each was fixed, and what is still imperfect
+
+All reproducers lost their `bugrepro` build tag and run in the default suite. None of the fixes needed a new config variable except the hardening settings in `env.example`; two needed a migration or none (see below). The fixers were told to report anything that was a judgment call; those are listed here so they can be overruled.
+
+| ID | Fix | Caveat or decision to confirm |
+|---|---|---|
+| F-01 | `Withdraw` decrements the count and emits its event only if the guarded `UPDATE` changed a row; ADR-0012's course-row lock is untouched | none |
+| F-02 | Gin trusts no proxy by default; new `TRUSTED_PROXIES` setting (IPs/CIDRs); an invalid entry stops the service starting | **A deployment behind a load balancer must set `TRUSTED_PROXIES`**, or every client shares the proxy's address and per-IP limits become global |
+| F-03 | On a Redis miss the middleware reads `users.token_version` from Postgres through a new `auth.TokenVersionSource` and writes it back with `SET NX` (so a concurrent role change is never overwritten); Redis errors still fail closed | direct SQL that suspends a user without bumping `token_version` is caught only on a Redis miss |
+| F-04 | Each relay worker claims one row (`FOR UPDATE SKIP LOCKED LIMIT 1`) in its own transaction, held through handling and the mark-published; no schema change | each worker now holds one extra DB connection while handling, so the pool needs about 2x the worker count; `WithBatchSize` is kept but is a no-op. See ADR-0027 |
+| F-05 | `recover()` around handler execution; a panic is logged with the stack and counted as a failed delivery | none |
+| F-06 | `MarkComplete` locks the enrollment row (not the course row, so no deadlock with `Withdraw`) | none |
+| F-07 | Missing progress rows for the published version are created lazily in `MarkComplete`; `GetProgress` shows lessons without a row as incomplete | none |
+| F-08 | Search joins on the published version and returns the live enrollment count; promotion refreshes the index in its own transaction | kept the IndexSearch-before-Promote order rather than indexing after promote (which would change the workflow graph) |
+| F-09 | `enrollment_mirror` gets a `last_event_id` ordering guard like `user_role_mirror`; **migration** `migrations/analytics/000002_enrollment_mirror_ordering` | a withdrawal arriving first creates a placeholder row (`enrolled_at` NULL) that the enroll event fills in; the down migration deletes placeholders |
+| F-10 | `DeleteModule`/`DeleteLesson` return 409 `no_draft` for a non-draft version | none |
+| F-11 | `RequireFreshPrivilege` on all instructor write routes; `/me` uses the same check | one Redis `GET` per instructor write; fails closed with 503 if Redis is down |
+| F-12 | Outside development, `Load` rejects known placeholder keys and keys with low entropy; the error never echoes the key | `APP_ENV` defaults to `development` when unset, so a deployment that forgets to set it stays lenient. **Set `APP_ENV` explicitly in every real deployment** |
+| F-13 | `/health/ready` returns only `ok`/`failed` per dependency; detail goes to the log | response body shape changed |
+| F-14 | One conditional `UPDATE ... WHERE used_at IS NULL ... RETURNING` inside the same transaction | none |
+| F-15 | Per-IP limits on every unauthenticated identity route; a per-address email budget (5/hour, silent over budget so it cannot probe addresses); a new reset or verification token invalidates earlier unused ones | the limits (reset 5/min, refresh 60/min, and so on) are the fixer's choices |
+| F-16 | New `httpx.MaxBodyBytes` (1 MiB default, `MAX_BODY_BYTES`) and `router.NewServer` setting read/write/idle timeouts (15s/30s/120s) | defaults are the fixer's choices; 413 `PAYLOAD_TOO_LARGE` is new |
+| F-17 | NUL bytes rejected (400); lesson content depth capped at 32; integer upper bounds; LIKE metacharacters escaped; Postgres 22021/22003/23514 map to 400 | **the bounds are the fixer's choice and need confirming**: `enrollment_limit` 1,000,000, `position` 100,000, `duration_s` 86,400, category 100 chars, tag 50, asset_key 500. The `total_duration_s` column is a 32-bit INT, so a very large number of lessons could still overflow its sum (error ignored, as before) |
+| F-18 | Rule given by the project owner: any authenticated user may read platform totals; per-course stats: admin any course, instructor any course, student only a course they have an active or completed enrollment in (from analytics' own mirror); everyone else 404 | **instructor ownership is not enforced** (the `course_published` event carries no instructor id), so an instructor can read any course. Enforcing it needs `instructor_id` in that event's payload, a mirror column and a backfill. A withdrawn student gets 404 (the fixer's choice) |
+| F-19 | `tools/seed` refuses to run unless `APP_ENV=development` | none |
+| F-20 | `GetPublishedDetail` overlays live `enrollment_count`/`enrollment_limit` on the cached payload | none |
+| F-21 | `Publish` returns 409 `course_archived`; `PromoteAndPublish` refuses and emits nothing | the activity error is retryable, so Temporal retries it up to 5 times before failing the workflow |
+| F-22 | One `course_completed` event, guarded by the row lock and the `UPDATE`'s row count | none |
+| F-23 | `PromoteAndPublish` takes the course row lock and checks idempotency inside the transaction | none |
+| F-24 | `IncrementDailyEnrollment` buckets by the payload's `enrolled_at` in UTC | none |
+| F-25 | `ValidateMetadata` requires at least one lesson | none |
+| F-26 | `ARGON2_*` and TTLs range-validated before narrowing (memory 8 to 1,048,576 KiB, iterations 1 to 100, parallelism 1 to 64, TTLs > 0) | **argon2 concurrency is still unbounded** (the register mentioned it; the item only asked for range validation), so a flood of logins can still use a lot of memory |
+| F-27 | Unknown `lesson_key` returns 404 `lesson_not_found` | was 204 |
+| F-28 | `outbox.last_error` and the final attempt count are persisted on failure and give-up | there is still **no dead-letter store** |
+| F-29 | `httpx.SecurityHeaders` (nosniff, X-Frame-Options DENY, Referrer-Policy, a restrictive CSP, `Cache-Control: no-store`); HSTS only over TLS or with `HSTS_ENABLED=true`; client `X-Request-Id` kept only if 1-64 chars of `[A-Za-z0-9._-]` | none |
+| F-30 | The dummy hash is built from the configured Argon2 parameters | none |
+| F-31 | Only failures count; 5/min per account+IP and 20/min per account across all IPs, both checked before verifying the password | the all-IP cap went from 5 to 20 so the owner is not locked out by five failures from elsewhere; **a distributed attacker can still push an account to 20 failures a minute and block its logins from every IP for that minute**, which is inherent to a stuffing cap |
+| F-32 | Register answers 202 with the same body whether or not the email exists (new: verification email; existing: password-reset email); a suspended or deleted account answers login like a wrong password | **API contract change** (was 201 with tokens, 409 for an existing email); a small timing difference remains between the new-email and existing-email paths |
+| F-33 | The existence check runs first inside the transaction; a change that would leave no active admin returns 409 `last_admin` (serialised with an advisory lock) | self-demotion is allowed when another active admin exists (a legitimate handover) |
+| F-34 | Final stage runs as uid 10001; build image pinned to `golang:1.26.5-alpine` | none |
+| F-35 | All 18 published compose ports bind to `127.0.0.1` | developer stack only |
+| F-36 | A non-owner of an existing course gets 404 `not_found`, identical to an unknown id | **API contract change** (was 403 `not_owner`); admins have no instructor write access, as before |
+
+### Tests changed to fit the fixes
+
+Tests that pinned the old behaviour were updated, with the reason recorded in the commit: the three 403 `not_owner` tests became 404; analytics HTTP tests that used student tokens against any course now use instructor tokens; the register tests now expect 202 and then log in; `TestSecurity_RateLimit_AccountLimit_StopsDistributedStuffing` uses 20 failures across 20 IPs; `TestSecurity_RefreshForSuspendedUser_IsDenied_AndLoginToo` expects 401 on login. The identity security harness now serves on the real `libs/router` stack so the router-level fixes (F-02, F-16) are tested end to end.
+
+### Still open, by design
+
+Instructor ownership of analytics (F-18), argon2 concurrency (F-26), a dead-letter store (F-28), and the follow-ups noted above. None blocks the findings being closed; each is listed so it is not forgotten.
