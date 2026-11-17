@@ -108,7 +108,7 @@ curl -X POST localhost:8090/api/v1/auth/register \
   -d '{"email":"you@example.com","password":"correct-horse-battery","full_name":"Your Name"}'
 ```
 
-Either way you should get back an access token, a refresh token, and a user record. Courses live in `course-api`, port **8091**:
+Register answers `202` with no tokens (the same answer whether or not the email exists, so it cannot be used to discover registered emails). Log in with the same credentials to get tokens. Either way, login gives you an access token, a refresh token, and a user record. Courses live in `course-api`, port **8091**:
 
 ```bash
 curl localhost:8091/api/v1/courses
