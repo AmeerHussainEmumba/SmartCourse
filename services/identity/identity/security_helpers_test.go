@@ -131,8 +131,13 @@ func (h *harness) mustRegister(email, password string) identity.AuthResponse {
 	// Unique IP per registration so the per-IP register limit (5/min) is not the subject here.
 	ip := fmt.Sprintf("10.%d.%d.%d", uuid.New()[0], uuid.New()[1], uuid.New()[2])
 	rec := h.call("POST", "/api/v1/auth/register", map[string]any{"email": email, "password": password, "full_name": "Sec Tester"}, withIP(ip))
-	if rec.Code != http.StatusCreated {
+	if rec.Code != http.StatusAccepted {
 		h.t.Fatalf("register %s: %d %s", email, rec.Code, rec.Body.String())
+	}
+	// Register no longer issues a session (F-32): sign in to get one.
+	rec = h.login(email, password, withIP(ip))
+	if rec.Code != http.StatusOK {
+		h.t.Fatalf("login after register %s: %d %s", email, rec.Code, rec.Body.String())
 	}
 	var out identity.AuthResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {

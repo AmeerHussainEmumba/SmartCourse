@@ -68,3 +68,16 @@ func TestDummyHash_IsValidAndAlwaysFails(t *testing.T) {
 		t.Fatal("dummy hash should never verify successfully")
 	}
 }
+
+func TestNewDummyHash_UsesConfiguredParameters(t *testing.T) {
+	h, err := NewDummyHash(testArgonCfg())
+	if err != nil {
+		t.Fatalf("NewDummyHash: %v", err)
+	}
+	if want := "$argon2id$v=19$m=8192,t=1,p=1$"; len(h) < len(want) || h[:len(want)] != want {
+		t.Fatalf("dummy hash does not carry the configured parameters: %q", h)
+	}
+	if ok, err := VerifyPassword(h, "anything"); err != nil || ok {
+		t.Fatalf("dummy hash must be valid and never verify: ok=%v err=%v", ok, err)
+	}
+}

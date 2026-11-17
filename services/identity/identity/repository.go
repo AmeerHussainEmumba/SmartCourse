@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
 )
 
 type Repository struct {
@@ -80,9 +82,96 @@ func (r *Repository) BumpTokenVersion(ctx context.Context, id uuid.UUID) (int16,
 	return u.TokenVersion, nil
 }
 
+// UpdateRoleAndStatus returns ErrNotFound when no row matched (rows affected
+// = 0), so callers never emit side effects for a nonexistent user.
 func (r *Repository) UpdateRoleAndStatus(ctx context.Context, id uuid.UUID, role Role, status UserStatus) error {
-	return r.db.WithContext(ctx).Model(&User{}).Where("id = ?", id).
-		Updates(map[string]any{"role": role, "status": status, "updated_at": time.Now().UTC()}).Error
+	res := r.db.WithContext(ctx).Model(&User{}).Where("id = ?", id).
+		Updates(map[string]any{"role": role, "status": status, "updated_at": time.Now().UTC()})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// LockAdminSet takes a transaction-scoped advisory lock serialising every
+// change that could remove an active admin (last-admin guard).
+func (r *Repository) LockAdminSet(ctx context.Context) error {
+	return r.db.WithContext(ctx).Exec(`SELECT pg_advisory_xact_lock(hashtext('identity:admin-set'))`).Error
+}
+
+// CountOtherActiveAdmins counts active admins excluding id.
+func (r *Repository) CountOtherActiveAdmins(ctx context.Context, id uuid.UUID) (int64, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Model(&User{}).
+		Where("role = ? AND status = ? AND id <> ?", RoleAdmin, StatusActive, id).Count(&n).Error
+	return n, err
+}
+
+// CurrentTokenVersion implements auth.TokenVersionSource: the Postgres
+// source of truth consulted when Redis has no cached version. A suspended or
+// deleted user is reported as auth.ErrUserNotFound so their tokens stop
+// working even if no version bump was recorded.
+func (r *Repository) CurrentTokenVersion(ctx context.Context, id uuid.UUID) (int16, error) {
+	u, err := r.GetUserByID(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return 0, auth.ErrUserNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	if u.Status == StatusSuspended || u.Status == StatusDeleted {
+		return 0, auth.ErrUserNotFound
+	}
+	return u.TokenVersion, nil
+}
+
+// InvalidateUnusedPasswordResetTokens marks every unused reset token of the
+// user as used, so only the newest outstanding token is ever valid.
+func (r *Repository) InvalidateUnusedPasswordResetTokens(ctx context.Context, userID uuid.UUID) error {
+	return r.db.WithContext(ctx).Model(&PasswordResetToken{}).
+		Where("user_id = ? AND used_at IS NULL", userID).Update("used_at", time.Now().UTC()).Error
+}
+
+func (r *Repository) InvalidateUnusedEmailVerificationTokens(ctx context.Context, userID uuid.UUID) error {
+	return r.db.WithContext(ctx).Model(&EmailVerificationToken{}).
+		Where("user_id = ? AND used_at IS NULL", userID).Update("used_at", time.Now().UTC()).Error
+}
+
+// ConsumePasswordResetToken atomically marks the token used and returns it:
+// UPDATE ... WHERE used_at IS NULL AND expires_at > now() RETURNING *. Of any
+// number of concurrent callers exactly one gets the row; the rest get
+// ErrNotFound. Call inside the transaction that applies the effect.
+func (r *Repository) ConsumePasswordResetToken(ctx context.Context, hash []byte) (*PasswordResetToken, error) {
+	var t PasswordResetToken
+	res := r.db.WithContext(ctx).Model(&t).Clauses(clause.Returning{}).
+		Where("token_hash = ? AND used_at IS NULL AND expires_at > now()", hash).
+		Update("used_at", time.Now().UTC())
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil, ErrNotFound
+	}
+	return &t, nil
+}
+
+// ConsumeEmailVerificationToken is ConsumePasswordResetToken for
+// verification tokens.
+func (r *Repository) ConsumeEmailVerificationToken(ctx context.Context, hash []byte) (*EmailVerificationToken, error) {
+	var t EmailVerificationToken
+	res := r.db.WithContext(ctx).Model(&t).Clauses(clause.Returning{}).
+		Where("token_hash = ? AND used_at IS NULL AND expires_at > now()", hash).
+		Update("used_at", time.Now().UTC())
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil, ErrNotFound
+	}
+	return &t, nil
 }
 
 func (r *Repository) SetPasswordHash(ctx context.Context, id uuid.UUID, hash string) error {

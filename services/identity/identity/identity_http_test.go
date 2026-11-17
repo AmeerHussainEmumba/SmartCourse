@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,21 +122,33 @@ func TestRegisterHTTP_InvalidEmailFormat_Returns400(t *testing.T) {
 	}
 }
 
+// Updated for F-32: register is uniform (202, no session) so it cannot be used
+// to enumerate emails; the client then signs in with /auth/login.
 func TestRegisterHTTP_ValidBody_201AndRealTokens(t *testing.T) {
 	r, _, _, _ := newTestRouter(t)
 
 	rec := doJSON(r, http.MethodPost, "/api/v1/auth/register", map[string]any{
 		"email": "http-register@example.com", "password": "correct-horse-battery", "full_name": "HTTP User",
 	}, nil)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "access_token") {
+		t.Fatalf("register must not issue a session: %s", rec.Body.String())
+	}
+
+	login := doJSON(r, http.MethodPost, "/api/v1/auth/login", map[string]any{
+		"email": "http-register@example.com", "password": "correct-horse-battery",
+	}, nil)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login after register: %d %s", login.Code, login.Body.String())
 	}
 	var resp identity.AuthResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(login.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if resp.AccessToken == "" || resp.User.Email != "http-register@example.com" {
-		t.Fatalf("unexpected register response: %+v", resp)
+		t.Fatalf("unexpected login response: %+v", resp)
 	}
 }
 

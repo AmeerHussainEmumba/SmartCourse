@@ -11,10 +11,12 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
@@ -86,6 +88,31 @@ func RequireRole(roles ...string) gin.HandlerFunc {
 // where that's correct, because the entire point of this check is that
 // trust must be current, not assumed.
 func RequireFreshPrivilege(rdb *redis.Client) gin.HandlerFunc {
+	return requireFresh(rdb, nil)
+}
+
+// ErrUserNotFound is returned by a TokenVersionSource for an unknown (or
+// deactivated) user; the middleware answers 401.
+var ErrUserNotFound = errors.New("auth: user not found")
+
+// TokenVersionSource is the durable source of truth for a user's current
+// token_version (Postgres users.token_version). The identity service supplies
+// it; libs/auth never imports identity.
+type TokenVersionSource interface {
+	CurrentTokenVersion(ctx context.Context, userID uuid.UUID) (int16, error)
+}
+
+// RequireFreshPrivilegeWithSource is RequireFreshPrivilege without the
+// fail-open cache miss: when Redis has no entry for the user (restart, flush,
+// eviction) the version is read from src and written back (SET NX, so a
+// concurrent role change's newer value is never overwritten). Redis errors
+// still fail closed. Use it on any route that must honour demotion or
+// suspension promptly (identity applies it to /me as well as admin routes).
+func RequireFreshPrivilegeWithSource(rdb *redis.Client, src TokenVersionSource) gin.HandlerFunc {
+	return requireFresh(rdb, src)
+}
+
+func requireFresh(rdb *redis.Client, src TokenVersionSource) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, ok := FromContext(c.Request.Context())
 		if !ok {
@@ -93,16 +120,37 @@ func RequireFreshPrivilege(rdb *redis.Client) gin.HandlerFunc {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 500*time.Millisecond)
+		timeout := 500 * time.Millisecond
+		if src != nil {
+			timeout = 2 * time.Second // room for the Postgres fallback
+		}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 		defer cancel()
 
-		current, err := rdb.Get(ctx, TokenVersionRedisKey(id.UserID.String())).Int()
+		key := TokenVersionRedisKey(id.UserID.String())
+		current, err := rdb.Get(ctx, key).Int()
 		if err != nil {
-			if err == redis.Nil {
-				// No cached value yet — token_version defaults to 1 for
-				// every user, so a cache miss means "never changed."
+			switch {
+			case err == redis.Nil && src == nil:
+				// Legacy behaviour of RequireFreshPrivilege: a miss means
+				// "never changed" (version 1). Unsafe after a Redis flush;
+				// prefer RequireFreshPrivilegeWithSource.
 				current = 1
-			} else {
+			case err == redis.Nil:
+				v, serr := src.CurrentTokenVersion(ctx, id.UserID)
+				if errors.Is(serr, ErrUserNotFound) {
+					httpx.Fail(c, apperrors.ErrUnauthorized)
+					return
+				}
+				if serr != nil {
+					httpx.Fail(c, apperrors.ErrUnavailable.Wrap(serr))
+					return
+				}
+				current = int(v)
+				// SET NX: never overwrite a newer value written concurrently
+				// by a role change. Best effort.
+				_ = rdb.SetNX(ctx, key, current, 0).Err()
+			default:
 				httpx.Fail(c, apperrors.ErrUnavailable.Wrap(err))
 				return
 			}

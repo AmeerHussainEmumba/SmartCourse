@@ -82,6 +82,14 @@ func VerifyPassword(encoded, password string) (bool, error) {
 // irrelevant, only its comparison cost matters.
 var DummyHash string
 
+// NewDummyHash builds a dummy hash with the caller's configured Argon2
+// parameters, so an unknown-account login costs the same as a real
+// password check under that configuration (DummyHash is fixed at 64 MiB,
+// t=3, p=2 and only matches the default config).
+func NewDummyHash(cfg config.Argon2Config) (string, error) {
+	return HashPassword(cfg, "dummy-password-for-timing-safety")
+}
+
 func init() {
 	h, err := HashPassword(config.Argon2Config{MemoryKiB: 64 * 1024, Iterations: 3, Parallelism: 2, SaltLength: 16, KeyLength: 32}, "dummy-password-for-timing-safety")
 	if err != nil {
