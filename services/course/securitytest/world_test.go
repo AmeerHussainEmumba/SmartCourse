@@ -263,3 +263,7 @@ func okStatus(code int) bool { return code >= 200 && code < 300 }
 var _ = http.StatusOK
 
 var ctxBG = context.Background()
+
+func issue(id uuid.UUID, role string) (string, error) {
+	return auth.IssueAccessToken(jwtCfg(), id, role, 1)
+}
