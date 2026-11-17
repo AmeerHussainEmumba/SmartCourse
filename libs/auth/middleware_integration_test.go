@@ -10,6 +10,8 @@
 package auth
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -129,5 +131,79 @@ func TestRequireFreshPrivilege_CachedVersionMismatch_RejectsStaleToken(t *testin
 	}
 	if !strings.Contains(rec.Body.String(), `"code":"token_stale"`) {
 		t.Errorf("expected error body to carry code=token_stale, got %s", rec.Body.String())
+	}
+}
+
+type fakeVersionSource struct {
+	version int16
+	err     error
+	calls   int
+}
+
+func (f *fakeVersionSource) CurrentTokenVersion(_ context.Context, _ uuid.UUID) (int16, error) {
+	f.calls++
+	return f.version, f.err
+}
+
+func serveWithSource(t *testing.T, env *testenv.Env, src TokenVersionSource, userID uuid.UUID, tokenVersion int16) *httptest.ResponseRecorder {
+	t.Helper()
+	cfg := testJWTCfg()
+	signed, err := IssueAccessToken(cfg, userID, "admin", tokenVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := gin.New()
+	e.GET("/test", RequireAuth(cfg), RequireFreshPrivilegeWithSource(env.RDB, src), echoIdentityHandler)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+signed)
+	e.ServeHTTP(rec, req)
+	return rec
+}
+
+// F-03: a Redis miss is resolved from the durable source, not assumed to be
+// version 1, and the answer is written back.
+func TestRequireFreshPrivilegeWithSource_CacheMiss_UsesSourceAndRepopulates(t *testing.T) {
+	env := testenv.Setup(t)
+	userID := uuid.New()
+	src := &fakeVersionSource{version: 3}
+
+	if rec := serveWithSource(t, env, src, userID, 1); rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "token_stale") {
+		t.Fatalf("version-1 token with source version 3 must be stale, got %d %s", rec.Code, rec.Body.String())
+	}
+	if v, err := env.RDB.Get(t.Context(), TokenVersionRedisKey(userID.String())).Int(); err != nil || v != 3 {
+		t.Fatalf("redis not repopulated: v=%d err=%v", v, err)
+	}
+	// Now cached: a matching token passes without another source call.
+	if rec := serveWithSource(t, env, src, userID, 3); rec.Code != http.StatusOK {
+		t.Fatalf("matching token: %d %s", rec.Code, rec.Body.String())
+	}
+	if src.calls != 1 {
+		t.Fatalf("source consulted %d times, want 1 (second request served from cache)", src.calls)
+	}
+}
+
+func TestRequireFreshPrivilegeWithSource_CacheHitWins_SourceNotConsulted(t *testing.T) {
+	env := testenv.Setup(t)
+	userID := uuid.New()
+	if err := env.RDB.Set(t.Context(), TokenVersionRedisKey(userID.String()), 5, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	src := &fakeVersionSource{version: 2}
+	if rec := serveWithSource(t, env, src, userID, 5); rec.Code != http.StatusOK {
+		t.Fatalf("cached value must win: %d", rec.Code)
+	}
+	if src.calls != 0 {
+		t.Fatal("source consulted despite a cache hit")
+	}
+}
+
+func TestRequireFreshPrivilegeWithSource_UnknownUser401_SourceError503(t *testing.T) {
+	env := testenv.Setup(t)
+	if rec := serveWithSource(t, env, &fakeVersionSource{err: ErrUserNotFound}, uuid.New(), 1); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unknown user: %d", rec.Code)
+	}
+	if rec := serveWithSource(t, env, &fakeVersionSource{err: errors.New("db down")}, uuid.New(), 1); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("source failure must fail closed: %d", rec.Code)
 	}
 }
