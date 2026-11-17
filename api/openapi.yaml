@@ -264,7 +264,7 @@ paths:
     post:
       summary: >
         Start publishing the draft (instructor, owner only). Async as of M2
-        (ADR-0025): starts internal/workflows.PublishCourseWorkflow and
+        (ADR-0025): starts services/course/workflows.PublishCourseWorkflow and
         returns immediately. A duplicate call while one is already running
         attaches to it (same workflow ID) rather than starting a second
         one. Poll GET /courses/{id}/publish-status for the result.
@@ -308,7 +308,7 @@ paths:
         Archive a course (instructor, owner only) — soft delete via
         archived_at, not a row removal. Hides it from the catalogue and
         from GetPublishedDetail, blocks new enrollment, and withdraws
-        every currently-active enrollment on it (internal/enrollment's
+        every currently-active enrollment on it (services/course/enrollment's
         relay handler reacts to the course.course_archived event this
         writes). No "unarchive" exists.
       security: [{ bearerAuth: [] }]
@@ -329,7 +329,7 @@ paths:
       summary: >
         One course's aggregate stats (FR-5: completion rate, average time
         to complete) — zeros if the course has never been published, not a
-        404 (this schema never queries internal/course directly, ADR-0024,
+        404 (this schema never queries services/course/course directly, ADR-0024,
         so it can't distinguish "never published" from "doesn't exist").
       security: [{ bearerAuth: [] }]
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]

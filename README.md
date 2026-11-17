@@ -27,7 +27,7 @@ That's a handful of containers, not the dozen the full stack eventually needs (K
 
 ## Architecture, in one paragraph
 
-PostgreSQL is the single system of record (everything a user can assert as fact about their own account — enrolled, completed, certified — is strongly consistent, enforced by database constraints, not application code that can race). Redis and MongoDB hold only derived, rebuildable data. State changes are recorded and their side effects (search indexing, analytics, notifications, caching) happen asynchronously via a transactional outbox, so a crash mid-request never silently loses work or desyncs a dashboard from reality — today via an in-process worker-pool relay ([ADR-0021](docs/adr/smartcourse-adr.md#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka)), migrating to Kafka in M3 without changing this guarantee. Four independently deployable services — `cmd/identity-api`, `cmd/course-api`, `cmd/analytics-api` for HTTP, `cmd/worker` for everything asynchronous — share one codebase and one database (ADR-0022, further split by ADR-0023; each binary wires only its own modules in `cmd/*/wire.go`), so they scale and restart independently without domain code ever drifting apart on a shared change. Each service also owns its own Postgres schema within that one database ([ADR-0024](docs/adr/smartcourse-adr.md#adr-0024--schema-per-service-within-one-shared-database)) — no foreign key or query crosses a schema boundary, so a service that only ever needed another's data for display (an instructor's name on the course catalogue, say) keeps its own event-fed copy rather than reaching across.
+PostgreSQL is the single system of record (everything a user can assert as fact about their own account — enrolled, completed, certified — is strongly consistent, enforced by database constraints, not application code that can race). Redis and MongoDB hold only derived, rebuildable data. State changes are recorded and their side effects (search indexing, analytics, notifications, caching) happen asynchronously via a transactional outbox, so a crash mid-request never silently loses work or desyncs a dashboard from reality — today via an in-process worker-pool relay ([ADR-0021](docs/adr/smartcourse-adr.md#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka)), migrating to Kafka in M3 without changing this guarantee. Four independently deployable services — `services/identity/cmd/identity-api`, `services/course/cmd/course-api`, `services/analytics/cmd/analytics-api` for HTTP, `services/worker/cmd/worker` for everything asynchronous — share one codebase and one database (ADR-0022, further split by ADR-0023; each binary wires only its own modules in `cmd/*/wire.go`), so they scale and restart independently without domain code ever drifting apart on a shared change. Each service also owns its own Postgres schema within that one database ([ADR-0024](docs/adr/smartcourse-adr.md#adr-0024--schema-per-service-within-one-shared-database)) — no foreign key or query crosses a schema boundary, so a service that only ever needed another's data for display (an instructor's name on the course catalogue, say) keeps its own event-fed copy rather than reaching across.
 
 ```mermaid
 flowchart TB
@@ -45,30 +45,31 @@ Full diagrams, the consistency model, and the reasoning behind every major choic
 ## Repository layout
 
 ```
-cmd/identity-api/, cmd/course-api/, cmd/analytics-api/, cmd/worker/
-                        Four entry points, four Dockerfiles, four deployable images (ADR-0022, ADR-0023)
-internal/
-  platform/          Shared kernel: config, db, cache, auth, errors, httpx, outbox, router, infra, temporal
-  identity/ course/ enrollment/ progress/    Domain modules (each has its own README)
-  analytics/                                 Built — outbox relay's first handler (ADR-0021)
-  search/            Empty — its write+read (course_search_index, GET /courses/search) live inside course/ instead (M2, ADR-0025)
-  notification/ audit/                       Not yet built — same relay-handler pattern as analytics
-  workflows/         PublishCourseWorkflow + Activities — built, M2 (ADR-0025)
+services/              One Go module per deployable service, each with its own go.mod (ADR-0022/0023, docs/plans/module-split.md)
+  identity/            identity/ (domain package) + cmd/identity-api
+  course/              course/ enrollment/ progress/ workflows/ + cmd/course-api — one module, because the seat limit needs one transaction (ADR-0012)
+  analytics/           analytics/ + cmd/analytics-api — outbox relay's first handler (ADR-0021)
+  worker/              cmd/worker (outbox relay + Temporal worker); audit/ notification/ search/ are README-only plans (M3)
+libs/                  Shared kernel, one Go module per package: auth cache config db errors httpx infra logging outbox ratelimit relay router temporal, plus testenv
+tools/seed/            `make seed` — populates a local database through the real service layer
 migrations/          Versioned SQL schema (golang-migrate) — see migrations/README.md
 docs/
   for-the-devs/      Start here — onboarding, setup, architecture in brief
   baseline/          The frozen commissioning brief — never edited
   prd/ rfc/ adr/     Living design documents
+  plans/             Working plans for multi-step changes, with progress logs
   guides/            How-to docs, including testing.md
 api/                 openapi.yaml — the API contract
 proto/               Event schemas (M3 — empty today, see proto/README.md)
-test/integration/    Cross-module integration and concurrency tests
+scripts/             Guards and helpers: check-link-graph.sh, check-module-graph.sh, for-each-module.sh
+test/                Cross-service test material (see test/README.md)
 deploy/              Compose service config (Grafana dashboards, Prometheus scrape config)
+go.work              Lists every Go module for local development; CI and Docker build with GOWORK=off
 ```
 
 Every top-level directory has its own `README.md` explaining what it's for — this map is the summary, not the whole story.
 
-Every domain module under `internal/` follows the same shape (`handler.go`, `service.go`, `repository.go`, `dto.go`, `domain.go` — see [`docs/rfc/smartcourse-rfc.md` §4.3](docs/rfc/smartcourse-rfc.md)), and none of them import each other's `repository`/`domain` types directly — cross-module reads go through a consumer-declared interface, enforced by `.golangci.yml`'s `depguard` rules, not just code review.
+Every domain module under `services/` follows the same shape (`handler.go`, `service.go`, `repository.go`, `dto.go`, `domain.go` — see [`docs/rfc/smartcourse-rfc.md` §4.3](docs/rfc/smartcourse-rfc.md)), and none of them import each other's `repository`/`domain` types directly — cross-module reads go through a consumer-declared interface. Between services that is enforced by Go modules (`scripts/check-module-graph.sh`); inside `services/course` by `.golangci.yml`'s `depguard` rules, not just code review.
 
 ## API overview
 

@@ -6,7 +6,7 @@ MIGRATE := go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migr
 # one), so without this, `go run` here would see none of it. `include`
 # parses KEY=value lines as Make variables; `export` re-exports every
 # variable Make knows (not just ones from this file) to child processes,
-# which is what makes `go run ./cmd/identity-api` (or the other cmd/*)
+# which is what makes `go run ./services/identity/cmd/identity-api` (or the other services/*/cmd/*)
 # actually see them.
 ifneq (,$(wildcard .env))
     include .env
@@ -29,7 +29,7 @@ MIGRATION_SERVICES_REVERSED := analytics course identity platform
         migrate-up migrate-down migrate-down-all migrate-create \
         run-identity-api run-course-api run-analytics-api run-worker \
         build build-identity-api build-course-api build-analytics-api build-worker \
-        lint check-link-graph test test-race test-integration seed fmt
+        lint check-link-graph check-module-graph test test-race test-integration seed fmt
 
 ## --- Local environment (ADR-0018) ---------------------------------------
 
@@ -93,30 +93,30 @@ migrate-create:
 #     step either way (RFC §5.8 — no auto-migration on container start).
 
 run-identity-api:
-	HTTP_PORT=$${HTTP_PORT:-8090} POSTGRES_SEARCH_PATH=identity,platform,public go run ./cmd/identity-api
+	HTTP_PORT=$${HTTP_PORT:-8090} POSTGRES_SEARCH_PATH=identity,platform,public go run ./services/identity/cmd/identity-api
 
 run-course-api:
-	HTTP_PORT=$${HTTP_PORT:-8091} POSTGRES_SEARCH_PATH=course,platform,public go run ./cmd/course-api
+	HTTP_PORT=$${HTTP_PORT:-8091} POSTGRES_SEARCH_PATH=course,platform,public go run ./services/course/cmd/course-api
 
 run-analytics-api:
-	HTTP_PORT=$${HTTP_PORT:-8092} POSTGRES_SEARCH_PATH=analytics,public go run ./cmd/analytics-api
+	HTTP_PORT=$${HTTP_PORT:-8092} POSTGRES_SEARCH_PATH=analytics,public go run ./services/analytics/cmd/analytics-api
 
 run-worker:
-	POSTGRES_SEARCH_PATH=platform,course,analytics,public go run ./cmd/worker
+	POSTGRES_SEARCH_PATH=platform,course,analytics,public go run ./services/worker/cmd/worker
 
 build: build-identity-api build-course-api build-analytics-api build-worker
 
 build-identity-api:
-	go build -o bin/identity-api ./cmd/identity-api
+	go build -o bin/identity-api ./services/identity/cmd/identity-api
 
 build-course-api:
-	go build -o bin/course-api ./cmd/course-api
+	go build -o bin/course-api ./services/course/cmd/course-api
 
 build-analytics-api:
-	go build -o bin/analytics-api ./cmd/analytics-api
+	go build -o bin/analytics-api ./services/analytics/cmd/analytics-api
 
 build-worker:
-	go build -o bin/worker ./cmd/worker
+	go build -o bin/worker ./services/worker/cmd/worker
 
 ## --- Quality gates (CI runs the same targets — see .github/workflows/ci.yml)
 
@@ -126,10 +126,15 @@ fmt:
 lint:
 	scripts/for-each-module.sh golangci-lint run ./...
 
-# Fails if a cmd/* binary links a module or the Temporal SDK it shouldn't
+# Fails if a service binary links a module or the Temporal SDK it shouldn't
 # (docs/plans/module-split.md).
 check-link-graph:
 	scripts/check-link-graph.sh
+
+# Fails if a Go module requires a sibling module it may not (a service importing
+# another service, a library importing a service) — scripts/check-module-graph.sh.
+check-module-graph:
+	scripts/check-module-graph.sh
 
 test:
 	scripts/for-each-module.sh go test ./...
@@ -141,4 +146,4 @@ test-integration:
 	scripts/for-each-module.sh go test -race -tags=integration ./...
 
 seed:
-	POSTGRES_SEARCH_PATH=identity,course,platform,public go run ./cmd/seed
+	POSTGRES_SEARCH_PATH=identity,course,platform,public go run ./tools/seed

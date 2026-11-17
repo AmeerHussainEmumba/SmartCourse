@@ -81,7 +81,7 @@ func TestRequireFreshPrivilege_CachedVersionMatches_Passes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IssueAccessToken: %v", err)
 	}
-	// Same Set call shape internal/identity.Service.UpdateUserRole uses —
+	// Same Set call shape services/identity/identity.Service.UpdateUserRole uses —
 	// TokenVersionRedisKey, the raw int, no TTL.
 	if err := env.RDB.Set(t.Context(), TokenVersionRedisKey(userID.String()), 3, 0).Err(); err != nil {
 		t.Fatalf("seed redis: %v", err)

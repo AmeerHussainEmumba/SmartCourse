@@ -1,6 +1,6 @@
 # libs/auth
 
-JWT access tokens, opaque refresh/reset/verification tokens, argon2id password hashing, and the three-layer authorization middleware (`RequireAuth`, `RequireRole`, `RequireFreshPrivilege`). See `docs/adr/smartcourse-adr.md` ADR-0015 (and its addendum) for the full reasoning; `internal/identity` is this package's only real consumer and owns the actual login/refresh/reset flows — this package is the toolkit, not the flow.
+JWT access tokens, opaque refresh/reset/verification tokens, argon2id password hashing, and the three-layer authorization middleware (`RequireAuth`, `RequireRole`, `RequireFreshPrivilege`). See `docs/adr/smartcourse-adr.md` ADR-0015 (and its addendum) for the full reasoning; `services/identity/identity` is this package's only real consumer and owns the actual login/refresh/reset flows — this package is the toolkit, not the flow.
 
 ## The shape
 
@@ -30,10 +30,10 @@ RequireFreshPrivilege   → narrow: does this token's claimed privilege still ma
 
 ## Where the two auth bugs fixed in review actually lived
 
-Both bugs fixed after supervisor review (`internal/identity/README.md` has the full account) were really about *using* this package's pieces correctly, not about anything wrong in this package itself:
+Both bugs fixed after supervisor review (`services/identity/identity/README.md` has the full account) were really about *using* this package's pieces correctly, not about anything wrong in this package itself:
 
-- Password reset bumped `token_version` (killing access tokens on the routes that check it) but didn't also revoke the user's refresh tokens — so a stolen refresh token could keep minting fresh ones indefinitely. The fix lives in `internal/identity/service.go`, calling a repository method this package has no role in.
-- Two concurrent refresh requests for the same token could both succeed — a row-locking gap in `internal/identity/repository.go`'s query, not in how this package verifies or issues tokens.
+- Password reset bumped `token_version` (killing access tokens on the routes that check it) but didn't also revoke the user's refresh tokens — so a stolen refresh token could keep minting fresh ones indefinitely. The fix lives in `services/identity/identity/service.go`, calling a repository method this package has no role in.
+- Two concurrent refresh requests for the same token could both succeed — a row-locking gap in `services/identity/identity/repository.go`'s query, not in how this package verifies or issues tokens.
 
 Both are documented here because understanding *why* `token_version` and refresh-token revocation are two separate mechanisms (see "The shape" above) is what makes the bugs, and their fixes, make sense.
 
@@ -44,4 +44,4 @@ Both are documented here because understanding *why* `token_version` and refresh
 `middleware.go` had zero test coverage until this session, despite being where every authorization decision in the system actually gets enforced — fixed with two files, split the same way the three-layer model above already splits:
 
 - `middleware_test.go` (unit, no build tag) — `RequireAuth` and `RequireRole` driven over real HTTP via `httptest`+a real `gin.Engine` (the first test anywhere in this repo to do that; a broader per-module HTTP test tier followed from this pattern). Covers a missing/malformed Authorization header, an expired token, a token signed with the wrong key, and — the one thing a unit test of the handler function alone can't prove — that a *successful* `RequireAuth` actually populates `context.Context` with the right `Identity` for a downstream handler to read via `FromContext`, not just that it returns 200. `RequireRole` is exercised both standalone (no identity in context at all) and layered after `RequireAuth` (disallowed vs. allowed role).
-- `middleware_integration_test.go` (`//go:build integration`, real Redis via `libs/testenv`) — `RequireFreshPrivilege`, previously unverified at any level despite being a named ADR-0015 security fix. Covers the cache-miss default (`token_version` 1 passes, anything else doesn't), a cached version matching the token's own claim, and — the actual revocation case this middleware exists for — a cached version that's moved past the token's, which must reject with `token_stale` specifically, not just a non-2xx status. The Redis `Set` call in the test setup deliberately matches `internal/identity.Service.UpdateUserRole`'s real one (same key format via `TokenVersionRedisKey`, no TTL) so the test is seeding state the same way production code actually writes it, not a shape that happens to be convenient for the test.
+- `middleware_integration_test.go` (`//go:build integration`, real Redis via `libs/testenv`) — `RequireFreshPrivilege`, previously unverified at any level despite being a named ADR-0015 security fix. Covers the cache-miss default (`token_version` 1 passes, anything else doesn't), a cached version matching the token's own claim, and — the actual revocation case this middleware exists for — a cached version that's moved past the token's, which must reject with `token_stale` specifically, not just a non-2xx status. The Redis `Set` call in the test setup deliberately matches `services/identity/identity.Service.UpdateUserRole`'s real one (same key format via `TokenVersionRedisKey`, no TTL) so the test is seeding state the same way production code actually writes it, not a shape that happens to be convenient for the test.
