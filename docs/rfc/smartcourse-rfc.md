@@ -6,7 +6,7 @@
 | Version | 0.1                         |
 | Author | [Engineer]                  |
 | Reviewers | [Mentor]                    |
-| Last updated | 2026-09-24                  |
+| Last updated | 2026-11-17                  |
 | Supersedes | —                           |
 | Related | `smartcourse-adr.md`, `differences-from-requirements.md`, `/docs` |
 
@@ -184,7 +184,7 @@ This rule is what keeps the p95 targets in §13 achievable, and it is checkable 
 | Criterion | Modular monolith | Microservices |
 |---|---|---|
 | Transactional integrity | Enrollment, progress init, and outbox commit atomically | Distributed saga for a small, naturally atomic write |
-| Operational surface | One binary, two run modes | 6+ services on top of ~10 infrastructure containers |
+| Operational surface | One codebase, four independently built services (ADR-0022/0023/0026) | 6+ services on top of ~10 infrastructure containers |
 | Delivery feasibility (solo, weeks) | Achievable | Not achievable |
 | Horizontal scaling | Stateless replicas behind a load balancer | Independent per-service scaling |
 | Failure isolation | Shared process — one module can exhaust shared resources | Strong isolation |
@@ -194,25 +194,27 @@ This rule is what keeps the p95 targets in §13 achievable, and it is checkable 
 
 The honest cost is failure isolation: a runaway goroutine in one module degrades the whole process. §10.4 addresses this with bounded concurrency; it does not eliminate it.
 
+**One repository, many Go modules (ADR-0026).** "Modular monolith" in this document describes the transactional and deployment shape, not a single `go.mod`. The code is a monorepo of 19 Go modules — one per service, one per shared library, plus a seed tool — so that each service's binary links only the code it runs and the boundaries between services are enforced by the module graph. This partly supersedes ADR-0001's single-`go.mod` aspect; its reasoning about the shared database and the local enrollment transaction is unchanged.
+
 ### 4.2 Run modes
 
-Four independently built, deployed, and scaled services (`cmd/identity-api`, `cmd/course-api`, `cmd/analytics-api`, `cmd/worker` — ADR-0022, further split by ADR-0023), sharing one codebase and one database:
+Four independently built, deployed, and scaled services (`services/identity/cmd/identity-api`, `services/course/cmd/course-api`, `services/analytics/cmd/analytics-api`, `services/worker/cmd/worker` — ADR-0022, further split by ADR-0023, each its own Go module since ADR-0026), sharing one repository and one database:
 
-- **`cmd/identity-api`** — HTTP server for `identity` only. Stateless. Scales horizontally behind a load balancer.
-- **`cmd/course-api`** — HTTP server for `course`, `enrollment`, and `progress` together, kept in one process because enrollment locks the `courses` row in the same database transaction it writes an enrollment row in (ADR-0012). Stateless. Scales horizontally.
-- **`cmd/analytics-api`** — HTTP server for `analytics` only — read-only, already decoupled via the relay/outbox. Stateless. Scales horizontally.
-- **`cmd/worker`** — outbox relay and, as of M2, the Temporal worker executing `PublishCourseWorkflow` (ADR-0025), run as two independent goroutines so a Temporal outage never stops the relay. Kafka consumers and Asynq workers still land in M3. Scales independently.
+- **`identity-api`** — HTTP server for `identity` only. Stateless. Scales horizontally behind a load balancer.
+- **`course-api`** — HTTP server for `course`, `enrollment`, and `progress` together, kept in one process because enrollment locks the `courses` row in the same database transaction it writes an enrollment row in (ADR-0012). Stateless. Scales horizontally.
+- **`analytics-api`** — HTTP server for `analytics` only — read-only, already decoupled via the relay/outbox. Stateless. Scales horizontally.
+- **`worker`** — outbox relay and, as of M2, the Temporal worker executing `PublishCourseWorkflow` (ADR-0025), run as two independent goroutines so a Temporal outage never stops the relay. Kafka consumers and Asynq workers still land in M3. Scales independently.
 
-All four import `internal/platform/bootstrap`, the composition root (RFC §4.4), so a shared domain change still can't produce a version skew between them the way it could if their wiring logic were maintained separately — the deployment artifacts are now independent, the wiring that builds them is not. (Until ADR-0022, this was literally one binary with a `--mode` flag, and until ADR-0023, the three HTTP services above were one `cmd/api` binary; that history, and exactly what changed and why, is recorded in those ADRs rather than silently edited out of existence — see the ADRs' own rule about reversals. `search`, `notification`, and `audit` aren't built yet; each joins whichever existing service its coupling pattern matches when it lands, following the same reasoning as `course-api`'s grouping.)
+Each service wires only the modules it runs, in its own `cmd/<binary>/wire.go`; there is no shared composition root (ADR-0026 — the `internal/platform/bootstrap` package that used to make every binary link every module was removed after the Week 2 review). Measured with `go list -deps`: `identity-api` links 388 packages and no Temporal SDK code, `analytics-api` 386 and none, `course-api` 581 (Temporal client only), `worker` 586 (previously all four linked 589 packages, 61 of them Temporal). `scripts/check-link-graph.sh` fails CI if that regresses. The worker is the one service that depends on others — it imports `course` and `analytics` for their relay handlers and the publish workflow — because the relay marks an outbox row published only after all handlers succeed (ADR-0021); a per-service relay would lose events until M3's per-consumer offsets. (Until ADR-0022, this was literally one binary with a `--mode` flag, and until ADR-0023, the three HTTP services above were one `cmd/api` binary; that history, and exactly what changed and why, is recorded in those ADRs rather than silently edited out of existence — see the ADRs' own rule about reversals. `search`, `notification`, and `audit` aren't built yet; each joins whichever existing service its coupling pattern matches when it lands, following the same reasoning as `course-api`'s grouping.)
 
 Each service also owns its own Postgres schema now (ADR-0024, §5.3) — `identity-api`/`course-api`/`analytics-api`'s process boundaries and their data boundaries are drawn along the same lines, even though all four still share one database.
 
 ### 4.3 Modules
 
-Eight domain modules plus a shared kernel. Every module has the same internal shape:
+Eight domain modules plus a shared kernel. Every module is a package inside its service's Go module (`services/<service>/<module>/`) and has the same internal shape:
 
 ```
-internal/<module>/
+services/<service>/<module>/
   handler.go       HTTP — DTO binding, validation, status codes
   service.go       Domain logic, transactions, authorisation
   repository.go    Data access — the only file importing GORM
@@ -233,16 +235,16 @@ internal/<module>/
 | `notification` | Preferences, notification records | Preferences, list | Delivery jobs |
 | `audit` | Event archive, audit log | Admin query | Archive consumer |
 
-**Shared kernel** (`internal/platform/`): outbox, event envelope and codecs, idempotency, telemetry, errors, config, database and Redis clients, auth middleware.
+**Shared kernel** (`libs/`, one Go module per package — ADR-0026): outbox, relay, errors, config, logging, database and Redis clients (`db`, `cache`, `infra`), the Temporal client (`temporal`), HTTP helpers and router (`httpx`, `router`), auth middleware (`auth`), rate limiting (`ratelimit`), and the integration-test environment (`testenv`). The relay carries the `processed_events` idempotency marker (§6.3). Components the original design listed here that are not in `libs/` today (event envelope and codecs for Kafka — M3; OpenTelemetry and Prometheus — M4, referenced only in code comments today) are not built; see §21.0 for status.
 
 ### 4.4 Boundary enforcement
 
-Two rules, both mechanically checkable:
+Two rules, both mechanically checkable. Since ADR-0026 they are enforced at three levels, strongest first: **(a) between services** by the Go module graph — a service's `go.mod` must list another module before it can import it, and `scripts/check-module-graph.sh` fails CI if a service requires another service (only `worker` and the seed tool may); **(b) what each binary links** by `scripts/check-link-graph.sh`; **(c) inside `services/course`**, where `course`, `enrollment`, `progress` and `workflows` share one module because ADR-0012 needs one process, by `depguard`.
 
 **1. No module imports another module's `repository`, `domain`, or GORM models.** Cross-module reads go through an interface declared by the *consumer*:
 
 ```go
-// internal/enrollment/service.go — enrollment declares what it needs
+// services/course/enrollment/service.go — enrollment declares what it needs
 type CourseReader interface {
     GetPublishedCourse(ctx context.Context, id uuid.UUID) (CourseSummary, error)
 }
@@ -252,7 +254,7 @@ type CourseReader interface {
 
 **2. Cross-module writes go through events, not direct calls.** `progress` does not write analytics rows; it emits `CourseCompleted` and the analytics consumer reacts.
 
-Enforced by `depguard` in CI, so a violation fails the build rather than relying on review vigilance.
+Enforced in CI (module graph, link graph and `depguard` as above), so a violation fails the build rather than relying on review vigilance.
 
 ### 4.5 System diagram
 
@@ -260,22 +262,22 @@ Enforced by `depguard` in CI, so a violation fails the build rather than relying
 flowchart TB
     Client[API clients]
 
-    subgraph IDAPI["cmd/identity-api replicas"]
+    subgraph IDAPI["identity-api replicas"]
         GIN1[Gin: routing, auth, DTOs]
         MOD1[identity]
     end
 
-    subgraph CAPI["cmd/course-api replicas"]
+    subgraph CAPI["course-api replicas"]
         GIN2[Gin: routing, auth, DTOs]
         MOD2[course / enrollment / progress]
     end
 
-    subgraph AAPI["cmd/analytics-api replicas"]
+    subgraph AAPI["analytics-api replicas"]
         GIN3[Gin: routing, auth, DTOs]
         MOD3[analytics]
     end
 
-    subgraph WRK["cmd/worker replicas"]
+    subgraph WRK["worker replicas"]
         RELAY[Outbox relay]
         KC[Kafka consumers]
         AQ[Asynq worker pools]
@@ -383,7 +385,7 @@ Nothing a student can observe changes until `PromoteVersion` commits. A failure 
 | `CourseCompleted` | — | completion rate, avg time | congratulation job | archive | — | — |
 | `CertificateIssued` | — | — | delivery job | archive + audit | — | — |
 
-`enrollment-course-archival` is live today, not M2/M3-planned like the other five columns (ADR-0021 pulled the relay forward; this consumer and `analytics-aggregator` are both real, running handlers against the in-process relay, not Kafka). It exists specifically because an archived course must not leave its already-enrolled students silently stranded with an active status pointing at content that's gone (`internal/course/README.md`, "Why archive, not delete"; `internal/enrollment/README.md` has the implementation reasoning).
+`enrollment-course-archival` is live today, not M2/M3-planned like the other five columns (ADR-0021 pulled the relay forward; this consumer and `analytics-aggregator` are both real, running handlers against the in-process relay, not Kafka). It exists specifically because an archived course must not leave its already-enrolled students silently stranded with an active status pointing at content that's gone (`services/course/course/README.md`, "Why archive, not delete"; `services/course/enrollment/README.md` has the implementation reasoning).
 
 Each consumer maintains its own offset and its own `processed_events` rows. A failure in one never blocks another — the property that makes the system diagnosable and independently recoverable.
 
@@ -709,7 +711,7 @@ CREATE TABLE idempotency_keys (
 
 #### 5.3.6 Read models
 
-`course_search_index` stays in the `course` schema (its FK to `courses(id)` is unchanged — same schema, ADR-0024) until `internal/search` is actually built; the `analytics_*` tables below moved to their own `analytics` schema and lost the `analytics_` prefix (redundant once namespaced) and their FKs into `course.courses`.
+`course_search_index` stays in the `course` schema (its FK to `courses(id)` is unchanged — same schema, ADR-0024) until `services/worker/search` is actually built; the `analytics_*` tables below moved to their own `analytics` schema and lost the `analytics_` prefix (redundant once namespaced) and their FKs into `course.courses`.
 
 ```sql
 CREATE TABLE course_search_index (
@@ -730,7 +732,7 @@ CREATE INDEX idx_search_title_trgm ON course_search_index USING GIN(title gin_tr
 CREATE INDEX idx_search_facets ON course_search_index(category, level);
 ```
 
-**`analytics` schema** (ADR-0024). `internal/analytics` never queries `course.courses`, `course.enrollments`, or `identity.users` directly — three mirror tables hold exactly the fields it needs, upserted row-by-row from relay events (`internal/analytics/handlers.go`), and the aggregate tables below recompute from those mirrors instead (ADR-0017's rebuildability principle, same as before ADR-0024, just pointed at this schema's own data):
+**`analytics` schema** (ADR-0024). `services/analytics/analytics` never queries `course.courses`, `course.enrollments`, or `identity.users` directly — three mirror tables hold exactly the fields it needs, upserted row-by-row from relay events (`services/analytics/analytics/handlers.go`), and the aggregate tables below recompute from those mirrors instead (ADR-0017's rebuildability principle, same as before ADR-0024, just pointed at this schema's own data):
 
 ```sql
 CREATE TABLE user_role_mirror (
@@ -787,7 +789,7 @@ The search index is a **separate table, deliberately not a generated column or t
 
 `platform_snapshot` uses the single-row-table idiom: `id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id)` makes a second row impossible.
 
-`user_role_mirror.last_event_id` exists because moving analytics off direct table reads reopened a race direct reads never had: the relay's worker pool (§10.2 — default 4 workers) has no per-aggregate ordering, so a user's `identity.user_registered` and a later `identity.user_role_changed` can commit out of order. A naive upsert would let whichever finishes last win, silently reverting a promotion. `UpsertUserRoleMirror` (`internal/analytics/repository.go`) only applies an update when the incoming event's outbox id is newer than what's recorded. `course_mirror` and `enrollment_mirror` don't need the same guard — see `internal/analytics/README.md` for why.
+`user_role_mirror.last_event_id` exists because moving analytics off direct table reads reopened a race direct reads never had: the relay's worker pool (§10.2 — default 4 workers) has no per-aggregate ordering, so a user's `identity.user_registered` and a later `identity.user_role_changed` can commit out of order. A naive upsert would let whichever finishes last win, silently reverting a promotion. `UpsertUserRoleMirror` (`services/analytics/analytics/repository.go`) only applies an update when the incoming event's outbox id is newer than what's recorded. `course_mirror` and `enrollment_mirror` don't need the same guard — see `services/analytics/analytics/README.md` for why.
 
 ### 5.4 MongoDB collections
 
@@ -879,7 +881,7 @@ BEGIN
 COMMIT
 ```
 
-**No module publishes to Kafka directly.** The outbox is the only path from state change to event. This is a hard rule, checkable in review: a Kafka producer imported outside `internal/platform/outbox` is a defect.
+**No module publishes to Kafka directly.** The outbox is the only path from state change to event. This is a hard rule, checkable in review: a Kafka producer imported outside `libs/outbox` is a defect.
 
 The consequence is **at-least-once delivery** — the relay may publish and crash before marking the row published. Duplicates are therefore normal, and consumer idempotency (§6.6) is mandatory rather than defensive.
 
@@ -1161,7 +1163,7 @@ Averages (completion time, courses per student) are computed only by the schedul
 
 MongoDB owns the archive, not the aggregates. The metrics are small, structured, relational, and queried by fixed dashboards. PostgreSQL serves them with ordinary indexed queries and — critically — can recompute them from source tables in the same database, which is what makes reconciliation possible. Aggregates in MongoDB would make every reconciliation a cross-store operation for no gain.
 
-"Source tables" means `internal/analytics`'s own mirror tables (§5.3.6), not `course.courses`/`course.enrollments`/`identity.users` directly — schema-per-service (ADR-0024) means analytics' recompute reads only ever leave the `analytics` schema. The mirrors are themselves kept current by the event-driven path below; this doesn't change what reconciliation recomputes from, only where that data now lives.
+"Source tables" means `services/analytics/analytics`'s own mirror tables (§5.3.6), not `course.courses`/`course.enrollments`/`identity.users` directly — schema-per-service (ADR-0024) means analytics' recompute reads only ever leave the `analytics` schema. The mirrors are themselves kept current by the event-driven path below; this doesn't change what reconciliation recomputes from, only where that data now lives.
 
 ---
 
@@ -1543,19 +1545,22 @@ MinIO sits in `core` rather than a later tier because asset upload is exercised 
 ### 17.2 Repository layout
 
 ```
-cmd/identity-api/, cmd/course-api/, cmd/analytics-api/, cmd/worker/
-                          Four entry points, four images (ADR-0022, ADR-0023)
-internal/
-  platform/               Shared kernel, including bootstrap (the composition root)
-  identity/ course/ enrollment/ progress/
-  search/ analytics/ notification/ audit/
-  workflows/              Temporal definitions
-migrations/               golang-migrate SQL
+services/                 One Go module per service (ADR-0026); each has its own go.mod
+  identity/               identity/ + cmd/identity-api
+  course/                 course/ enrollment/ progress/ workflows/ + cmd/course-api
+  analytics/              analytics/ + cmd/analytics-api
+  worker/                 cmd/worker; search/ notification/ audit/ (plans, not built)
+libs/                     Shared kernel, one Go module per package: auth cache config db errors
+                          httpx infra logging outbox ratelimit relay router temporal; testenv
+tools/seed/               make seed
+go.work                   Lists every module for local development (CI and Docker use GOWORK=off)
+migrations/               golang-migrate SQL, one directory per schema
 api/openapi.yaml          Contract
 proto/                    Event schemas
 deploy/                   Compose, Grafana, Prometheus config
-docs/rfc|prd|adr|guides/
-test/                     Integration and load helpers
+docs/rfc|prd|adr|guides|plans/
+scripts/                  check-link-graph.sh, check-module-graph.sh, for-each-module.sh, release-module.sh
+test/                     Cross-service test material
 Makefile
 ```
 
@@ -1563,7 +1568,7 @@ Makefile
 
 `make` targets: `dev-*`, `migrate-up|down|create`, `test`, `test-integration`, `lint`, `proto`, `seed`.
 
-CI: build, `golangci-lint` (including `depguard` for boundaries), `go test -race`, integration tests against real Postgres, schema compatibility check, coverage report.
+CI: every Go module built, vetted and tested standalone (`scripts/for-each-module.sh`, `GOWORK=off`, because `go test ./...` does not cross module boundaries), the link-graph and module-graph guards, `golangci-lint` per module (`depguard` for the boundary inside `services/course`), `go test -race` with integration tests against real Postgres, schema compatibility check, coverage report. Release tagging is a separate manual workflow (`docs/guides/versioning.md`).
 
 `make seed` populates a realistic dataset — instructors, courses at each lifecycle state, students with partial progress. A contributor gets a working system with data in one command, which is a prerequisite for the onboarding path in §22.
 
@@ -1666,12 +1671,12 @@ The design is one system. The milestones below are review checkpoints, not archi
 **Pulled forward from M2/M3, deliberately, after an audit against `docs/baseline/SmartCourse.md` found §7's concurrency requirements demonstrated almost nowhere in production code.** Rather than wait, two real (not contrived) pieces were added — see ADR-0021 for the full reasoning and the two bugs found while building it:
 
 - **Concurrent publish validation** (`course.Service.runPublishChecks`) — `ValidateMetadata` gates, then lesson-content validation and totals recompute run concurrently via `errgroup`, matching RFC §7.4's own activity graph shape.
-- **The outbox relay** (`internal/platform/relay`) — a genuine bounded worker pool: goroutines, a channel for job dispatch (structural backpressure), `sync.WaitGroup`-drained graceful shutdown, `sync.Mutex`-guarded in-process claim tracking, `sync/atomic` counters. Proven, not just written: `relay_integration_test.go` asserts bounded concurrency is actually enforced, idempotency actually holds across retries, a poison event actually stops retrying after the configured max, and shutdown actually drains in-flight work's *database commit*, not just its Go function return (the second bug ADR-0021 records).
-- **`internal/analytics`**, the relay's first handler — recomputes `platform_snapshot` and `course_stats` from source on every relevant event, and `daily_enrollments` incrementally. `GET /analytics/platform`, `GET /analytics/courses/{id}`, and `GET /analytics/courses/{id}/daily-enrollments` are all live (the latter two were added after a baseline-compliance audit found `course_stats`/`daily_enrollments` had been written since ADR-0024 with no read path at all — see `differences-from-requirements.md` DR-017). This closes FR-5 from zero to seven of ten metrics (platform totals, average courses per student, per-course completion rate and average time to complete, new enrollments over time); the remaining two (search-driven popularity, failed-events) still need search and MongoDB respectively.
+- **The outbox relay** (`libs/relay`) — a genuine bounded worker pool: goroutines, a channel for job dispatch (structural backpressure), `sync.WaitGroup`-drained graceful shutdown, `sync.Mutex`-guarded in-process claim tracking, `sync/atomic` counters. Proven, not just written: `relay_integration_test.go` asserts bounded concurrency is actually enforced, idempotency actually holds across retries, a poison event actually stops retrying after the configured max, and shutdown actually drains in-flight work's *database commit*, not just its Go function return (the second bug ADR-0021 records).
+- **`services/analytics/analytics`**, the relay's first handler — recomputes `platform_snapshot` and `course_stats` from source on every relevant event, and `daily_enrollments` incrementally. `GET /analytics/platform`, `GET /analytics/courses/{id}`, and `GET /analytics/courses/{id}/daily-enrollments` are all live (the latter two were added after a baseline-compliance audit found `course_stats`/`daily_enrollments` had been written since ADR-0024 with no read path at all — see `differences-from-requirements.md` DR-017). This closes FR-5 from zero to seven of ten metrics (platform totals, average courses per student, per-course completion rate and average time to complete, new enrollments over time); the remaining two (search-driven popularity, failed-events) still need search and MongoDB respectively.
 
-The relay later gained a second handler, for a different reason than the concurrency pull-forward above: `internal/enrollment`'s `enrollment-course-archival` consumer, added when supervisor review of course archival (`POST /courses/{id}/archive`) surfaced that an archived course was leaving its already-enrolled students with an active status and no working access path. `course.Service.ArchiveCourse` writes `course.course_archived`; the handler bulk-withdraws every active enrollment on that course. See `internal/enrollment/README.md` for the implementation, and the §4.5/§6.5 event tables above, now updated with this consumer.
+The relay later gained a second handler, for a different reason than the concurrency pull-forward above: `services/course/enrollment`'s `enrollment-course-archival` consumer, added when supervisor review of course archival (`POST /courses/{id}/archive`) surfaced that an archived course was leaving its already-enrolled students with an active status and no working access path. `course.Service.ArchiveCourse` writes `course.course_archived`; the handler bulk-withdraws every active enrollment on that course. See `services/course/enrollment/README.md` for the implementation, and the §4.5/§6.5 event tables above, now updated with this consumer.
 
-**M2 is implemented: course publishing runs as a real Temporal workflow, tested against a live Temporal server, not just a design.** `internal/workflows.PublishCourseWorkflow` implements §7.4's full activity graph — `ValidateMetadata` → `{VerifyAssets, ComputeMetadata}` → `BuildOutline` → `{IndexSearch, WarmCache}` → `PromoteAndPublish` — with per-activity retry, failure handling that records a clean error message without compensation (nothing before `PromoteAndPublish` touches the live version), and `POST /courses/{id}/publish` now returning `202` with a workflow ID that `GET /courses/{id}/publish-status` polls. See ADR-0025 for the full implementation record, including a deliberate departure from a literal reading of this section: `IndexSearch` and `WarmCache`, both nominally M3-scoped, were pulled forward as real, working pieces (a real `course_search_index` upsert plus a live `GET /courses/search`; a real version-scoped Redis cache read through by `GET /courses/{id}`) rather than left as no-op stand-ins — the same audit logic ADR-0021 already used to justify pulling the relay and concurrent publish validation into M1. `InitAnalytics`, the seventh activity in §7.4's original diagram, isn't implemented as a separate step: the outbox relay's existing `analytics` handler already reaches the same end state from `PromoteAndPublish`'s own event, and a second synchronous write would just race it.
+**M2 is implemented: course publishing runs as a real Temporal workflow, tested against a live Temporal server, not just a design.** `services/course/workflows.PublishCourseWorkflow` implements §7.4's full activity graph — `ValidateMetadata` → `{VerifyAssets, ComputeMetadata}` → `BuildOutline` → `{IndexSearch, WarmCache}` → `PromoteAndPublish` — with per-activity retry, failure handling that records a clean error message without compensation (nothing before `PromoteAndPublish` touches the live version), and `POST /courses/{id}/publish` now returning `202` with a workflow ID that `GET /courses/{id}/publish-status` polls. See ADR-0025 for the full implementation record, including a deliberate departure from a literal reading of this section: `IndexSearch` and `WarmCache`, both nominally M3-scoped, were pulled forward as real, working pieces (a real `course_search_index` upsert plus a live `GET /courses/search`; a real version-scoped Redis cache read through by `GET /courses/{id}`) rather than left as no-op stand-ins — the same audit logic ADR-0021 already used to justify pulling the relay and concurrent publish validation into M1. `InitAnalytics`, the seventh activity in §7.4's original diagram, isn't implemented as a separate step: the outbox relay's existing `analytics` handler already reaches the same end state from `PromoteAndPublish`'s own event, and a second synchronous write would just race it.
 
 Updated concurrency-primitive scorecard against SmartCourse.md §7 / Tech Stack, in running production code (not test harnesses): `context.Context` ✅, goroutines ✅ (worker pool), channels ✅ (job dispatch), `sync.WaitGroup` ✅ (shutdown drain), `sync.Mutex` ✅ (in-flight claim set), `sync/atomic` ✅ (relay counters), `errgroup` ✅ (concurrent publish checks), bounded worker pools ✅, backpressure ✅ (channel-structural), retry ✅ (attempt tracking + give-up threshold), graceful shutdown ✅. **Still genuinely absent, honestly:** `sync.RWMutex` has no forced-fit use — the one candidate pattern RFC §10.3 names (a read-heavy/write-rare in-process config cache) doesn't exist as a real need yet, and adding one only to use the primitive would be exactly the anti-pattern ADR-0021 was written to avoid.
 
@@ -1739,8 +1744,8 @@ Recommended: A Tour of Go, then Effective Go's sections on errors and concurrenc
 1. `docs/rfc/` §3 (consistency model) and §4 (architecture) — the two sections everything else derives from
 2. `migrations/` in order — the schema is the domain model, and the constraints encode the rules
 3. `api/openapi.yaml` — the contract
-4. `internal/enrollment/` end to end — the clearest illustration of the transaction, the outbox write, and the sync/async boundary in one small module
-5. `internal/platform/outbox/` — why events cannot be lost
+4. `services/course/enrollment/` end to end — the clearest illustration of the transaction, the outbox write, and the sync/async boundary in one small module
+5. `libs/outbox/` — why events cannot be lost
 6. `docs/adr/` — why things are as they are, in chronological order
 
 ### 22.4 Concepts worth understanding before changing anything
@@ -1816,6 +1821,9 @@ ADRs record decisions as point-in-time events with their context intact. This RF
 | 0021 | In-process outbox relay with a worker pool, ahead of Kafka | §6.3, §21.0 |
 | 0022 | Separate API and worker binaries, one shared codebase and database | §4.2 |
 | 0023 | Split cmd/api into identity-api, course-api, analytics-api | §4.2 |
+| 0024 | Schema-per-service within one shared database | §5.3 |
+| 0025 | Course publishing as a Temporal workflow (M2) | §7.4 |
+| 0026 | One Go module per service and per shared library | §4.1, §4.2, §4.4 |
 
 ---
 
