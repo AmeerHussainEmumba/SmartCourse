@@ -71,6 +71,12 @@ type MinIOConfig struct {
 	SecretAccessKey string
 	UseSSL          bool
 	BucketAssets    string
+	// PublicEndpoint is the endpoint written into pre-signed URLs handed to
+	// browsers. Endpoint is what the service itself dials (inside Compose,
+	// http://minio:9000, unreachable from a client); the two differ whenever
+	// the service reaches MinIO over an internal name. Empty means "same as
+	// Endpoint". Optional (MINIO_PUBLIC_ENDPOINT).
+	PublicEndpoint string
 }
 
 // TemporalConfig is deliberately all-optional, unlike Postgres/Redis above:
@@ -188,6 +194,7 @@ func Load() (*Config, error) {
 			SecretAccessKey: req("MINIO_SECRET_ACCESS_KEY"),
 			UseSSL:          optBool("MINIO_USE_SSL", false),
 			BucketAssets:    envOr("MINIO_BUCKET_ASSETS", "smartcourse-assets"),
+			PublicEndpoint:  os.Getenv("MINIO_PUBLIC_ENDPOINT"),
 		},
 		Temporal: TemporalConfig{
 			HostPort:  envOr("TEMPORAL_HOST_PORT", "temporal:7233"),
