@@ -80,6 +80,7 @@ require (
 require (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/config v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/db v0.0.0
+	github.com/testcontainers/testcontainers-go/modules/mongodb v0.44.0
 )
 
 replace (
