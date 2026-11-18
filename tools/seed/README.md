@@ -16,6 +16,10 @@ up. Retries the publish call itself a few times on a transient
 means this script's own first real Temporal RPC can race the server's own
 startup — see `publishWithRetry` in `main.go`.
 
+## Host-run, so host addresses
+
+`make seed` runs `go run ./tools/seed` on your host, so it has to use the ports compose publishes on `127.0.0.1`, not the compose-internal names the containers use (`temporal:7233`, `postgres:5432`, `redis:6379`, `minio:9000`). The Makefile target therefore always overrides `TEMPORAL_HOST_PORT=localhost:7233` for the seed process, whatever `.env` contains (`make seed SEED_TEMPORAL_HOST_PORT=host:port` if yours differs), and rewrites `POSTGRES_DSN`, `REDIS_ADDR` and `MINIO_ENDPOINT` to `localhost:5433`, `localhost:6380` and `localhost:9002` only when they still name the compose-internal host (it prints a line when it does; custom host ports and credentials are left alone). Running `go run ./tools/seed` directly bypasses this, so set those values yourself.
+
 ## Why it goes through the service layer, not raw SQL
 
 `main.go` calls `identity.Service.Register`, `course.Service.CreateCourse`/

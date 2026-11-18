@@ -51,16 +51,15 @@ func main() {
 		os.Exit(1)
 	}
 	router.RegisterHealth(r, deps.HealthCheckers())
-	registerRoutes(r, deps, cfg)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	registerRoutes(ctx, r, deps, cfg)
 
 	srv := router.NewServer(fmt.Sprintf(":%d", cfg.HTTPPort), r, router.ServerOptions{
 		ReadTimeout:  cfg.HTTPReadTimeout,
 		WriteTimeout: cfg.HTTPWriteTimeout,
 		IdleTimeout:  cfg.HTTPIdleTimeout,
 	})
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	go func() {
 		logger.Info("identity-api listening", slog.Int("port", cfg.HTTPPort))

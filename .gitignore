@@ -27,7 +27,7 @@ profile.cov
 .env
 
 # Editor/IDE
-# .idea/
+.idea/
 # .vscode/
 
 # Binaries from a bare `go build` inside a module directory

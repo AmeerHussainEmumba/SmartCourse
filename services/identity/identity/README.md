@@ -29,6 +29,10 @@ Three real bugs were caught reviewing this module against the baseline requireme
   - **The fix itself had a subtler bug worth knowing about:** the first version called `RevokeFamily` inside the transaction and then `return errTokenInvalid` to reject the request — but returning a non-nil error from inside `gorm.DB.Transaction`'s closure rolls back everything written in it, including the revocation that was supposed to survive the rejection. Fixed by having that branch commit (`return nil`) and signal the rejection through a separate `reuseDetected` flag checked after the transaction. Worth internalizing: a side effect you want to keep and an error you want to return are not always compatible inside one `Transaction` closure.
 - **`Register` returned a 500 if the verification email failed to send — after the user was already saved.** The transaction had already committed; a client seeing `500` reasonably assumes registration failed, when a real account exists. Fixed by logging the failure instead of returning it — consistent with `EmailSender` already being documented as best-effort. Proven by `TestRegister_DoesNotFailWhenEmailDeliveryFails`.
 
+## Token-version cache repair
+
+`course-api` cannot read `identity.users` (ADR-0024), so it trusts Redis `user:tv:<id>` and reads a missing key as version 1. `RunTokenVersionReseeder` (started by identity-api) repairs that after a Redis flush: when the `identity:tv:seeded` sentinel is missing it rewrites every `token_version` above 1 with `SET NX` (never overwriting a newer role-change write), then sets the sentinel with a 10-minute TTL. Login and refresh still seed their own user. Not covered: a single key evicted while the sentinel survives is repaired at the next login/refresh or when the sentinel expires.
+
 ## Endpoints
 
 | Method & path | Auth | Notes |

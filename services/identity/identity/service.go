@@ -55,6 +55,9 @@ type Service struct {
 	argon     config.Argon2Config
 	email     EmailSender
 	dummyHash string // built from the configured Argon2 parameters (F-30)
+	gate      *auth.ArgonGate
+
+	reseedBatch int // 0 = default; set by tests
 }
 
 func NewService(repo *Repository, rdb *redis.Client, jwtCfg config.JWTConfig, argon config.Argon2Config, email EmailSender) *Service {
@@ -63,7 +66,17 @@ func NewService(repo *Repository, rdb *redis.Client, jwtCfg config.JWTConfig, ar
 		slog.Error("identity: dummy hash from configured argon2 failed; using default", slog.Any("error", err))
 		dummy = auth.DummyHash
 	}
-	return &Service{repo: repo, rdb: rdb, limiter: ratelimit.New(rdb), jwtCfg: jwtCfg, argon: argon, email: email, dummyHash: dummy}
+	return &Service{repo: repo, rdb: rdb, limiter: ratelimit.New(rdb), jwtCfg: jwtCfg, argon: argon, email: email, dummyHash: dummy, gate: auth.NewArgonGate(argon)}
+}
+
+// argonErr maps a gate failure (saturated queue, caller gone) to the standard
+// 503 shape; anything else is an internal error. It is never reported as a
+// wrong password, so a busy server cannot consume a login-failure budget.
+func argonErr(err error) *apperrors.AppError {
+	if errors.Is(err, auth.ErrArgonBusy) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return apperrors.ErrUnavailable.Wrap(err)
+	}
+	return apperrors.ErrInternal.Wrap(err)
 }
 
 // addressBudgetExceeded consumes one unit of the per-address email budget and
@@ -132,9 +145,9 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*AuthRespo
 // createUser persists the user, a verification token and the outbox event in
 // one transaction. It returns errEmailTaken for a duplicate email.
 func (s *Service) createUser(ctx context.Context, req RegisterRequest) (*User, string, error) {
-	hash, err := auth.HashPassword(s.argon, req.Password)
+	hash, err := s.gate.Hash(ctx, s.argon, req.Password)
 	if err != nil {
-		return nil, "", apperrors.ErrInternal.Wrap(err)
+		return nil, "", argonErr(err)
 	}
 
 	user := &User{
@@ -217,16 +230,18 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*AuthResponse, e
 		// Compare against a dummy hash built from the CONFIGURED Argon2
 		// parameters (F-30) so timing doesn't reveal whether the account
 		// exists (RFC §11.3).
-		_, _ = auth.VerifyPassword(s.dummyHash, req.Password)
+		if _, err := s.gate.Verify(ctx, s.dummyHash, req.Password); err != nil {
+			return nil, argonErr(err)
+		}
 		return fail()
 	}
 	if err != nil {
 		return nil, apperrors.ErrInternal.Wrap(err)
 	}
 
-	ok, err := auth.VerifyPassword(user.PasswordHash, req.Password)
+	ok, err := s.gate.Verify(ctx, user.PasswordHash, req.Password)
 	if err != nil {
-		return nil, apperrors.ErrInternal.Wrap(err)
+		return nil, argonErr(err)
 	}
 	// A suspended/deleted account answers exactly like a wrong password
 	// (F-32), so login is never an oracle for password correctness.
@@ -526,9 +541,9 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, req PasswordResetCon
 		return errTokenInvalid
 	}
 
-	newHash, err := auth.HashPassword(s.argon, req.NewPassword)
+	newHash, err := s.gate.Hash(ctx, s.argon, req.NewPassword)
 	if err != nil {
-		return apperrors.ErrInternal.Wrap(err)
+		return argonErr(err)
 	}
 
 	var newVersion int16

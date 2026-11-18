@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,7 @@ type Config struct {
 	Redis    RedisConfig
 	MinIO    MinIOConfig
 	Temporal TemporalConfig
+	Relay    RelayConfig
 
 	JWT   JWTConfig
 	Argon Argon2Config
@@ -106,6 +108,43 @@ type Argon2Config struct {
 	Parallelism uint8
 	SaltLength  uint32
 	KeyLength   uint32
+
+	// MaxConcurrent bounds how many argon2 hashes run at once (F-26 residue:
+	// 16 concurrent logins pinned about 1 GiB). Peak argon2 memory is about
+	// MaxConcurrent x MemoryKiB. Zero means "use DefaultArgon2MaxConcurrent"
+	// (consumers apply it), so hand-built configs in tests keep working.
+	MaxConcurrent int
+	// QueueTimeout is how long a request waits for a free slot before the
+	// caller answers 503. Zero means DefaultArgon2QueueTimeout.
+	QueueTimeout time.Duration
+}
+
+const (
+	// DefaultArgon2QueueTimeout is deliberately shorter than the default
+	// HTTP write timeout (30s) so a queued request is refused cleanly rather
+	// than cut off mid-wait.
+	DefaultArgon2QueueTimeout = 5 * time.Second
+	maxArgonConcurrent        = 1024
+	maxArgonQueueTimeout      = time.Minute
+)
+
+// DefaultArgon2MaxConcurrent derives a slot count from the CPU budget the Go
+// runtime sees (cgroup-aware): one hash uses `parallelism` threads, so
+// GOMAXPROCS/parallelism hashes saturate the CPUs. Clamped to [2, 8] so a
+// one-CPU container still overlaps a hash with request handling and a big host
+// does not pin gigabytes (8 x 64 MiB = 512 MiB with the default memory cost).
+func DefaultArgon2MaxConcurrent(gomaxprocs, parallelism int) int {
+	if parallelism < 1 {
+		parallelism = 1
+	}
+	n := gomaxprocs / parallelism
+	if n < 2 {
+		n = 2
+	}
+	if n > 8 {
+		n = 8
+	}
+	return n
 }
 
 // Load reads and validates configuration from the environment. It returns an
@@ -170,6 +209,16 @@ func Load() (*Config, error) {
 	inRange("ARGON2_MEMORY_KIB", argonMem, 8, maxArgonMemoryKiB)
 	inRange("ARGON2_ITERATIONS", argonIter, 1, maxArgonIterations)
 	inRange("ARGON2_PARALLELISM", argonPar, 1, maxArgonParallelism)
+	parForDefault := argonPar
+	if parForDefault < 1 || parForDefault > maxArgonParallelism {
+		parForDefault = 1
+	}
+	argonConc := optInt("ARGON2_MAX_CONCURRENT", DefaultArgon2MaxConcurrent(runtime.GOMAXPROCS(0), parForDefault))
+	inRange("ARGON2_MAX_CONCURRENT", argonConc, 1, maxArgonConcurrent)
+	argonQueue := optDuration("ARGON2_QUEUE_TIMEOUT", DefaultArgon2QueueTimeout)
+	if argonQueue <= 0 || argonQueue > maxArgonQueueTimeout {
+		errs = append(errs, "ARGON2_QUEUE_TIMEOUT must be greater than zero and at most 1m")
+	}
 	if argonPar >= 1 && argonPar <= maxArgonParallelism && argonMem < 8*argonPar {
 		errs = append(errs, "ARGON2_MEMORY_KIB must be at least 8 * ARGON2_PARALLELISM")
 	}
@@ -213,6 +262,9 @@ func Load() (*Config, error) {
 			Parallelism: uint8(argonPar),
 			SaltLength:  16,
 			KeyLength:   32,
+
+			MaxConcurrent: argonConc,
+			QueueTimeout:  argonQueue,
 		},
 		CORSAllowedOrigins: splitAndTrim(os.Getenv("CORS_ALLOWED_ORIGINS")),
 		TrustedProxies:     splitAndTrim(os.Getenv("TRUSTED_PROXIES")),
@@ -221,6 +273,12 @@ func Load() (*Config, error) {
 		HTTPWriteTimeout:   optDuration("HTTP_WRITE_TIMEOUT", 30*time.Second),
 		HTTPIdleTimeout:    optDuration("HTTP_IDLE_TIMEOUT", 120*time.Second),
 		EnableHSTS:         optBool("HSTS_ENABLED", false),
+	}
+
+	cfg.Relay.Workers = optInt("RELAY_WORKERS", defaultRelayWorkers)
+	inRange("RELAY_WORKERS", cfg.Relay.Workers, 1, maxRelayWorkers)
+	if msg := relayPoolError(cfg.Postgres.MaxOpenConns, cfg.Relay.Workers); msg != "" {
+		errs = append(errs, msg)
 	}
 
 	if len(cfg.JWT.SigningKey) < 32 {
