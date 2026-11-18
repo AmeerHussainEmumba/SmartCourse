@@ -1,0 +1,40 @@
+name: Release module
+
+# Manual only. Tagging publishes a module version (the Go module proxy caches
+# it and a tag cannot be cleanly retracted), so a human triggers this and
+# nothing runs it automatically. Policy: docs/guides/versioning.md.
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: "Module directory, e.g. libs/auth or services/course"
+        required: true
+      version:
+        description: "Version to tag, e.g. v0.1.0 (CHANGELOG.md must have a matching section)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - name: Tag and push
+        env:
+          MODULE: ${{ inputs.module }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          scripts/release-module.sh "$MODULE" "$VERSION" --push

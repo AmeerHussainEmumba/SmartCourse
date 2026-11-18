@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Living document |
-| Last updated | 2026-11-06 |
+| Last updated | 2026-11-17 |
 | Related | `smartcourse-rfc.md`, `smartcourse-adr.md`, `docs/baseline/SmartCourse.md`, `docs/baseline/Execution Guidelines.md` |
 
 ## Purpose
@@ -40,6 +40,7 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-015](#dr-015--dr-008s-existing-asynq-notification-path-was-inaccurate) | DR-008's "existing Asynq notification path" was inaccurate | Correction | Accepted |
 | [DR-016](#dr-016--syncrwmutex-required-by-the-tech-stack-not-used-not-previously-logged) | sync.RWMutex: required by the tech stack, not used, not previously logged | Interpretation | Accepted |
 | [DR-017](#dr-017--course_stats-and-daily_enrollments-were-computed-but-unreadable) | course_stats and daily_enrollments were computed but unreadable | Correction | Accepted |
+| [DR-020](#dr-020--one-go-module-per-service-and-per-shared-library-beyond-the-baselines-clear-moduleservice-separation) | One Go module per service and per shared library, beyond the baseline's "clear module/service separation" | Interpretation | Accepted |
 
 ---
 
@@ -231,7 +232,7 @@ The direct conversation this entry was waiting on happened. The supervisor's per
 
 ### Update — 2026-11-03: Liquibase half now resolved too
 
-A later written review asked for Liquibase again ("own Liquibase changelog" per service). Asked directly, the supervisor confirmed: "Liquibase not a hard requirement for you. You're on golang-migrate just we need to make sure each service has its own migrations folder." Both halves of this entry are now resolved — neither in the direction the original review asked for, but both by direct confirmation rather than this project's own unilateral case. `golang-migrate` stays (`internal/platform/db`, `Makefile`), reorganized into one independent migration sequence per service (`migrations/{platform,identity,course,analytics}/`) rather than Liquibase changelogs. See DR-013 and ADR-0024 for what that same conversation asked for on data ownership, which this register's original per-service-table reasoning did not survive unchanged.
+A later written review asked for Liquibase again ("own Liquibase changelog" per service). Asked directly, the supervisor confirmed: "Liquibase not a hard requirement for you. You're on golang-migrate just we need to make sure each service has its own migrations folder." Both halves of this entry are now resolved — neither in the direction the original review asked for, but both by direct confirmation rather than this project's own unilateral case. `golang-migrate` stays (`libs/db`, `Makefile`), reorganized into one independent migration sequence per service (`migrations/{platform,identity,course,analytics}/`) rather than Liquibase changelogs. See DR-013 and ADR-0024 for what that same conversation asked for on data ownership, which this register's original per-service-table reasoning did not survive unchanged.
 
 ---
 
@@ -299,17 +300,17 @@ RFC §21.1 maps "Week 2" to M2 (the publishing workflow) and scopes search index
 
 ### Why
 
-The same reasoning DR-006 already established and ADR-0021 already acted on: the weekly/milestone breakdown is a review checkpoint, not a build order, and a design audit that finds a gap between the documented plan and what's actually buildable right now should close that gap rather than wait on a calendar date. Here, the alternative to building these for real was a workflow with two of its seven activities as literal no-ops (rejected directly — see ADR-0025's Option B) or silently dropped (leaves RFC §7.4's own diagram unfulfilled for no forcing reason, when `course_search_index`'s schema and `internal/platform/cache`'s Redis client both already existed from M0/M1). Full reasoning and the real bugs found building this: ADR-0025.
+The same reasoning DR-006 already established and ADR-0021 already acted on: the weekly/milestone breakdown is a review checkpoint, not a build order, and a design audit that finds a gap between the documented plan and what's actually buildable right now should close that gap rather than wait on a calendar date. Here, the alternative to building these for real was a workflow with two of its seven activities as literal no-ops (rejected directly — see ADR-0025's Option B) or silently dropped (leaves RFC §7.4's own diagram unfulfilled for no forcing reason, when `course_search_index`'s schema and `libs/cache`'s Redis client both already existed from M0/M1). Full reasoning and the real bugs found building this: ADR-0025.
 
 ### If this turns out to be wrong
 
-If `internal/search` lands in M3 as its own module with its own schema and ranking strategy (the same way `internal/analytics` was rebuilt rather than merely relocated when ADR-0024 landed), this entry's `IndexSearch` write path is superseded by that module's own relay-driven handler — not a reversal, an upgrade path already anticipated in ADR-0025's reversal trigger.
+If `internal/search` lands in M3 as its own module with its own schema and ranking strategy (the same way `services/analytics/analytics` was rebuilt rather than merely relocated when ADR-0024 landed), this entry's `IndexSearch` write path is superseded by that module's own relay-driven handler — not a reversal, an upgrade path already anticipated in ADR-0025's reversal trigger.
 
 ---
 
 ## DR-015 — DR-008's "existing Asynq notification path" was inaccurate
 
-**Category:** Correction · **Date:** 2026-11-06 · **Related:** DR-008, DR-007, `internal/identity/email.go`
+**Category:** Correction · **Date:** 2026-11-06 · **Related:** DR-008, DR-007, `services/identity/identity/email.go`
 
 ### What was wrongly asserted
 
@@ -345,11 +346,11 @@ If a genuine read-heavy/write-rare shared-state need emerges (the in-process con
 
 ## DR-017 — `course_stats` and `daily_enrollments` were computed but unreadable
 
-**Category:** Correction · **Date:** 2026-11-06 · **Related:** ADR-0024, DR-014, `internal/analytics`
+**Category:** Correction · **Date:** 2026-11-06 · **Related:** ADR-0024, DR-014, `services/analytics/analytics`
 
 ### What was wrongly asserted
 
-RFC §21.0 and `internal/analytics/README.md` both claimed analytics closed "5 of 10" SmartCourse.md FR-5 metrics, counting per-course completion rate, average time to complete, and new enrollments over time among them. `course_stats` and `daily_enrollments` were genuinely written by the relay's handlers (since ADR-0024) — but neither had a repository read method, a `Service` method, or an HTTP route. "Computed and stored" was reported as "live"; a baseline-compliance audit comparing the brief's metric list against what's actually reachable by a client found the three metrics above were not.
+RFC §21.0 and `services/analytics/analytics/README.md` both claimed analytics closed "5 of 10" SmartCourse.md FR-5 metrics, counting per-course completion rate, average time to complete, and new enrollments over time among them. `course_stats` and `daily_enrollments` were genuinely written by the relay's handlers (since ADR-0024) — but neither had a repository read method, a `Service` method, or an HTTP route. "Computed and stored" was reported as "live"; a baseline-compliance audit comparing the brief's metric list against what's actually reachable by a client found the three metrics above were not.
 
 ### Why this is logged, and what changed
 
@@ -358,6 +359,33 @@ Same category as DR-007/DR-015: a correction to our own status claims, not a bas
 ### If this turns out to be wrong
 
 Not applicable — this closes a gap between documentation and reality rather than making a bet.
+
+---
+
+## DR-020 — One Go module per service and per shared library, beyond the baseline's "clear module/service separation"
+
+**Category:** Interpretation · **Date:** 2026-11-17 · **Related:** DR-009, DR-011, DR-013, ADR-0001, ADR-0022, ADR-0023, ADR-0024, ADR-0026
+
+### What the baseline says, and what we did
+
+The baseline asks for structure and separation only in general terms: `docs/baseline/Execution Guidelines.md` §3 — "Organized project structure", "Clear module/service separation"; `docs/baseline/SmartCourse.md` §6 — "Clear separation of responsibilities between components"; and, as an expected outcome, "High-quality architecture and maintainability". It does not say how services are packaged, whether the repository is one Go module or many, or where shared code lives.
+
+The Week 2 review of PR #11 read that separation more strictly: the services were independently deployable and owned their own schemas (ADR-0022/0023/0024), but every binary still built every module through one shared composition root and one `go.mod`. It asked for each service in its own folder with its own `go.mod`, shared code in `libs/common`, and each service wired in its own `main.go`. This is implemented as ADR-0026.
+
+Two parts go **beyond** what the review literally named, and are logged here so they are not mistaken for something the review or the baseline required:
+
+1. **Shared code is split into one module per package** (13 library modules plus `libs/testenv`), not the single `libs/common` module named in the review. The reason is an expectation on the project side that on a real project different people will own different modules. With one team today this is mostly overhead (19 `go.mod` files for roughly 1,800 lines of shared code); ADR-0026 states the cost and the fallback (three grouped modules, or one `libs/common`).
+2. **Domain packages are exported, not under `internal/`**, because the worker and the seed tool must import them. Boundaries between services are enforced by the module graph and two CI guards rather than by Go's `internal/` rule.
+
+### Why this is logged as "accepted," not treated as a requirement of the brief
+
+Like DR-013, this is adopted because it was given as a direct requirement after review, not because the baseline needs it — nothing in the brief requires separate `go.mod` files, and DR-010's engineering case for a single shared codebase and database is not retracted. What the baseline does reward ("clarity of architecture", "code quality and structure", Execution Guidelines §7) is served by the change: each binary now links only what it runs (`identity-api`: 388 packages and no Temporal SDK, from 589 and 61), and the boundary between services is enforced by the compiler.
+
+**Not yet confirmed with the supervisor:** that one module per library package is acceptable in place of `libs/common`, and that the worker importing the `course` and `analytics` handler packages is acceptable until M3's per-consumer event delivery removes the need.
+
+### If this turns out to be wrong
+
+If the per-package library split proves to be overhead without a second owner, collapse to three grouped modules (`core`, `web`, `data`) or one `libs/common` — the layout allows it and ADR-0026's reversal trigger says when. If the module split as a whole is rejected, ADR-0026 is superseded by a new record; the per-service wiring change that came first (no shared `bootstrap`) stands on its own.
 
 ---
 

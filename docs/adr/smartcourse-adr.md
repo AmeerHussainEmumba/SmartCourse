@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Living document |
-| Last updated | 2026-11-05 |
+| Last updated | 2026-11-17 |
 | Related | `smartcourse-rfc.md` |
 
 ## Review status (2026-09-24)
@@ -24,6 +24,7 @@ The distinction matters when something changes. Six months from now, a contribut
 - `Reversal trigger` states the observable condition that should prompt revisiting. A decision without one is an assertion; a decision with one is a position.
 - Options that were considered and rejected stay in the record. The rejected option is often the more useful half.
 - New decisions during implementation get a new ADR. The register is expected to grow.
+- Paths in records dated before ADR-0026 (`internal/...`, `cmd/...`, `internal/platform/...`) describe the layout at the time of the decision. Since ADR-0026 they live under `services/`, `libs/` and `tools/`; see `services/README.md`.
 
 **Statuses:** `Accepted` · `Superseded by ADR-NNNN` · `Deprecated` · `Proposed`
 
@@ -31,7 +32,7 @@ The distinction matters when something changes. Six months from now, a contribut
 
 | ADR | Title | Status | RFC |
 |---|---|---|---|
-| [0001](#adr-0001--modular-monolith-over-microservices) | Modular monolith over microservices | Accepted | §4.1 |
+| [0001](#adr-0001--modular-monolith-over-microservices) | Modular monolith over microservices | Accepted — single `go.mod` aspect superseded in part by ADR-0026 | §4.1 |
 | [0002](#adr-0002--postgresql-as-the-single-system-of-record) | PostgreSQL as the single system of record | Accepted | §5.1 |
 | [0003](#adr-0003--course-content-in-postgresql-with-jsonb) | Course content in PostgreSQL with JSONB | Accepted | §5.5 |
 | [0004](#adr-0004--mongodb-for-event-archive-and-audit-only) | MongoDB for event archive and audit only | Accepted | §5.4 |
@@ -52,16 +53,17 @@ The distinction matters when something changes. Six months from now, a contribut
 | [0019](#adr-0019--minio-for-learning-asset-object-storage) | MinIO for learning-asset object storage | Accepted | §2.3 (A1), §4.7 |
 | [0020](#adr-0020--gcra-rate-limiting-over-fixed-window-counters) | GCRA rate limiting over fixed-window counters | Accepted | §5.7, §11.3 |
 | [0021](#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka) | In-process outbox relay with a worker pool, ahead of Kafka | Accepted | §6.3, §21.0 |
-| [0022](#adr-0022--separate-api-and-worker-binaries-one-shared-codebase-and-database) | Separate API and worker binaries, one shared codebase and database | Accepted | §4.2 |
-| [0023](#adr-0023--split-cmdapi-into-identity-api-course-api-and-analytics-api) | Split cmd/api into identity-api, course-api, and analytics-api | Accepted | §4.2 |
-| [0024](#adr-0024--schema-per-service-within-one-shared-database) | Schema-per-service within one shared database | Accepted | §5.3 |
+| [0022](#adr-0022--separate-api-and-worker-binaries-one-shared-codebase-and-database) | Separate API and worker binaries, one shared codebase and database | Accepted — extended by ADR-0026 | §4.2 |
+| [0023](#adr-0023--split-cmdapi-into-identity-api-course-api-and-analytics-api) | Split cmd/api into identity-api, course-api, and analytics-api | Accepted — extended by ADR-0026 | §4.2 |
+| [0024](#adr-0024--schema-per-service-within-one-shared-database) | Schema-per-service within one shared database | Accepted — deferred `go.mod` item resolved by ADR-0026 | §5.3 |
 | [0025](#adr-0025--course-publishing-as-a-temporal-workflow-m2) | Course publishing as a Temporal workflow (M2) | Accepted | §7.4 |
+| [0026](#adr-0026--one-go-module-per-service-and-per-shared-library) | One Go module per service and per shared library | Accepted | §4.1, §4.2, §4.4 |
 
 ---
 
 ## ADR-0001 — Modular monolith over microservices
 
-**Status:** Accepted · **Date:** 2026-09-24 · **RFC:** §4.1
+**Status:** Accepted (single-`go.mod` aspect superseded in part by ADR-0026) · **Date:** 2026-09-24 · **RFC:** §4.1
 
 ### Context
 
@@ -864,7 +866,7 @@ Kafka, Schema Registry, and Protobuf landing (M3) — at which point this packag
 
 ## ADR-0022 — Separate API and worker binaries, one shared codebase and database
 
-**Status:** Accepted · **Date:** 2026-10-19 · **RFC:** §4.2
+**Status:** Accepted (extended by ADR-0026) · **Date:** 2026-10-19 · **RFC:** §4.2
 
 ### Context
 
@@ -900,7 +902,7 @@ None anticipated for this record specifically. If DR-010's broader per-service-t
 
 ## ADR-0023 — Split cmd/api into identity-api, course-api, and analytics-api
 
-**Status:** Accepted · **Date:** 2026-10-26 · **RFC:** §4.2
+**Status:** Accepted (extended by ADR-0026) · **Date:** 2026-10-26 · **RFC:** §4.2
 
 ### Context
 
@@ -940,7 +942,7 @@ If `identity-api`, `course-api`, or `analytics-api` ever need to call each other
 
 ## ADR-0024 — Schema-per-service within one shared database
 
-**Status:** Accepted · **Date:** 2026-11-03 · **RFC:** §5.3
+**Status:** Accepted (deferred `go.mod`/`libs/common` item resolved by ADR-0026) · **Date:** 2026-11-03 · **RFC:** §5.3
 
 ### Context
 
@@ -1049,6 +1051,72 @@ All four were caught by actually running the stack (`make dev-workflow`, a real 
 ### Reversal trigger
 
 If `internal/search` lands as its own module in M3 with its own schema and ranking logic (per ADR-0024's template for `internal/analytics`), `IndexSearch`'s write path here is superseded by that module's own relay-driven handler, the same way analytics itself was rebuilt rather than merely relocated. If a broader caching strategy (CDN, HTTP cache headers, a dedicated cache-invalidation service) lands later, `WarmCache`'s simple version-keyed Redis entry is superseded by whatever that strategy specifies.
+
+---
+
+## ADR-0026 — One Go module per service and per shared library
+
+**Status:** Accepted · **Date:** 2026-11-17 · **RFC:** §4.1, §4.2, §4.4 · **Supersedes in part:** ADR-0001 (single `go.mod`; boundaries enforced by `depguard`) · **Extends:** ADR-0022, ADR-0023 · **Resolves:** the `go.mod`/`libs/common` item ADR-0024 deferred
+
+### Context
+
+The Week 2 review of PR #11 marked Week 1 complete and Week 2 "fine with minor fixes", and raised one structural point: "the deployment is independent now, but the code isn't — every binary imports bootstrap, which pulls in all modules, so each image builds everyone's code." The requested changes were: move each service's handlers, services and repositories into its own folder with its own `go.mod`; keep shared code in `libs/common`; wire each service in its own `main.go` instead of the shared bootstrap. The review's examples: `identity-api` carried course, enrollment and analytics code; a break in `internal/course` broke `identity-api`'s compile; the Temporal SDK and every other library came along.
+
+The claim was checked rather than assumed. Before any change, `go list -deps` showed all four binaries linking the same six domain packages and 589 packages in total, 61 of them `go.temporal.io`. ADR-0022 and ADR-0023 had made the services independently *deployable* (four binaries, four images) and ADR-0024 had made their *data* independent (schema per service), but the *build graph* was still one: `internal/platform/bootstrap` imported every domain module, and every `cmd/*` imported it. ADR-0024 recorded the `go.mod`/`libs/common` half as "deferred to a later record, per 'we do the schema split first'". This is that record.
+
+**Like ADR-0024, this is adopted because it was given as a direct requirement after review, not because it reverses the engineering case for a single module (ADR-0001).** That case is not retracted: for a system this size and a team this small, one `go.mod` is simpler to run. What this record does is deliver the review's stated direction while keeping the properties the earlier records depend on, and say plainly what it costs.
+
+A second, separate input shaped one choice: the project owner expects that on a real project each module will be controlled by a different person or team, so each needs to be independent. That is why shared code was split into one module per package rather than the single `libs/common` module the review named (see Option D).
+
+### Options
+
+**A. Leave it — one `go.mod`, `bootstrap` as the composition root.** Contradicts the review. Not viable.
+
+**B. Per-service `main.go` wiring only, still one `go.mod`.** Delete `bootstrap`; each binary imports only the modules it runs. Measured result: `identity-api` drops from 589 to 388 packages and from 61 Temporal packages to none; `analytics-api` to 386 and none. This fixes what each binary *links* and costs about a day. It does not give separate `go.mod` files or compiler-enforced boundaries between services. Done first, as a step toward C or D, and it stands alone if the rest is ever reversed.
+
+**C. Per-service modules plus the single `libs/common` module the review named.** Literal match to the request. One shared module means one thing to version and one `replace` per service. The cost is that every service depends on all of the kernel, so `go.mod` files list `gin`, `redis`, `gorm`, `jwt` and the rest whether or not that service uses them, and one owner changing `errors` is changing the same module as another owner changing `auth`.
+
+**D. Per-service modules plus one module per shared package** (`libs/auth`, `libs/db`, ...). Chosen. Each library declares only the third-party dependencies it uses, and each can have its own owner and release cadence.
+
+**E. Separate repositories per service.** Rejected: it would add cross-repo coordination for every change to shared code with no benefit at this size. The monorepo keeps one place to review and one CI.
+
+### Decision
+
+**Option D, delivered in this layout:**
+
+- `services/identity`, `services/course`, `services/analytics`, `services/worker`, `tools/seed`, and 13 library modules under `libs/` (`auth`, `cache`, `config`, `db`, `errors`, `httpx`, `infra`, `logging`, `outbox`, `ratelimit`, `relay`, `router`, `temporal`) plus `libs/testenv` for the integration-test environment. 19 `go.mod` files in total. The root `go.mod` is gone; `go.work` (committed) lists every module for local development.
+- **`course`, `enrollment` and `progress` stay in one module**, together with `workflows`, because ADR-0012's row lock needs one process and one transaction. This was accepted by the review in ADR-0023 and again in ADR-0024 and is unchanged here.
+- **`internal/platform/bootstrap` is deleted.** Each `cmd/<binary>` has its own `wire.go`. Postgres/Redis setup moved to `libs/infra` and the Temporal client to `libs/temporal`, so `identity-api` and `analytics-api` never link the Temporal SDK.
+- **Domain packages are ordinary exported packages, not under `internal/`.** Go forbids one module importing another's `internal/` packages, and both `services/worker` (relay handlers, publish workflow) and `tools/seed` need to import them. The boundary between services is therefore the module graph — a service's `go.mod` must list a module before it can import it — and `scripts/check-module-graph.sh` fails CI if a service requires another service (only the worker and the seed tool may) or a library requires a service.
+- **`.golangci.yml`'s `depguard` rules shrink** to the boundary *inside* `services/course` (course, enrollment, progress, workflows), the one place Go cannot separate.
+- **`scripts/check-link-graph.sh` is the regression test for the review point:** each binary is built from inside its own module with `GOWORK=off` and fails if it links another service or, for the two APIs that don't use it, the Temporal SDK.
+- **Builds are `GOWORK=off`** in CI and in every Dockerfile, so a missing `replace` fails where it would fail in production, not just on a laptop with `go.work`. Dockerfiles use the repo root as context and copy only the modules each service needs, with BuildKit cache mounts.
+- **Migrations stay in `migrations/<schema>/`** at the repo root (ADR-0024); moving each into its service is a separate, optional step.
+
+**The worker deliberately depends on two services.** `services/worker` imports `services/course` and `services/analytics` for their relay handlers and the publish workflow. The relay claims an outbox row, runs every registered handler, and marks it published only when all succeed (ADR-0021). Separate per-service relays would therefore lose events: whichever claimed a row first would mark it published and the others would never see it. A genuine split needs per-consumer delivery tracking — the Kafka consumer-group model planned for M3 — so per-service event consumption is left to M3. Until then the worker is the one place allowed to couple services, and whoever owns the worker owns that coupling.
+
+**Versioning.** While one team owns every module, modules reference each other through `replace` directives and `go.work`, and no tags are needed. Each module is nonetheless tagged-ready (`libs/<name>/vX.Y.Z`, `services/<name>/vX.Y.Z`), each has a `CHANGELOG.md`, and `CODEOWNERS` maps directories to owners. A module's owner decides when a change is breaking: a removed or changed exported identifier, a changed `replace`-visible dependency, or changed behaviour documented in its README is a major-version change once tags are in use. The switch from `replace` to pinned tags happens when a second owner takes over a module, not before; the procedure and the release script are in `docs/guides/versioning.md`. Tags are created by a human through the release workflow, never automatically.
+
+### Consequences
+
+**Positive.** The review's two concrete complaints are closed and now guarded: `identity-api` links 388 packages and no Temporal code (589 and 61 before); a compile error in `course` cannot break `identity-api`, because `identity` does not depend on it. Boundaries between services are enforced by the compiler and by the module graph rather than by lint rules and review. Each library declares only what it uses. Each module can be owned, built and tested on its own.
+
+**Negative.** Real costs, none hidden:
+- **Nineteen `go.mod` files for roughly 1,800 lines of shared code.** Libraries are tens to a few hundred lines each. The overhead is justified only by the ownership model above; with one team it is mostly cost.
+- **`replace` directives are not inherited by Go.** Every module repeats the `replace` for every sibling it depends on, including indirect ones; forgetting one passes locally under `go.work` and fails under `GOWORK=off`. CI and the Dockerfiles use `GOWORK=off` for exactly this reason, and `libs/README.md` and `services/README.md` document the rule.
+- **Changes cascade.** A change to `libs/errors` touches `httpx`, `auth` and `ratelimit` and every service. With `replace` this is invisible; once tagged it is real release work.
+- **`go test ./...` no longer crosses modules.** Everything runs through `scripts/for-each-module.sh` (`make test`, `make lint`). A contributor who runs plain `go test ./...` at the root tests nothing.
+- **Dockerfile COPY lists must stay in step with each module's `replace` closure.** A mismatch breaks the image build (caught in CI).
+- **Go's `internal/` encapsulation is given up** for domain packages, in exchange for module-level control.
+- **A change to a library still affects every consumer.** The split fixes "someone breaks `course` and `identity` won't compile"; it does not fix a broken `libs/auth`.
+- **The worker couples two services** until M3 (above).
+- **`tools/seed` couples identity and course** by design; it is a development tool.
+
+### Reversal trigger
+
+If, six months in, every module still has the same owner and the cascade and `replace` overhead is being paid with no ownership benefit, collapse the 13 libraries into three grouped modules by dependency footprint — `core` (config, errors, logging), `web` (httpx, router, auth, ratelimit) and `data` (db, cache, outbox, relay) — which keeps most of the dependency hygiene with a fraction of the modules. If M3's Kafka consumers land, the worker stops needing to import service handler packages, and the worker coupling above should be removed in the record that introduces them. If the review's single `libs/common` is still what the supervisor wants, merge the libraries back into one module; nothing in the layout prevents it.
+
+**Open for confirmation.** Two points were decided on the project's side and should be confirmed with the supervisor: that one module per library package (rather than the single `libs/common` named in the review) is acceptable, and that the worker importing the two services' handler packages is acceptable until M3.
 
 ---
 
