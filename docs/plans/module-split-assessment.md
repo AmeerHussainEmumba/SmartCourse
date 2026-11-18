@@ -62,7 +62,7 @@ Count of the 32 rows above: **19 Met, 7 Partial, 6 Not built.** (Every row count
 | README: overview, architecture diagram, setup, API overview, tech stack | Met | one Mermaid diagram in `README.md`; the module-split layout section was rewritten |
 | Technical documentation: service/module breakdown, data and event flow, design decisions, assumptions and trade-offs | Met | RFC, 26 ADRs, DR log (DR-020 added) |
 | Week 1: service structure, schema, basic APIs, local setup | Met | marked complete by the reviewer |
-| Week 2: enrollment, Temporal publishing, state transitions | Met with caveats | reviewer: "fine with minor fixes on elevate"; those fixes have not been seen. Gap against the brief's wording: `VerifyAssets` (A, 2.2). The concurrent-withdraw defect that dented "enrollment flow working reliably" (F-01) is fixed |
+| Week 2: enrollment, Temporal publishing, state transitions | Met with caveats | reviewer: "fine with minor fixes on elevate"; the project owner reports those fixes are already done (2026-11-18). I have not seen the reviewer's list, so this is the owner's statement, not something checked here. Gap against the brief's wording: `VerifyAssets` (A, 2.2). The concurrent-withdraw defect that dented "enrollment flow working reliably" (F-01) is fixed |
 | Week 3: Kafka, background workers (Asynq), analytics, observability | Not started | `feat/m3-events-phase1` holds documentation commits only |
 
 ## C. The Week 2 review comments
@@ -75,7 +75,7 @@ Count of the 32 rows above: **19 Met, 7 Partial, 6 Not built.** (Every row count
 | Wire each service in its own `main.go`, not the shared bootstrap | each `cmd/<binary>` has its own `main.go` and `wire.go` | Done |
 | "A break in `internal/course` breaks `identity-api`'s compile" | `identity` does not depend on `course`; `check-module-graph.sh` fails CI if it ever does | Done |
 | "The Temporal SDK and every other library come along" | `identity-api` and `analytics-api` link no Temporal code. `course-api` and `worker` do, because they use it | Done |
-| Week 2 "minor fixes on elevate" | not seen, so not addressed | **Open** |
+| Week 2 "minor fixes on elevate" | project owner reports these were already fixed (2026-11-18); the list itself was not seen here | **Done per the owner, not independently checked** |
 
 What this work did **not** do, and the supervisor may expect: per-service event consumption (the worker still imports the `course` and `analytics` handler packages; deferred to M3 Kafka, ADR-0026), per-service migrations folders, tagged module versions (mechanics built, nothing tagged).
 
