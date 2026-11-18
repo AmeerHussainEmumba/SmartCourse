@@ -29,7 +29,7 @@ MIGRATION_SERVICES_REVERSED := analytics course identity platform
         migrate-up migrate-down migrate-down-all migrate-create \
         run-identity-api run-course-api run-analytics-api run-worker \
         build build-identity-api build-course-api build-analytics-api build-worker \
-        lint check-link-graph check-module-graph test test-race test-integration seed fmt
+        lint check-link-graph check-module-graph check-dockerfile-modules check-module-hygiene test-guards test test-race test-integration seed fmt
 
 ## --- Local environment (ADR-0018) ---------------------------------------
 
@@ -135,6 +135,21 @@ check-link-graph:
 # another service, a library importing a service) — scripts/check-module-graph.sh.
 check-module-graph:
 	scripts/check-module-graph.sh
+
+# Each Dockerfile's COPY list must equal its module's replace and require
+# closure; a mismatch breaks the image build or couples it to extra modules.
+check-dockerfile-modules:
+	scripts/check-dockerfile-modules.sh
+
+# go.work vs go.mod files, replace targets exist, go mod tidy is a no-op, and
+# no third-party version skew across modules.
+check-module-hygiene:
+	scripts/check-module-hygiene.sh
+
+# Mutation test of the guards themselves: injects violations into a copy of
+# the tree and checks the right guard fails (slow; copies the repo).
+test-guards:
+	scripts/test-guards.sh
 
 test:
 	scripts/for-each-module.sh go test ./...

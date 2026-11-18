@@ -41,6 +41,7 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-016](#dr-016--syncrwmutex-required-by-the-tech-stack-not-used-not-previously-logged) | sync.RWMutex: required by the tech stack, not used, not previously logged | Interpretation | Accepted |
 | [DR-017](#dr-017--course_stats-and-daily_enrollments-were-computed-but-unreadable) | course_stats and daily_enrollments were computed but unreadable | Correction | Accepted |
 | [DR-020](#dr-020--one-go-module-per-service-and-per-shared-library-beyond-the-baselines-clear-moduleservice-separation) | One Go module per service and per shared library, beyond the baseline's "clear module/service separation" | Interpretation | Accepted |
+| [DR-021](#dr-021--the-analytics-metric-count-is-nine-not-ten) | The analytics metric count is nine, not ten | Correction | Accepted |
 
 ---
 
@@ -386,6 +387,24 @@ Like DR-013, this is adopted because it was given as a direct requirement after 
 ### If this turns out to be wrong
 
 If the per-package library split proves to be overhead without a second owner, collapse to three grouped modules (`core`, `web`, `data`) or one `libs/common` — the layout allows it and ADR-0026's reversal trigger says when. If the module split as a whole is rejected, ADR-0026 is superseded by a new record; the per-service wiring change that came first (no shared `bootstrap`) stands on its own.
+
+---
+
+## DR-021 — The analytics metric count is nine, not ten
+
+**Category:** Correction · **Date:** 2026-11-17 · **Related:** DR-017, `docs/baseline/SmartCourse.md` FR-5
+
+### What was wrongly asserted
+
+The PRD (FR-5 and its traceability row), RFC §21.0 and §A, `services/analytics/analytics/README.md` and `services/README.md` all described SmartCourse.md FR-5 as "ten metrics" and reported progress as "7 of 10". The baseline names **nine** metrics (total students, total instructors, total courses published, new enrollments over time, course completion rate, average time to complete, most popular courses, average courses per student, failed events / workflow issues) followed by an empty tenth bullet. The PRD's own enumeration and RFC §9.1's table both list nine; only the prose count said ten. DR-017's earlier "5 of 10" carried the same miscount and is left as written, since entries are never edited.
+
+### Why this is logged, and what changed
+
+Same category as DR-007, DR-015 and DR-017: a correction to our own status claims, not a baseline deviation. The count is now "nine" in the documents above, and progress is **7 of 9**. Verified against the code on 2026-11-17: total students, total instructors, total courses published and average courses per student are in `platform_snapshot`; completion rate and average completion time are in `course_stats`; new enrollments over time are in `daily_enrollments`. **Most popular courses** and **failed events / workflow issues** are not implemented.
+
+### If this turns out to be wrong
+
+If the brief's empty tenth bullet was meant to carry a metric, the right fix is to ask the reviewer what it was and log the answer here as a new entry.
 
 ---
 

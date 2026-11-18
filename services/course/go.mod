@@ -133,6 +133,7 @@ require (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/temporal v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/testenv v0.0.0
 	github.com/stretchr/testify v1.11.1
+	go.uber.org/goleak v1.3.0
 )
 
 replace (
