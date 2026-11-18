@@ -26,12 +26,12 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/course"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/enrollment"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/identity"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/bootstrap"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/cache"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/db"
 	apperrors "github.com/AmeerHussainEmumba/SmartCourse/internal/platform/errors"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/logging"
+	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/temporal"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/progress"
 )
 
@@ -63,7 +63,7 @@ func main() {
 	// of M2 starts a real Temporal workflow — `make seed` now requires
 	// `make dev-workflow` (not just dev-core) to be running, same as any
 	// other instructor publishing a course. See cmd/seed/README.md.
-	temporalClient, err := bootstrap.ConnectTemporal(cfg)
+	temporalClient, err := temporal.Connect(cfg)
 	if err != nil {
 		logger.Error("failed to build temporal client", slog.Any("error", err))
 		os.Exit(1)
@@ -335,8 +335,8 @@ func (s *seeder) draftCourse(instructorID uuid.UUID, title, slug string, cat, lv
 // publishWithRetry retries Service.Publish itself, not just the status
 // poll below, on apperrors.ErrUnavailable's code ("temporarily_unavailable")
 // — a real, observed race specific to cold-starting the whole stack at
-// once: the Temporal client this script holds is lazy (bootstrap.
-// ConnectTemporal) and its very first real RPC can take longer to
+// once: the Temporal client this script holds is lazy (temporal.
+// Connect) and its very first real RPC can take longer to
 // establish than the Temporal SDK's own default call timeout if Temporal's
 // server is itself still finishing startup (auto-setup, the worker's own
 // first connection) at that exact moment. In a real deployment Temporal is

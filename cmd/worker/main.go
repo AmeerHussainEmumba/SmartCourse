@@ -19,9 +19,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/bootstrap"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/logging"
+	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/temporal"
 )
 
 func main() {
@@ -34,7 +35,7 @@ func main() {
 	logger := logging.New(cfg.Env, logging.LevelFromEnv())
 	logger.Info("starting", slog.String("service", "worker"), slog.String("env", cfg.Env))
 
-	deps, err := bootstrap.Connect(cfg)
+	deps, err := infra.Connect(cfg)
 	if err != nil {
 		logger.Error("failed to connect to dependencies", slog.Any("error", err))
 		os.Exit(1)
@@ -43,7 +44,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	rl := bootstrap.BuildRelay(deps)
+	rl := buildRelay(deps)
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -81,16 +82,16 @@ func main() {
 // decoupled from this loop's; a fresh client each attempt means every
 // retry here is a genuine new dial, not a question asked of a connection
 // that's deliberately not trying yet.
-func startPublishWorker(ctx context.Context, logger *slog.Logger, deps *bootstrap.Dependencies, cfg *config.Config) {
+func startPublishWorker(ctx context.Context, logger *slog.Logger, deps *infra.Dependencies, cfg *config.Config) {
 	backoff := time.Second
 	const maxBackoff = 30 * time.Second
 	for {
-		temporalClient, err := bootstrap.ConnectTemporal(cfg)
+		temporalClient, err := temporal.Connect(cfg)
 		if err != nil {
 			logger.Error("failed to build temporal client", slog.Any("error", err))
 			os.Exit(1) // only a local misconfiguration (bad HostPort/Namespace string) fails here, never server unavailability
 		}
-		pw := bootstrap.BuildPublishWorker(deps, cfg, temporalClient)
+		pw := buildPublishWorker(deps, cfg, temporalClient)
 
 		if err := pw.Start(); err != nil {
 			temporalClient.Close()

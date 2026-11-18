@@ -38,7 +38,7 @@ func testJWTCfg() config.JWTConfig {
 }
 
 // newTestEngine boots the real router the same way cmd/course-api does
-// (bootstrap.RegisterCourseRoutes), just scoped to this one module — this
+// (cmd/course-api's registerRoutes), just scoped to this one module — this
 // call succeeding at all is the regression test for the class of bug that
 // bit internal/course live: two routes sharing a path depth with
 // conflicting gin wildcard names panics at exactly this point, not later.

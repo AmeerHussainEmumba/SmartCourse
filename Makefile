@@ -29,7 +29,7 @@ MIGRATION_SERVICES_REVERSED := analytics course identity platform
         migrate-up migrate-down migrate-down-all migrate-create \
         run-identity-api run-course-api run-analytics-api run-worker \
         build build-identity-api build-course-api build-analytics-api build-worker \
-        lint test test-race test-integration seed fmt
+        lint check-link-graph test test-race test-integration seed fmt
 
 ## --- Local environment (ADR-0018) ---------------------------------------
 
@@ -125,6 +125,11 @@ fmt:
 
 lint:
 	golangci-lint run ./...
+
+# Fails if a cmd/* binary links a module or the Temporal SDK it shouldn't
+# (docs/plans/module-split.md).
+check-link-graph:
+	scripts/check-link-graph.sh
 
 test:
 	go test ./...

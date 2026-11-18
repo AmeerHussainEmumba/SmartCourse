@@ -18,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/bootstrap"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/logging"
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/router"
 )
@@ -34,7 +34,7 @@ func main() {
 	logger := logging.New(cfg.Env, logging.LevelFromEnv())
 	logger.Info("starting", slog.String("service", "analytics-api"), slog.String("env", cfg.Env))
 
-	deps, err := bootstrap.Connect(cfg)
+	deps, err := infra.Connect(cfg)
 	if err != nil {
 		logger.Error("failed to connect to dependencies", slog.Any("error", err))
 		os.Exit(1)
@@ -42,7 +42,7 @@ func main() {
 
 	r := router.New(cfg.Env, cfg.CORSAllowedOrigins)
 	router.RegisterHealth(r, deps.HealthCheckers())
-	bootstrap.RegisterAnalyticsRoutes(r, deps, cfg)
+	registerRoutes(r, deps, cfg)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),

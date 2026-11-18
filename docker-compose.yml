@@ -106,7 +106,7 @@ services:
       # identity-api/analytics-api. worker is tagged *profiles-core, same
       # as temporal itself is NOT (it's *profiles-workflow), so under
       # plain `core` this points at a server that isn't running; that's
-      # fine (bootstrap.ConnectTemporal is lazy) — only publishing itself
+      # fine (temporal.Connect is lazy) — only publishing itself
       # would fail until `make dev-workflow` brings temporal up too.
       TEMPORAL_HOST_PORT: temporal:7233
       TEMPORAL_NAMESPACE: default

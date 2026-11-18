@@ -11,7 +11,7 @@ Cross-cutting middleware, in order: `httpx.RequestID()`, a structured per-reques
 `RegisterHealth` (RFC §12.5) wires both, and they check different things on purpose:
 
 - **`/health/live`** never checks a dependency. It answers "is this process still running," full stop.
-- **`/health/ready`** runs every `Checker` it's given (Postgres, Redis — see `internal/platform/bootstrap.Dependencies.HealthCheckers`) and returns `503` if any fails, so a load balancer stops routing to this instance without the process being killed.
+- **`/health/ready`** runs every `Checker` it's given (Postgres, Redis — see `internal/platform/infra.Dependencies.HealthCheckers`) and returns `503` if any fails, so a load balancer stops routing to this instance without the process being killed.
 
 Conflating the two means a brief Redis blip restarts every replica simultaneously — turning a degradation into an outage. This is the specific failure mode the split exists to prevent.
 

@@ -49,8 +49,8 @@ func withRetry(policy *temporal.RetryPolicy) workflow.ActivityOptions {
 // before PromoteAndPublish touched the live version, so there's nothing to
 // undo (RFC §7.4's own stated property of this design, not an oversight).
 //
-// Registered under course.PublishWorkflowName (see bootstrap.
-// BuildPublishWorker), which is also the string course.Service.Publish
+// Registered under course.PublishWorkflowName (see cmd/worker's
+// buildPublishWorker), which is also the string course.Service.Publish
 // passes to client.ExecuteWorkflow — the two packages agree on a shared
 // constant instead of each hardcoding "PublishCourseWorkflow" separately.
 func PublishCourseWorkflow(ctx workflow.Context, in course.PublishWorkflowInput) error {

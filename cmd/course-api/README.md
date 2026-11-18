@@ -9,7 +9,7 @@ docker compose --profile core up -d   # or containerized, alongside identity-api
 
 ## What's here
 
-`main.go` is deliberately thin, same shape as every other `cmd/*-api`: load config, connect to Postgres/Redis (`internal/platform/bootstrap.Connect`), build the Gin engine, register health checks, register `internal/course`, `internal/enrollment`, and `internal/progress`'s routes together (`bootstrap.RegisterCourseRoutes`), serve, handle `SIGTERM` for graceful shutdown.
+`main.go` is deliberately thin, same shape as every other `cmd/*-api`: load config, connect to Postgres/Redis (`internal/platform/infra.Connect`), build the Gin engine, register health checks, register `internal/course`, `internal/enrollment`, and `internal/progress`'s routes together (`registerRoutes` in `wire.go`), serve, handle `SIGTERM` for graceful shutdown.
 
 ## Why these three stay together
 
@@ -19,4 +19,4 @@ This service's database connection is scoped to the `course`, `platform`, and `p
 
 ## Publishing (M2, ADR-0025)
 
-`course.Service.Publish` holds a lazy Temporal client (`bootstrap.ConnectTemporal`, built from `TEMPORAL_HOST_PORT`/`TEMPORAL_NAMESPACE`/`TEMPORAL_TASK_QUEUE`) and starts `internal/workflows.PublishCourseWorkflow` on `POST /courses/{id}/publish`, returning `202` immediately. Building the client is never fatal to this binary's boot, even under the plain `core` Compose profile where Temporal isn't running at all (it only exists from the `workflow` profile tier up) — only an actual publish call fails, cleanly, as a `503` until `make dev-workflow` brings Temporal up. `cmd/worker` is what actually runs the workflow; this service only starts it and reads its result back from `GET /courses/{id}/publish-status`, straight off `course_versions`, never Temporal's own API.
+`course.Service.Publish` holds a lazy Temporal client (`internal/platform/temporal.Connect`, built from `TEMPORAL_HOST_PORT`/`TEMPORAL_NAMESPACE`/`TEMPORAL_TASK_QUEUE`) and starts `internal/workflows.PublishCourseWorkflow` on `POST /courses/{id}/publish`, returning `202` immediately. Building the client is never fatal to this binary's boot, even under the plain `core` Compose profile where Temporal isn't running at all (it only exists from the `workflow` profile tier up) — only an actual publish call fails, cleanly, as a `503` until `make dev-workflow` brings Temporal up. `cmd/worker` is what actually runs the workflow; this service only starts it and reads its result back from `GET /courses/{id}/publish-status`, straight off `course_versions`, never Temporal's own API.
