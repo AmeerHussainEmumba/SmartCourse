@@ -56,6 +56,13 @@ func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig) {
 	modules.PATCH("/:id", h.updateModule)
 	modules.DELETE("/:id", h.deleteModule)
 
+	// Asset upload (RFC §7.4, §11.7): instructors only; ownership of the course
+	// named in the body is checked in service.go. Admins have no instructor
+	// write access, so RequireRole("instructor") excludes them.
+	assets := r.Group("/assets")
+	assets.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"), fresh)
+	assets.POST("/upload-url", h.createUploadURL)
+
 	lessons := r.Group("/lessons")
 	lessons.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"), fresh)
 	lessons.PATCH("/:id", h.updateLesson)
@@ -155,6 +162,20 @@ func (h *Handler) deleteModule(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+func (h *Handler) createUploadURL(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	var req UploadURLRequest
+	if !httpx.BindJSON(c, &req) {
+		return
+	}
+	resp, err := h.svc.CreateUploadURL(c.Request.Context(), id.UserID, req)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *Handler) addLesson(c *gin.Context) {

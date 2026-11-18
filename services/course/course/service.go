@@ -67,6 +67,7 @@ type Service struct {
 	rdb       *redis.Client
 	temporal  temporalclient.Client
 	taskQueue string
+	assets    AssetStore // nil until WithAssetStore; see assets.go
 }
 
 // temporal and taskQueue are nil/empty-safe for callers that never publish
@@ -317,6 +318,11 @@ func (s *Service) AddLesson(ctx context.Context, courseID, instructorID, moduleI
 	}
 	if c.DraftVersionID == nil {
 		return nil, errNoDraft
+	}
+	if req.AssetKey != nil && *req.AssetKey != "" {
+		if err := validateAssetKeyForCourse(*req.AssetKey, courseID); err != nil {
+			return nil, err
+		}
 	}
 	mod, err := s.repo.GetModuleByID(ctx, moduleID)
 	if errors.Is(err, ErrNotFound) {
@@ -594,20 +600,29 @@ func (s *Service) ValidateMetadata(ctx context.Context, versionID uuid.UUID) err
 	return nil
 }
 
-// VerifyAssets stands in for the RFC §7.4 activity of the same name: no
-// asset-upload endpoint exists yet (RFC §21.0), so there's nothing to
-// HeadObject against. What runs instead is a genuine, independent scan of
-// every lesson's actual content in the draft — not a placeholder, just a
-// narrower real check in the same graph position, concurrent with
-// ComputeMetadata. Defense in depth beyond the DB's own CHECK constraint on
-// content size: this fails as a clean 400-equivalent before publish,
-// rather than a raw constraint violation if the application-level check at
-// write time is ever bypassed.
+// VerifyAssets is the RFC §7.4 activity of the same name. Two independent
+// checks run over the draft's lessons, concurrent with ComputeMetadata:
+//
+//  1. Every lesson's actual content is scanned for size. Defense in depth
+//     beyond the DB's own CHECK constraint: this fails as a clean 400-equivalent
+//     before publish, rather than a raw constraint violation if the
+//     application-level check at write time is ever bypassed.
+//  2. Every asset key a lesson references (asset_key) must be a key this service
+//     issued for THIS course, must exist in object storage (StatObject), and
+//     must match the allowed type and size (RFC §7.4 A2: existence, content
+//     type and size, never the content itself). A missing or invalid asset
+//     fails the publish before PromoteAndPublish, so the live version is never
+//     touched. Lessons that reference no asset are not affected.
 func (s *Service) VerifyAssets(ctx context.Context, versionID uuid.UUID) error {
+	v, err := s.repo.GetVersionByID(ctx, versionID)
+	if err != nil {
+		return apperrors.ErrInternal.Wrap(err)
+	}
 	mods, err := s.repo.ListModules(ctx, versionID)
 	if err != nil {
 		return apperrors.ErrInternal.Wrap(err)
 	}
+	refs := map[string]string{} // asset key -> title of a lesson referencing it
 	for _, m := range mods {
 		lessons, err := s.repo.ListLessons(ctx, m.ID)
 		if err != nil {
@@ -617,9 +632,14 @@ func (s *Service) VerifyAssets(ctx context.Context, versionID uuid.UUID) error {
 			if len(l.Content) >= maxLessonContentBytes {
 				return errContentTooLarge
 			}
+			if l.AssetKey != nil && *l.AssetKey != "" {
+				if _, seen := refs[*l.AssetKey]; !seen {
+					refs[*l.AssetKey] = l.Title
+				}
+			}
 		}
 	}
-	return nil
+	return s.verifyLessonAssets(ctx, v.CourseID, refs)
 }
 
 // ComputeMetadata is the ComputeMetadata activity — lesson count and total

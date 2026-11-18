@@ -288,6 +288,39 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses: { '204': { description: No Content } }
 
+  /assets/upload-url:
+    post:
+      summary: >
+        Get a pre-signed URL to upload a learning asset straight to object
+        storage (instructor who owns the course only; RFC §7.4, §11.7,
+        ADR-0019). The API never proxies the bytes. The object key is generated
+        by the server from the course (and optional lesson) and a fresh id; the
+        client cannot choose or influence it. Send the returned headers verbatim
+        and a body of exactly size_bytes bytes with a PUT to upload_url before
+        expires_at (15 minutes): the content type and length are part of the
+        signature, so storage rejects anything else. Then pass asset_key as the
+        lesson's asset_key. The publish workflow's VerifyAssets checks that every
+        referenced key exists in storage with an allowed type and size; a missing
+        or invalid asset fails the publish (publish_failed, with a readable
+        publish_error) without touching the live version. Allowed content types
+        and per-type maximum sizes: video/mp4 and video/webm 2 GiB,
+        application/pdf 100 MiB, image/png and image/jpeg 10 MiB. Admins and
+        students are refused (403); an instructor who does not own the course
+        gets 404.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/UploadURLRequest' } } }
+      responses:
+        '200': { description: Pre-signed upload, content: { application/json: { schema: { $ref: '#/components/schemas/UploadURL' } } } }
+        '400': { description: "validation_failed (bad ids, non-positive size) | unsupported_content_type", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: Missing, invalid or stale token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: Caller is not an instructor (student or admin), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: "Course not found, not owned by the caller, or lesson_id is not a lesson of the course's draft", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: "The course is archived (course_archived) or has no draft (no_draft)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '413': { description: "asset_too_large: size_bytes exceeds the maximum for the content type", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: "assets_unavailable (object storage not configured) or temporarily_unavailable (signing failed)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
   /courses/{id}/publish:
     post:
       summary: >
@@ -368,7 +401,7 @@ paths:
         read it only if they have an active or completed enrollment in it
         (from analytics' own enrollment mirror). Everyone else gets 404, not
         403, so a course's existence is not leaked. (Instructor ownership is
-        not yet enforced: the course_published event carries no instructor id.)
+        not yet enforced: the course_published event now carries instructor_id, but analytics does not read it yet.)
       security: [{ bearerAuth: [] }]
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
@@ -508,6 +541,26 @@ components:
         level: { type: string, enum: [beginner, intermediate, advanced], nullable: true }
         tags: { type: array, items: { type: string } }
 
+    UploadURLRequest:
+      type: object
+      required: [course_id, content_type, size_bytes]
+      description: There is deliberately no filename or key field; unknown fields are ignored.
+      properties:
+        course_id: { type: string, format: uuid }
+        lesson_id: { type: string, format: uuid, nullable: true, description: "Scope the key to a lesson of the course's draft" }
+        content_type: { type: string, enum: [video/mp4, video/webm, application/pdf, image/png, image/jpeg] }
+        size_bytes: { type: integer, format: int64, minimum: 1, description: "Exact size of the file that will be uploaded; capped per content type" }
+
+    UploadURL:
+      type: object
+      properties:
+        upload_url: { type: string, description: Pre-signed PUT URL }
+        method: { type: string, enum: [PUT] }
+        headers: { type: object, additionalProperties: { type: string }, description: Headers to send verbatim (they are signed) }
+        asset_key: { type: string, description: "Server-generated key: courses/{course_id}/assets/{id}.{ext} or courses/{course_id}/lessons/{lesson_id}/{id}.{ext}" }
+        expires_at: { type: string, format: date-time }
+        max_size_bytes: { type: integer, format: int64, description: Maximum size for this content type }
+
     CreateLessonRequest:
       type: object
       required: [title, position, content_type]
@@ -516,7 +569,7 @@ components:
         position: { type: integer, minimum: 1 }
         content_type: { type: string, enum: [video, text, pdf, link] }
         content: { type: object }
-        asset_key: { type: string, nullable: true }
+        asset_key: { type: string, nullable: true, description: "A key issued by POST /assets/upload-url for this course; anything else is 400 invalid_asset_key. Existence, type and size are verified at publish." }
         duration_s: { type: integer, minimum: 0 }
 
     UpdateModuleRequest:

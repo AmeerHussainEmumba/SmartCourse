@@ -1,6 +1,8 @@
 // Explicit DTOs (RFC §11.5) — ORM models never bound or returned directly.
 package course
 
+import "time"
+
 type CreateCourseRequest struct {
 	Title           string  `json:"title" binding:"required,min=1,max=200"`
 	Slug            string  `json:"slug" binding:"required,min=1,max=200"` // format (lowercase, digits, hyphens) validated in service.go — see slugPattern
@@ -187,4 +189,25 @@ func toVersionResponse(v *CourseVersion) VersionResponse {
 
 func toModuleResponse(m *Module) ModuleResponse {
 	return ModuleResponse{ID: m.ID.String(), Position: m.Position, Title: m.Title}
+}
+
+// UploadURLRequest is POST /assets/upload-url's body. There is deliberately no
+// filename or path field: the object key is generated server-side.
+type UploadURLRequest struct {
+	CourseID    string  `json:"course_id" binding:"required"`
+	LessonID    *string `json:"lesson_id"`
+	ContentType string  `json:"content_type" binding:"required,max=100"`
+	SizeBytes   int64   `json:"size_bytes" binding:"required"`
+}
+
+// UploadURLResponse carries a pre-signed PUT. The client sends Headers
+// verbatim with a body of exactly SizeBytes bytes before ExpiresAt, then
+// references AssetKey as a lesson's asset_key.
+type UploadURLResponse struct {
+	UploadURL    string            `json:"upload_url"`
+	Method       string            `json:"method"`
+	Headers      map[string]string `json:"headers"`
+	AssetKey     string            `json:"asset_key"`
+	ExpiresAt    time.Time         `json:"expires_at"`
+	MaxSizeBytes int64             `json:"max_size_bytes"`
 }
