@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- identity-api now runs `Service.RunTokenVersionReseeder` (every 15s): when Redis has lost the `user:tv:<id>` keys, it re-writes every `token_version` above 1 with `SET NX`, detected via a 10-minute sentinel key. Shrinks the post-flush `token_stale` window on `course-api` from "until the next login/refresh" to about 15 seconds, with no cross-service call and no change to `course-api` (F-38 residue). New: `Service.ReseedTokenVersions`, `Repository.ListTokenVersionsAbove1`. `registerRoutes` in `cmd/identity-api` now takes a context.
+
 - Register, login (including the unknown-email dummy comparison) and password-reset confirm now hash through `auth.ArgonGate`, so at most `ARGON2_MAX_CONCURRENT` argon2 computations run at once. A request that cannot get a slot within `ARGON2_QUEUE_TIMEOUT` (or whose client goes away) is answered 503 `temporarily_unavailable`, never counted as a failed login (F-26 residue).
 
 - Login and refresh now seed the user's current `token_version` in Redis when it is missing (`SET NX`, never overwriting a newer value). Fixes instructors whose version is above 1 being rejected by `course-api` with `token_stale`, even on a freshly issued token, after a Redis restart (F-38).

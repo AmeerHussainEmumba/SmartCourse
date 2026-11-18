@@ -56,6 +56,8 @@ type Service struct {
 	email     EmailSender
 	dummyHash string // built from the configured Argon2 parameters (F-30)
 	gate      *auth.ArgonGate
+
+	reseedBatch int // 0 = default; set by tests
 }
 
 func NewService(repo *Repository, rdb *redis.Client, jwtCfg config.JWTConfig, argon config.Argon2Config, email EmailSender) *Service {
