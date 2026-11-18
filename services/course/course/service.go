@@ -746,7 +746,11 @@ func (s *Service) PromoteAndPublish(ctx context.Context, courseID, versionID uui
 			AggregateID:   courseID,
 			EventType:     "course.course_published",
 			SchemaVersion: 1,
-			Payload:       map[string]any{"course_id": courseID, "version_id": versionID, "title": title},
+			// instructor_id is additive: consumers decode only the fields
+			// they need (analytics ignores it today). It lets a consumer
+			// attribute the course to its owner without reading course's
+			// schema (ADR-0024).
+			Payload: map[string]any{"course_id": courseID, "version_id": versionID, "title": title, "instructor_id": c.InstructorID},
 		})
 	})
 	if err != nil {

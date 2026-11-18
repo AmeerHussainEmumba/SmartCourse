@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- The `course.course_published` outbox payload gains `instructor_id` (additive; schema_version unchanged). Existing consumers decode only the fields they use, so analytics is unaffected (checked against its handler).
+
 - Added `Service.ReconcileStalePublishes(ctx)`: releases a version stuck `publishing` (claim older than one minute) whose Temporal workflow is not running, to `publish_failed` with an explanatory `publish_error`, so a crash between claim and workflow start no longer blocks republishing for the 15-minute lease. Guarded on the same claim, so a concurrent legitimate completion is never overwritten; idempotent. Not scheduled yet: the worker or an Asynq job must call it. Adds `go.temporal.io/api` as a direct dependency.
 
 - `POST /courses/{id}/publish` claims the draft (state `publishing`) before starting the workflow. A duplicate while a publish is running now returns **409 `publish_in_progress`** (was 202 attaching to the running workflow); a failed workflow start releases the claim; a claim older than 15 minutes may be reclaimed. Fixes a race where a fast-failing workflow's `publish_failed` could be overwritten with `publishing` (F-37, ADR-0028). Needs migration `migrations/course/000006_publish_started_at`.
