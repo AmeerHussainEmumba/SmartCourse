@@ -130,8 +130,8 @@ These are one engineer's judgment from the evidence above, not measurements. The
 
 ## G. What to do next (suggested order)
 
-1. **Confirm the judgment calls** the fixers made (listed in the findings register): integer bounds, rate-limit numbers, 404 for a withdrawn student on analytics, self-demotion allowed when another admin exists.
+1. **Judgment calls: confirmed by the project owner on 2026-11-18** and recorded as DR-022. The supervisor can review them on the module-split PRs.
 2. **Decide whether instructors should see only their own courses' analytics.** It needs `instructor_id` added to the `course_published` event, a mirror column and a backfill; until then instructors can read any course.
-3. **Decide whether Most Popular Courses and Failed Events are Week 3 scope** (the "ten metrics" miscount itself is corrected, DR-021), and whether to add a dead-letter store before M3.
-4. **Ask the supervisor** the two open questions in DR-020, and whether the unseen Week 2 "minor fixes" overlap with the defects found here.
+3. **Most Popular Courses and Failed Events stay in scope.** Both are named in the baseline (`docs/baseline/SmartCourse.md`, section 5), the PRD (FR-5) and RFC §9.1, and the RFC schedules analytics and dead-letter handling for Week 3 (M3 + M4). They are not built yet (7 of 9). Failed Events needs the dead-letter store, so the two should be planned together.
+4. **Ask the supervisor** the two open questions in DR-020 by way of the module-split PRs. The Week 2 "minor fixes" the supervisor raised have been addressed (confirmed by the project owner on 2026-11-18).
 5. **Run a second adversarial pass after the next feature** (republish and Kafka are the likely sources of new defects), and set `APP_ENV` and `TRUSTED_PROXIES` explicitly in any real deployment.

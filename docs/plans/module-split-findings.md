@@ -143,6 +143,10 @@ All reproducers lost their `bugrepro` build tag and run in the default suite. No
 | F-35 | All 18 published compose ports bind to `127.0.0.1` | developer stack only |
 | F-36 | A non-owner of an existing course gets 404 `not_found`, identical to an unknown id | **API contract change** (was 403 `not_owner`); admins have no instructor write access, as before |
 
+### Judgment calls: confirmed
+
+The project owner reviewed the caveats above on 2026-11-18 and accepted them (integer bounds, rate-limit numbers, 404 for a withdrawn student on analytics, self-demotion when another admin exists, body and timeout defaults). They are recorded as DR-022 in `docs/rfc/differences-from-requirements.md`. The supervisor has not yet reviewed them; the module-split PRs are where she can.
+
 ### Tests changed to fit the fixes
 
 Tests that pinned the old behaviour were updated, with the reason recorded in the commit: the three 403 `not_owner` tests became 404; analytics HTTP tests that used student tokens against any course now use instructor tokens; the register tests now expect 202 and then log in; `TestSecurity_RateLimit_AccountLimit_StopsDistributedStuffing` uses 20 failures across 20 IPs; `TestSecurity_RefreshForSuspendedUser_IsDenied_AndLoginToo` expects 401 on login. The identity security harness now serves on the real `libs/router` stack so the router-level fixes (F-02, F-16) are tested end to end.
