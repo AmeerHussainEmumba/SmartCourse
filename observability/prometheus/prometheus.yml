@@ -1,0 +1,46 @@
+# Prometheus config for the `observability` compose profile (RFC §12.3).
+# Mounted at /etc/prometheus (docker-compose.yml). Reload after editing:
+#   docker compose restart prometheus
+#
+# Targets are compose service names on the compose network, so the app
+# containers must be running (`core` profile) for the jobs to be UP.
+# Container-internal HTTP port is 8080 for the three APIs (HTTP_PORT in
+# docker-compose.yml). The worker's metrics listener port is NOT fixed yet:
+# 9100 below is an assumption until libs/telemetry / cmd/worker land;
+# change the one line marked WORKER-PORT to whatever the worker exposes.
+#
+# Running the Go binaries on the host (`make run-*`) instead? Swap each
+# target for host.docker.internal:<port> (compose-published host ports are
+# identity 8090, course 8091, analytics 8092; otherwise your own HTTP_PORT).
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: identity-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["identity-api:8080"]
+
+  - job_name: course-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["course-api:8080"]
+
+  - job_name: analytics-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["analytics-api:8080"]
+
+  - job_name: worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["worker:9100"] # WORKER-PORT

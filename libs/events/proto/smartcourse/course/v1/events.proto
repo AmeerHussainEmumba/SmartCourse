@@ -1,0 +1,21 @@
+// Payloads of course.events (RFC §6.5), keyed by course_id. Fields mirror
+// what services/course writes to the outbox.
+syntax = "proto3";
+
+package smartcourse.course.v1;
+
+option go_package = "github.com/AmeerHussainEmumba/SmartCourse/libs/events/gen/smartcourse/course/v1;coursev1";
+
+// course.course_published
+message CoursePublished {
+  string course_id = 1;
+  string version_id = 2;
+  string title = 3;
+  // Added in Week 3 (ADR-0030) so analytics can enforce instructor ownership.
+  string instructor_id = 4;
+}
+
+// course.course_archived
+message CourseArchived {
+  string course_id = 1;
+}

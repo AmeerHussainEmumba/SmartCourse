@@ -213,6 +213,73 @@ func (r *Repository) ReleasePublish(ctx context.Context, id uuid.UUID, workflowI
 		string(c.PrevState), c.PrevWorkflowID, c.PrevError, id, workflowID).Error
 }
 
+// StalePublish is a `publishing` version whose claim is old enough that the
+// workflow it names should already be running (or finished).
+type StalePublish struct {
+	VersionID  uuid.UUID
+	WorkflowID string
+	// StartedAt is the claim time as stored, kept so ReleaseStalePublish can
+	// guard on exactly this claim. Zero when the row has no timestamp.
+	StartedAt *time.Time
+}
+
+// ListStalePublishes returns versions still `publishing` whose claim is older
+// than grace (or has no timestamp, as rows from before migration 000006 do).
+// The grace period must comfortably exceed the gap between ClaimPublish and
+// ExecuteWorkflow in Service.Publish, or a publish that is merely about to
+// start would be reported as dead.
+func (r *Repository) ListStalePublishes(ctx context.Context, grace time.Duration, limit int) ([]StalePublish, error) {
+	var rows []struct {
+		ID               uuid.UUID
+		WorkflowID       *string
+		PublishStartedAt *time.Time
+	}
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT id, workflow_id, publish_started_at
+		FROM course_versions
+		WHERE state = 'publishing'
+		  AND (publish_started_at IS NULL OR publish_started_at < now() - make_interval(secs => ?))
+		ORDER BY publish_started_at NULLS FIRST
+		LIMIT ?`, grace.Seconds(), limit).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]StalePublish, 0, len(rows))
+	for _, row := range rows {
+		sp := StalePublish{VersionID: row.ID, StartedAt: row.PublishStartedAt}
+		if row.WorkflowID != nil {
+			sp.WorkflowID = *row.WorkflowID
+		}
+		out = append(out, sp)
+	}
+	return out, nil
+}
+
+// ReleaseStalePublish moves a `publishing` version to `publish_failed` with
+// reason, but only if it is still `publishing` under the SAME claim (workflow
+// ID and claim timestamp) that ListStalePublishes saw. A workflow that
+// completed in between (state `ready`), a failure the workflow recorded itself,
+// or a fresh claim by a retry all make the guard fail, so reconciliation can
+// never overwrite a legitimate result. Returns whether a row changed; running
+// it twice is harmless.
+func (r *Repository) ReleaseStalePublish(ctx context.Context, sp StalePublish, reason string) (bool, error) {
+	res := r.db.WithContext(ctx).Exec(`
+		UPDATE course_versions
+		SET state = 'publish_failed', publish_error = ?, publish_started_at = NULL
+		WHERE id = ? AND state = 'publishing'
+		  AND workflow_id IS NOT DISTINCT FROM ?
+		  AND publish_started_at IS NOT DISTINCT FROM ?`,
+		reason, sp.VersionID, nullableString(sp.WorkflowID), sp.StartedAt)
+	return res.RowsAffected > 0, res.Error
+}
+
+func nullableString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
 // GetInstructorName reads instructor_mirror the same way ListCatalogue's
 // LEFT JOIN does — a miss (mirror not caught up yet, ADR-0024) returns ""
 // rather than an error, same tradeoff ListCatalogue makes and for the same

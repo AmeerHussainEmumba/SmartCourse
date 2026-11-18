@@ -43,6 +43,12 @@ type DecodedEvent struct {
 	Payload       json.RawMessage
 	OccurredAt    time.Time
 	Attempts      int
+	// TraceID/SpanID are the W3C trace context the writer recorded (RFC
+	// §6.4); empty when the row had none. ActorID is nil for
+	// system-originated events or rows written before migration 000003.
+	TraceID string
+	SpanID  string
+	ActorID *uuid.UUID
 }
 
 // HandlerFunc processes one event for one named consumer. It receives tx
@@ -194,6 +200,9 @@ type outboxRow struct {
 	Payload       []byte
 	OccurredAt    time.Time
 	Attempts      int
+	TraceID       *string
+	SpanID        *string
+	ActorID       *uuid.UUID
 }
 
 // claimAndProcess returns claimed=true when a row was found and delivered
@@ -217,7 +226,8 @@ func (r *Relay) claimAndProcess(ctx context.Context) (claimed bool, err error) {
 	}()
 
 	skip := r.activeCooldowns()
-	q := `SELECT id, event_id, aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at, attempts
+	q := `SELECT id, event_id, aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at, attempts,
+		trace_id, span_id, actor_id
 		FROM outbox WHERE published_at IS NULL`
 	args := []any{}
 	if len(skip) > 0 {
@@ -237,6 +247,7 @@ func (r *Relay) claimAndProcess(ctx context.Context) (claimed bool, err error) {
 		OutboxID: row.ID, EventID: row.EventID, AggregateType: row.AggregateType,
 		AggregateID: row.AggregateID, EventType: row.EventType, SchemaVersion: row.SchemaVersion,
 		Payload: row.Payload, OccurredAt: row.OccurredAt, Attempts: row.Attempts,
+		TraceID: deref(row.TraceID), SpanID: deref(row.SpanID), ActorID: row.ActorID,
 	}
 
 	if lastErr := r.process(workCtx, evt); lastErr != nil {
@@ -349,4 +360,11 @@ func (r *Relay) recordFailure(tx *gorm.DB, evt DecodedEvent, cause error) error 
 	r.cooldown[evt.OutboxID] = time.Now().Add(r.pollInterval)
 	r.cooldownMu.Unlock()
 	return tx.Exec(`UPDATE outbox SET attempts = ?, last_error = ? WHERE id = ?`, attempts, msg, evt.OutboxID).Error
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

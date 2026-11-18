@@ -1267,6 +1267,19 @@ ADR-0008 chose Protobuf with Schema Registry at BACKWARD compatibility but named
 
 If registry compatibility checks block legitimate evolution more than they prevent breakage, or if generated-code churn dominates review, revisit the encoding (the RFC's Avro alternative was rejected for Go ergonomics, ADR-0008).
 
+### Implementation notes (2026-11-18, `libs/events`, `libs/asynqx`, `libs/mongostore`, `libs/telemetry`)
+
+These record what was built and chosen. The ADR stays `Proposed` until the Kafka client library is chosen in Phase 3.
+
+- **Protobuf toolchain:** buf v1.75.0 (Apache-2.0) and protoc-gen-go v1.36.11 (BSD-3-Clause), matching the `google.golang.org/protobuf` v1.36.11 runtime; generated code is committed and `generate.sh` reproduces it byte for byte. Confluent's wire format (magic byte, 4-byte schema id, message-index list) was checked against Confluent's documentation; a real Confluent client has **not** yet read these bytes (Phase 3).
+- **Registry client:** standard-library `net/http`, no third-party dependency. Twelve subjects registered at BACKWARD against a real Schema Registry; an additive change was accepted and a field-type change rejected (409).
+- **Compatibility guard:** wire bytes carry only field numbers, so a rename is invisible to them. The golden files therefore also store the payload as JSON with field names and a per-field name/number/kind signature.
+- **Kafka value format:** a framed Envelope with the payload as bytes (RFC §6.4), not a framed per-event message with the envelope in headers.
+- **`schema_version`** is defined as the registry version of the payload's subject; a convention the registry does not enforce.
+- **Topic routing:** the outbox `aggregate_type` (`user`, `course`, `enrollment`) does not match the RFC topic names (enrollment events use `course`; `progress.course_completed` uses `enrollment`). The relay routes by `event_type` prefix (`events.Types()` holds the map); emitters are not changed.
+- **Only eight event types are emitted today** (identity 3, course 2, enrollment 2, progress 1). RFC §6.5's other events (`CourseCreated`, `LessonCompleted`, `CertificateIssued` and so on) have no producer and no message yet.
+- **Other libraries, verified against the module proxy and source:** Asynq v0.26.0 (MIT) with robfig/cron/v3 v3.0.1; official MongoDB Go driver v2.10.0 (Apache-2.0); OpenTelemetry v1.44.0 and prometheus/client_golang v1.25.0 (Apache-2.0); AWS SDK for Go v2 S3 v1.115.0 (Apache-2.0) for asset storage. The licences for the telemetry libraries were stated from memory by the agent and should be re-checked against the module sources before the defense. The **Kafka client** is still unchosen (franz-go remains the candidate).
+
 ---
 
 ## ADR-0031 — MongoDB archive, dead-letter parking, and replay
@@ -1293,6 +1306,15 @@ ADR-0021 records that a poison event past max attempts is marked published and l
 ### Reversal trigger
 
 If the archive's only users are replay and the failed-events metric, and operating MongoDB costs more than a PostgreSQL table would, revisit ADR-0004.
+
+### Implementation notes (2026-11-18, `libs/mongostore`)
+
+- Collections `events` (archive; `_id` is the `event_id`, so the built-in id index is the uniqueness guarantee), `audit_log`, `failed_events` (unique `(event_id, consumer)`). No TTL index: the archive is permanent.
+- **Differs from RFC §5.4:** the RFC names `resolved_at` and an index on `{resolved_at, last_failed_at}`; the code uses `status` (`parked` or `replayed`) plus `replayed_at`. The RFC should follow the code, and will be updated in Phase 9.
+- Parking is idempotent per `(event_id, consumer)`: repeats append to the error history (kept to the newest 100 entries; `attempts` keeps the true total). Payloads over 15 MiB are refused (`ErrPayloadTooLarge`). `MarkReplayed` moves `parked` to `replayed` exactly once under concurrency. Re-parking a replayed event returns it to `parked`.
+- `CountFailedSince` counts on `last_failed_at`, optionally by status. This is the working definition of the "Failed Events" metric; confirm it in Phase 6.
+- **Open, for the consumer-runner phase:** what a consumer does when parking itself fails because MongoDB is down (keep the event retryable, or fail loudly), and whether replay marks before publishing or after.
+- Not verified: replica sets, authentication/TLS, performance.
 
 ---
 
@@ -1321,6 +1343,15 @@ DR-019 (2026-11-06) kept observability out of Week 3 on the grounds that the wee
 ### Reversal trigger
 
 If instrumentation overhead shows up in the latency targets (RFC §13.1), lower the sampling rate before removing spans.
+
+### Implementation notes (2026-11-18, `libs/telemetry`)
+
+- OpenTelemetry v1.44.0 exporting OTLP over HTTP; the module is complete and tested but **not wired into any service** yet. Disabled mode is a true no-op.
+- **Errors-always-sampled is only partly achievable.** The SDK cannot decide to keep a trace from a later error. The implementation records every span and exports a span that ends in error even when its trace was not sampled, so an unsampled failing request shows in Jaeger as a **fragment** (the failed span, not its siblings). Whole-trace capture needs tail sampling in a collector, which is not built. Say this plainly in the defense.
+- **Link-graph cost:** any binary that imports the module links gRPC (66 packages) and protobuf through the OTLP exporter. Wiring telemetry into identity-api and analytics-api will change their package counts; the budget in `scripts/check-link-graph.sh` must be extended deliberately when that happens, not silently.
+- **Metric names** are fixed (they are what the Prometheus alert rules and Grafana dashboard query): `http_requests_total{route,method,status}`, `http_request_duration_seconds{route,method}`, `outbox_backlog`, `outbox_oldest_unpublished_seconds`, `kafka_consumer_lag{group,topic}`, `asynq_queue_depth{queue}`, `asynq_retry_count{queue}`, `dead_letter_total{consumer}`, `workflow_started_total`, `workflow_completed_total`, `workflow_failed_total`, `db_connections_in_use`, `db_connections_max`, `event_processed_total{consumer,outcome}`. HTTP metrics label by route template, with a constant for unmatched routes; a test fires 20,000 distinct paths and expects a small constant number of series.
+- **Provisioning (`observability/`):** Prometheus v3.16.0, Grafana 13.3.1, Jaeger all-in-one 1.76.0, Mailpit v1.34.0; eight alert rules and one 12-panel dashboard. The alert thresholds are **development placeholders**, not tuned values. The worker's metrics port (9100 in `prometheus.yml`) is an **assumption** that must match what the worker serves once instrumented. `asynq_retry_count` is treated as a gauge.
+- Not verified: a trace through real Jaeger, the app scrape targets coming up, the dashboard rendering with data.
 
 ---
 

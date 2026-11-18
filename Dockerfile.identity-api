@@ -6,7 +6,7 @@
 # step with the module's go.mod `replace` directives — GOWORK=off below means
 # a missing module fails this build instead of being papered over by go.work.
 # Build context is the repo root: docker build -f Dockerfile.identity-api .
-FROM golang:1.26.5-alpine AS build
+FROM golang:1.26.11-alpine AS build
 ENV GOWORK=off CGO_ENABLED=0
 WORKDIR /src
 COPY libs/auth ./libs/auth

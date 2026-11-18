@@ -1,0 +1,16 @@
+// Payloads of progress.events (RFC §6.5), keyed by enrollment_id. Fields
+// mirror what services/course/progress writes to the outbox.
+syntax = "proto3";
+
+package smartcourse.progress.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/AmeerHussainEmumba/SmartCourse/libs/events/gen/smartcourse/progress/v1;progressv1";
+
+// progress.course_completed
+message CourseCompleted {
+  string enrollment_id = 1;
+  string student_id = 2;
+  google.protobuf.Timestamp completed_at = 3;
+}

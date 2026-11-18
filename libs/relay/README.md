@@ -34,6 +34,10 @@ rl.Register(relay.NewHandler("my-consumer", []string{"course.course_published"},
 
 Multiple handlers can register for the same event type — that's the fan-out RFC §6.5's consumer table describes (one event, several independent readers). One handler's failure never blocks another's; each runs in its own transaction with its own idempotency check.
 
+## Trace and actor on the event
+
+`DecodedEvent` carries `TraceID`, `SpanID` (strings, empty when the writer supplied none) and `ActorID` (`*uuid.UUID`, nil when absent), read from the outbox row (RFC §6.4). Rows written before migration `platform/000003` have all three NULL. The relay only passes them through; propagating them into spans or Kafka headers is the handler's and the producer's job.
+
 ## Migrating to Kafka (M3)
 
 When Kafka lands, this package's poll-and-dispatch loop is replaced by "publish to Kafka" at the point where a row is currently marked published. Today's in-process `HandlerFunc` becomes a Kafka consumer handler with the same signature — the fan-out and idempotency logic (check `processed_events`, act, mark processed, all in one transaction) doesn't change.
@@ -45,4 +49,4 @@ When Kafka lands, this package's poll-and-dispatch loop is replaced by "publish 
 
 ## Testing
 
-`relay_integration_test.go` (build tag `integration`, real Postgres): bounded concurrency is actually enforced (not just configured), idempotency holds across retries, a poison event stops retrying after the configured max, and shutdown genuinely drains in-flight work's database commit. Run: `make test-integration`. Full index: `docs/guides/testing.md`.
+`relay_integration_test.go` (build tag `integration`, real Postgres): bounded concurrency is actually enforced (not just configured), idempotency holds across retries, a poison event stops retrying after the configured max, and shutdown genuinely drains in-flight work's database commit. `relay_trace_actor_integration_test.go` covers the trace/actor fields (persisted, NULL for existing callers, handed to handlers) and the up/down round trip of migration `platform/000003`. Run: `make test-integration`. Full index: `docs/guides/testing.md`.

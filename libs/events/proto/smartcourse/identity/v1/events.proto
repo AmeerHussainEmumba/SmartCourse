@@ -1,0 +1,28 @@
+// Payloads of identity.events (RFC §6.5), keyed by user_id. Fields mirror
+// what services/identity writes to the outbox.
+syntax = "proto3";
+
+package smartcourse.identity.v1;
+
+option go_package = "github.com/AmeerHussainEmumba/SmartCourse/libs/events/gen/smartcourse/identity/v1;identityv1";
+
+// identity.user_registered
+message UserRegistered {
+  string user_id = 1;
+  string email = 2;
+  string role = 3;
+  string full_name = 4;
+}
+
+// identity.user_profile_updated
+message UserProfileUpdated {
+  string user_id = 1;
+  string full_name = 2;
+}
+
+// identity.user_role_changed
+message UserRoleChanged {
+  string user_id = 1;
+  string role = 2;
+  string status = 3;
+}

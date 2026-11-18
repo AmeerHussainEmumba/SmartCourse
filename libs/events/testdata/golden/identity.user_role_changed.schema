@@ -1,0 +1,4 @@
+smartcourse.identity.v1.UserRoleChanged
+role 2 string optional
+status 3 string optional
+user_id 1 string optional

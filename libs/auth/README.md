@@ -20,6 +20,10 @@ RequireFreshPrivilege   → narrow: does this token's claimed privilege still ma
 
 `RequireFreshPrivilege` is applied only to the small set of routes where a stale claim is actually dangerous (admin actions, anything mutating another user's access) — not to every request, because that would mean a Redis round trip on every single call, defeating the reason access tokens are stateless in the first place. A fourth layer — does this user own *this specific resource* — isn't here at all; it lives in each module's `service.go`, because only the service has actually loaded the resource to check against.
 
+## Bounding argon2 concurrency
+
+`ArgonGate` is a semaphore around `HashPassword`/`VerifyPassword`. Each argon2 call allocates `ARGON2_MEMORY_KIB`, so peak memory is about `ARGON2_MAX_CONCURRENT x ARGON2_MEMORY_KIB` however many logins arrive (16 unbounded concurrent logins pinned about 1 GiB). A caller that cannot get a slot within `ARGON2_QUEUE_TIMEOUT`, or whose context ends first, gets `ErrArgonBusy` or the context error and holds nothing; identity maps both to 503 `temporarily_unavailable`.
+
 ## Why each piece exists
 
 - **argon2id, not bcrypt** (`password.go`) — bcrypt silently truncates input past 72 bytes and is no longer OWASP's first recommendation; argon2id resists GPU/ASIC cracking better and its cost parameters are explicitly tunable as hardware gets faster (`config.Argon2Config`). The encoded hash format (`$argon2id$v=...$m=...,t=...,p=...$salt$hash`) is self-describing specifically so old hashes stay verifiable after the parameters change.

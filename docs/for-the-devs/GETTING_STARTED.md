@@ -69,11 +69,16 @@ make migrate-up
 #    service layer (not raw SQL), so it also proves the core modules
 #    (including the publish workflow) work together. Safe to re-run —
 #    it's a no-op the second time. See tools/seed/README.md.
-#    `make seed` runs on your host, not in a container, so it reaches
-#    Temporal through the published port: `.env` needs
-#    TEMPORAL_HOST_PORT=localhost:7233 (the default in env.example). If it
-#    fails at the publish step with `no children to pick from`, that value
-#    is the first thing to check. The seed is a no-op once the admin user
+#    `make seed` runs on your host, not in a container, so it must reach
+#    everything through the ports compose publishes on 127.0.0.1. The
+#    Makefile guarantees that for Temporal: it always runs the seed with
+#    TEMPORAL_HOST_PORT=localhost:7233, whatever .env says (a .env with the
+#    compose-internal `temporal:7233` used to fail at the publish step), and
+#    it rewrites POSTGRES_DSN / REDIS_ADDR / MINIO_ENDPOINT to localhost:5433 /
+#    localhost:6380 / localhost:9002 only if they still name the
+#    compose-internal postgres:5432 / redis:6379 / minio:9000 (it prints a
+#    line when it does). Use `make seed SEED_TEMPORAL_HOST_PORT=host:port` if
+#    your Temporal is elsewhere. The seed is a no-op once the admin user
 #    exists, so a half-finished run needs the data reset before retrying.
 make seed
 
