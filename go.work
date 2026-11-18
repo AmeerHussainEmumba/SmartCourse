@@ -1,18 +1,22 @@
 go 1.26.5
 
 use (
+	./libs/asynqx
 	./libs/auth
 	./libs/cache
 	./libs/config
 	./libs/db
 	./libs/errors
+	./libs/events
 	./libs/httpx
 	./libs/infra
 	./libs/logging
+	./libs/mongostore
 	./libs/outbox
 	./libs/ratelimit
 	./libs/relay
 	./libs/router
+	./libs/telemetry
 	./libs/temporal
 	./libs/testenv
 	./services/analytics
