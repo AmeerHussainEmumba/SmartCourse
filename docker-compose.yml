@@ -119,7 +119,7 @@ services:
       minio:
         condition: service_healthy
 
-  # identity-api (ADR-0023, extending ADR-0022): internal/identity's HTTP
+  # identity-api (ADR-0023, extending ADR-0022): services/identity/identity's HTTP
   # surface split into its own deployable image — the most self-contained
   # module in the codebase (no other module reads its tables directly;
   # everyone else reads the caller's identity off the JWT claims instead).
@@ -152,8 +152,8 @@ services:
       minio:
         condition: service_healthy
 
-  # course-api (ADR-0023, extending ADR-0022): internal/course,
-  # internal/enrollment, and internal/progress's HTTP surface, kept
+  # course-api (ADR-0023, extending ADR-0022): services/course/course,
+  # services/course/enrollment, and services/course/progress's HTTP surface, kept
   # together in one image because enrollment locks the `courses` row in
   # the SAME transaction it writes an enrollment row in (ADR-0012's
   # seat-limit guarantee) — splitting them would force that lock into a
@@ -193,7 +193,7 @@ services:
       minio:
         condition: service_healthy
 
-  # analytics-api (ADR-0023, extending ADR-0022): internal/analytics's HTTP
+  # analytics-api (ADR-0023, extending ADR-0022): services/analytics/analytics's HTTP
   # surface split into its own deployable image — read-only, already
   # decoupled (consumes other modules' state via the relay/outbox, never a
   # direct call into another module), the lowest-risk candidate to split

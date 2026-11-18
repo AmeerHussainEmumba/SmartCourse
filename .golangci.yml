@@ -1,11 +1,19 @@
-# Module-boundary enforcement (RFC §4.4, ADR-0001): no module imports
-# another module's repository, domain, or GORM models. Cross-module reads go
-# through a consumer-declared interface; cross-module writes go through
-# events. A violation here fails the build, not review vigilance.
+# Module-boundary enforcement (RFC §4.4, ADR-0001, ADR-0026).
 #
-# libs/** is the shared kernel and is exempt — every module may
-# import it. Add a new module's rule here when it's created; an unlisted
-# module is NOT protected by this file.
+# Boundaries between SERVICES are enforced by Go modules, not by this file: a
+# service can't import another service's code without adding that module to
+# its go.mod, and scripts/check-module-graph.sh (run by `make
+# check-module-graph` and CI) fails if it does. Libraries (libs/*) likewise
+# can't import any service.
+#
+# What's left for depguard is the boundary INSIDE one module: services/course
+# holds course, enrollment, progress and workflows together (ADR-0012 needs
+# them in one process), so Go can't separate them. No package there imports
+# another's repository, domain, or GORM models. Cross-package reads go through
+# a consumer-declared interface; cross-package writes go through events. A
+# violation here fails the build, not review vigilance.
+#
+# Run per module (scripts/for-each-module.sh golangci-lint run ./...).
 
 version: "2"
 
@@ -19,50 +27,30 @@ linters:
   settings:
     depguard:
       rules:
-        identity:
-          files: ["internal/identity/**"]
-          deny:
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/course
-              desc: "identity must not import course directly (RFC §4.4) — declare a consumer-side interface"
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/enrollment
-              desc: "identity must not import enrollment directly (RFC §4.4) — declare a consumer-side interface"
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/progress
-              desc: "identity must not import progress directly (RFC §4.4) — declare a consumer-side interface"
         course:
-          files: ["internal/course/**"]
+          files: ["**/services/course/course/**"]
           deny:
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/identity
-              desc: "course must not import identity directly (RFC §4.4) — declare a consumer-side interface"
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/enrollment
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/enrollment
               desc: "course must not import enrollment directly (RFC §4.4) — declare a consumer-side interface"
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/progress
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/progress
               desc: "course must not import progress directly (RFC §4.4) — declare a consumer-side interface"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/workflows
+              desc: "course must not import workflows (the dependency runs one way: workflows imports course) — start the workflow by course.PublishWorkflowName"
         enrollment:
-          files: ["internal/enrollment/**"]
+          files: ["**/services/course/enrollment/**"]
           deny:
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/identity
-              desc: "enrollment must not import identity directly (RFC §4.4) — declare a consumer-side interface"
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/course
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/course
               desc: "enrollment must not import course's repository/domain directly — declare a CourseReader-style interface (RFC §4.4 example)"
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/progress
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/progress
               desc: "enrollment must not import progress directly (RFC §4.4) — declare a consumer-side interface"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/workflows
+              desc: "enrollment must not import workflows"
         progress:
-          files: ["internal/progress/**"]
+          files: ["**/services/course/progress/**"]
           deny:
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/identity
-              desc: "progress must not import identity directly (RFC §4.4) — declare a consumer-side interface"
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/course
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/course
               desc: "progress must not import course directly (RFC §4.4) — declare a consumer-side interface"
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/enrollment
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/enrollment
               desc: "progress must not import enrollment directly (RFC §4.4) — declare a consumer-side interface"
-        analytics:
-          files: ["internal/analytics/**"]
-          deny:
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/identity
-              desc: "analytics must not import identity directly (RFC §4.4) — it reacts to outbox events, not direct calls"
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/course
-              desc: "analytics must not import course directly (RFC §4.4) — it reacts to outbox events, not direct calls"
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/enrollment
-              desc: "analytics must not import enrollment directly (RFC §4.4) — it reacts to outbox events, not direct calls"
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/internal/progress
-              desc: "analytics must not import progress directly (RFC §4.4) — it reacts to outbox events, not direct calls"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/workflows
+              desc: "progress must not import workflows"

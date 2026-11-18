@@ -1,7 +1,6 @@
 go 1.26.5
 
 use (
-	.
 	./libs/auth
 	./libs/cache
 	./libs/config
@@ -16,4 +15,9 @@ use (
 	./libs/router
 	./libs/temporal
 	./libs/testenv
+	./services/analytics
+	./services/course
+	./services/identity
+	./services/worker
+	./tools/seed
 )

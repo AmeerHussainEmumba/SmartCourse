@@ -1,8 +1,8 @@
 // Package temporal builds the Temporal client. It is its own package, apart
 // from libs/infra, so that identity-api and analytics-api —
 // which never touch Temporal (ADR-0009: Temporal backs publishing and
-// nothing else) — don't link the Temporal SDK. Only cmd/course-api,
-// cmd/worker and cmd/seed import it.
+// nothing else) — don't link the Temporal SDK. Only services/course/cmd/course-api,
+// services/worker/cmd/worker and tools/seed import it.
 package temporal
 
 import (

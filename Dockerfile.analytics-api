@@ -1,15 +1,30 @@
 # The analytics-api service (ADR-0023, extending ADR-0022) — one of four
 # independently built images (identity-api, course-api, analytics-api,
-# worker). Builds from the same source tree and go.mod (a modular
-# monolith's code, ADR-0001), just packaged as a separate artifact so it
-# can be deployed, scaled, and restarted independently of the others.
+# worker). Each service is its own Go module (docs/plans/module-split.md),
+# so this image is built from that module plus only the library modules it
+# depends on; nothing else in the repo is copied in. Keep the COPY list in
+# step with the module's go.mod `replace` directives — GOWORK=off below means
+# a missing module fails this build instead of being papered over by go.work.
+# Build context is the repo root: docker build -f Dockerfile.analytics-api .
 FROM golang:1-alpine AS build
+ENV GOWORK=off CGO_ENABLED=0
 WORKDIR /src
-COPY go.mod go.sum ./
-COPY libs ./libs
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -o /out/analytics-api ./cmd/analytics-api
+COPY libs/auth ./libs/auth
+COPY libs/cache ./libs/cache
+COPY libs/config ./libs/config
+COPY libs/db ./libs/db
+COPY libs/errors ./libs/errors
+COPY libs/httpx ./libs/httpx
+COPY libs/infra ./libs/infra
+COPY libs/logging ./libs/logging
+COPY libs/outbox ./libs/outbox
+COPY libs/relay ./libs/relay
+COPY libs/router ./libs/router
+COPY libs/testenv ./libs/testenv
+COPY services/analytics ./services/analytics
+WORKDIR /src/services/analytics
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    go build -trimpath -o /out/analytics-api ./cmd/analytics-api
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates

@@ -31,7 +31,7 @@ This used to be one package tree, `internal/platform/`. Each directory here is n
 
 ## Why this exists as a separate layer
 
-Every domain module (`internal/identity`, `internal/course`, ...) follows the same `handler.go` / `service.go` / `repository.go` / `dto.go` / `domain.go` shape. That uniformity only holds if the cross-cutting stuff — how an error becomes JSON, how a password gets hashed, how a token is validated — is written once here and reused, not reinvented per module. `.golangci.yml`'s `depguard` rules allow every module to import `libs/**` while blocking modules from importing each other.
+Every domain module (`services/identity/identity`, `services/course/course`, ...) follows the same `handler.go` / `service.go` / `repository.go` / `dto.go` / `domain.go` shape. That uniformity only holds if the cross-cutting stuff — how an error becomes JSON, how a password gets hashed, how a token is validated — is written once here and reused, not reinvented per module. `.golangci.yml`'s `depguard` rules allow every module to import `libs/**` while blocking modules from importing each other.
 
 ## Auth: three layers, not one
 
@@ -41,7 +41,7 @@ Every domain module (`internal/identity`, `internal/course`, ...) follows the sa
 2. **`RequireRole("instructor")`** — coarse, route-level. Cannot check *which* course; that's not known yet at middleware time.
 3. **`RequireFreshPrivilege`** — narrow. Only on admin routes and anything that mutates another user's role/access. Checks the token's embedded version against Redis so a just-demoted user can't keep using admin routes for the rest of their token's 15-minute life. See ADR-0015's addendum for the full reasoning — this is not a general per-request check, and adding it to a route that doesn't need it reintroduces the Redis round-trip the whole design avoids.
 
-A fourth check — **ownership** ("this student owns *this* enrollment") — is not here. It lives in each module's `service.go`, because only the service has loaded the resource to compare against. See `internal/enrollment/README.md` for a worked example.
+A fourth check — **ownership** ("this student owns *this* enrollment") — is not here. It lives in each module's `service.go`, because only the service has loaded the resource to compare against. See `services/course/enrollment/README.md` for a worked example.
 
 ## Testing
 

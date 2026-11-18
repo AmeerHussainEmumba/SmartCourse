@@ -12,4 +12,4 @@ This is the concrete case RFC §10.3 names as the one kind of shared state that 
 
 ## Testing
 
-No dedicated test file for this package's own logic (`Limiter`/`Middleware`/the fail-open behavior) in isolation — an honest gap, not a silent one. What IS tested: `internal/identity`'s integration suite proves the end-to-end *effect* (`TestLogin_PerAccountRateLimit_BlocksAfterThreshold`, `docs/guides/testing.md`), which is real coverage of the outcome a caller depends on, just not of this package's internals independent of a specific route wiring it in a specific way.
+No dedicated test file for this package's own logic (`Limiter`/`Middleware`/the fail-open behavior) in isolation — an honest gap, not a silent one. What IS tested: `services/identity/identity`'s integration suite proves the end-to-end *effect* (`TestLogin_PerAccountRateLimit_BlocksAfterThreshold`, `docs/guides/testing.md`), which is real coverage of the outcome a caller depends on, just not of this package's internals independent of a specific route wiring it in a specific way.
