@@ -1,8 +1,11 @@
 # Plan: Week 3 (events, background workers, analytics, observability), rough edges, E2E, and a deliverables audit
 
-**Status:** draft for review · **Date:** 2026-11-18 · **Base:** `refactor/module-split-fixes` (PR #18) · **Companions:** RFC §6, §9, §12, §21; ADR-0006/0007/0008/0013/0014/0017/0021; DR-018, DR-019; `docs/plans/module-split-assessment.md`
+**Status:** scope confirmed by the project owner 2026-11-18; execution starts with the review-independent work (section 4a) · **Date:** 2026-11-18 · **Base:** `refactor/module-split-fixes` (PR #18) · **Companions:** RFC §6, §9, §12, §21; ADR-0006/0007/0008/0013/0014/0017/0021; DR-018, DR-019; `docs/plans/module-split-assessment.md`
 
 ## 1. What "done" means
+
+**Week 3 is the last stage before external review and a defense.** Nothing is deferred past it: the project owner has confirmed that observability, certificates and asset upload are all in scope. The cut line in section 8 is therefore an ordering (what to finish first so the most important work is safe if time runs short), not permission to drop things; anything that does not make it is recorded as Not built with the reason, never left implicit.
+
 
 Week 3 is done when every row of the acceptance matrix (section 7) has a passing check that someone other than the author can re-run, and the final assessment re-rates the project against the baseline, the Execution Guidelines and the supervisor's reviews with no row resting on "believed to work".
 
@@ -24,7 +27,9 @@ Week 3's deliverables in the Execution Guidelines are three sentences, and each 
 - Analytics serves 7 of 9 metrics. Missing: Most Popular Courses, Failed Events.
 - Known imperfections carried over (assessment, section 6): instructor analytics ownership, unbounded argon2 concurrency, no dead-letter store, 15-minute publish lease, brief `token_stale` window after a Redis flush, `VerifyAssets` only checks content size, no `Idempotency-Key` middleware, no fan-out/fan-in pipeline.
 
-## 3. Decisions this plan makes (proposed; ADRs to follow, each reversible)
+## 3. Decisions this plan makes (ADRs 0029 to 0032 drafted as Proposed on 2026-11-18; each reversible)
+
+Confirmed by the project owner on 2026-11-18: D1 (observability in Week 3), D6 (Mailpit as the notification sink, no real mail provider or SMTP integration, documented as a deliberate limit), certificates and asset upload in scope.
 
 | # | Decision | Reason | Supersedes / touches |
 |---|---|---|---|
@@ -37,6 +42,18 @@ Week 3's deliverables in the Execution Guidelines are three sentences, and each 
 | D7 | New shared code goes in **new library modules** (`libs/events`, `libs/kafka`, `libs/asynqx`, `libs/telemetry`, `libs/mongostore`), registered in `go.work`, the module-graph guard and `CODEOWNERS`, with the link-graph budget extended so identity-api still links no Kafka/Asynq/Mongo code | Keeps the structure the supervisor asked for; the guards stay meaningful | ADR-0026 |
 | D8 | search-indexer and cache-invalidator **stay inside the publish workflow** | Already decided and still valid | DR-018 |
 | D9 | `sync.RWMutex` is not forced in; fan-out/fan-in is built only where real (the audit-archiver and reconciliation batch work) | Same anti-pattern argument as ADR-0021 and DR-016 | DR-016 |
+
+## 4a. Order of execution while the module-split PRs await review
+
+PRs #12 to #18 have not been reviewed by the supervisor. If the review changes the module layout, work that edits `wire.go`, the relay or the service packages gets rebased. So the work is sequenced by how exposed it is:
+
+| Tier | Work | Why |
+|---|---|---|
+| **Start now (new files or docs only)** | Phase 0 (ADRs 0029 to 0032, drafted); Phase 2's new `libs/events` module, `.proto` files, registry bootstrap script, the outbox trace/actor migration (a new file); scaffolding for `libs/mongostore`, `libs/asynqx`, `libs/telemetry` with their own tests; Mailpit, Kafka topic provisioning and Prometheus/Grafana provisioning files in compose; the skeleton of `scripts/verify-deliverables.sh`; the E2E scenario specs (test names and assertions, not yet runnable) | Nothing here edits an existing module's code, so a layout change costs a path fix, not a rewrite |
+| **Start now, low exposure (edits inside one existing package)** | Phase 1 items: publish lease reconciliation, `VerifyAssets` and asset upload, `Idempotency-Key`, argon2 bound, `token_stale` re-seed, seed `.env` fix, `govulncheck`, cleanup | Each is a local change with its own test; rebasing across a rename is mechanical |
+| **Wait for the supervisor's review** | Phase 3 (Kafka in the relay, consumer runner in the worker, rehoming handlers), Phase 4 and 5 wiring into services, Phase 7 instrumentation of existing handlers | These change `wire.go`, the worker and handler packages, exactly where the review could move things (the DR-020 questions: one module per library, and the worker importing the course and analytics handlers) |
+
+If the supervisor answers early, the third tier starts immediately; the first two tiers are already done by then.
 
 ## 4. Work breakdown
 
@@ -115,8 +132,14 @@ Every item has a test that fails before the fix. Source: the assessment's "imper
 ### Phase 8: End-to-end and adversarial verification (L)
 Section 5. A separate agent session, with the same "break the system" brief, runs a second adversarial pass against the finished events and workers layer. The first pass found two defects it missed, so this pass is scoped to what Week 3 added (consumers, DLQ and replay, Asynq jobs, reconciliation, admin endpoints, trace propagation) plus a re-run of the earlier reproducers.
 
-### Phase 9: Documentation and the deliverables audit (M)
+### Phase 9: Documentation, the deliverables audit, and defense readiness (M)
 Section 7. README, ADRs 0029 to 0032 moved to Accepted or revised, RFC §6/§9/§12/§21 updated, `docs/rfc/differences-from-requirements.md` (DR-019 superseded, new entries for anything that differs), `api/openapi.yaml` for the new endpoints, `env.example`, per-module READMEs and CHANGELOGs, `GETTING_STARTED.md`, `docs/guides/testing.md`, `ONBOARDING.md` for the owner (not committed), and the hosted onboarding docs. A final assessment replaces `module-split-assessment.md`.
+
+**Defense readiness** (the project ends in an external review and a defense, and the Execution Guidelines evaluate "depth of understanding" and "comfortable explaining your design"):
+- A demo script that runs the end-to-end story from a clean `docker compose up`, with the expected output of each step, rehearsed against the built images.
+- A defense brief for the owner: the architecture in five minutes, each ADR's one-line reason and its rejected alternative, the honest weak points (the assessment's imperfections list) with what was done about each, and the questions a reviewer is most likely to ask, with answers grounded in the code and the findings register.
+- A short "what we would do next" list, so open items are shown as chosen, not forgotten.
+- `ONBOARDING.md` and the hosted study docs refreshed for the owner's study; not committed.
 
 ## 5. End-to-end checks
 
@@ -173,13 +196,13 @@ The audit ends with an honest rating in the same format as before (Met / Partial
 
 ## 8. Scope, cut line and risks
 
-Everything above is the full plan. If time forces a cut, in order of what to protect:
+Everything above is in scope. The order below is the order to finish things in, so that if the clock runs short the most important work is already done and tested:
 
 1. **Must:** Phases 2 to 4 (contracts, Kafka transport, archive and dead letters), Phase 6 (nine metrics), Phase 7 core (trace through the envelope, `/metrics`, one dashboard), Phase 8 (E1 to E6, E9), Phase 9.
 2. **Should:** Phase 5 notifications and reconciliation jobs, E7, E8, E11 to E14, Phase 1's publish lease and `VerifyAssets`.
 3. **Could:** certificates, `Idempotency-Key` middleware, argon2 bound, alert rules, `govulncheck` gating.
 
-Anything cut is written down in the assessment as Not built with the reason, rather than quietly dropped.
+Anything that does not make it is written down in the assessment as Not built with the reason, rather than quietly dropped. Certificates, asset upload and observability are confirmed in scope and are not candidates for silent removal.
 
 **Risks**
 - **Size.** This is much larger than the module split. The phases are ordered so each ends in a working, tested state; the cut line above is the pressure valve.
@@ -190,10 +213,10 @@ Anything cut is written down in the assessment as Not built with the reason, rat
 - **Unreviewed foundations.** The module-split stack (#12 to #18) is not yet reviewed by the supervisor. If the layout changes in review, Week 3 branches rebase. Mitigation: keep Week 3 changes in new modules where possible.
 - **Facts not verified here:** library versions and APIs for Kafka, Asynq, OpenTelemetry and the MongoDB driver are to be confirmed against their current documentation when each ADR is written, not assumed from this plan.
 
-## 9. Open questions for the project owner
+## 9. Questions for the project owner (answered 2026-11-18)
 
-1. Confirm D1: observability in this week (supersedes DR-019).
-2. Confirm the cut line in section 8, in particular whether certificates and asset upload are in.
-3. Confirm D6 (Mailpit as the notification sink) and that no real email provider is needed.
-4. Should the supervisor review PRs #12 to #18 before Phase 3 starts, so the module layout cannot move under the Kafka work?
-5. Should the second adversarial pass use the same two-tester setup as before?
+1. Observability in this week: **yes** (D1, ADR-0032). Week 3 is the last stage before external review and defense.
+2. Certificates and asset upload: **in scope**.
+3. Mailpit as the notification sink: **yes**; no real mail provider or SMTP integration. Document it as a deliberate limit.
+4. Supervisor review of PRs #12 to #18 before the review-exposed work starts: **yes**; start with what the review cannot affect (section 4a).
+5. Second adversarial pass: **open**; the owner asked for a refresher on how the first pass was set up (see the conversation); decision pending.
