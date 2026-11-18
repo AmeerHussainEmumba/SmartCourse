@@ -29,7 +29,7 @@ MIGRATION_SERVICES_REVERSED := analytics course identity platform
         migrate-up migrate-down migrate-down-all migrate-create \
         run-identity-api run-course-api run-analytics-api run-worker \
         build build-identity-api build-course-api build-analytics-api build-worker \
-        lint check-link-graph check-module-graph check-dockerfile-modules check-module-hygiene test-guards test test-race test-integration seed fmt
+        lint check-link-graph check-module-graph check-dockerfile-modules check-module-hygiene check-dev-defaults check-http-hardening test-guards test test-race test-integration seed fmt
 
 ## --- Local environment (ADR-0018) ---------------------------------------
 
@@ -145,6 +145,15 @@ check-dockerfile-modules:
 # no third-party version skew across modules.
 check-module-hygiene:
 	scripts/check-module-hygiene.sh
+
+# Static policy scans: placeholder signing keys and the seed guard, containers
+# that run as root, published compose ports; server timeouts, body cap and
+# trusted-proxy policy.
+check-dev-defaults:
+	scripts/check-dev-defaults.sh
+
+check-http-hardening:
+	scripts/check-http-hardening.sh
 
 # Mutation test of the guards themselves: injects violations into a copy of
 # the tree and checks the right guard fails (slow; copies the repo).

@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Repository struct {
@@ -67,6 +68,26 @@ func (r *Repository) GetCourseByID(ctx context.Context, id uuid.UUID) (*Course, 
 		return nil, wrapNotFound(err)
 	}
 	return &c, nil
+}
+
+// GetCourseForUpdate loads the course row under a row lock; it must be
+// called on a transaction-scoped repository (WithTx).
+func (r *Repository) GetCourseForUpdate(ctx context.Context, id uuid.UUID) (*Course, error) {
+	var c Course
+	err := r.db.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).First(&c).Error
+	if err != nil {
+		return nil, wrapNotFound(err)
+	}
+	return &c, nil
+}
+
+// CountLessons counts the lessons of one version.
+func (r *Repository) CountLessons(ctx context.Context, versionID uuid.UUID) (int64, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT count(*) FROM lessons l JOIN modules m ON m.id = l.module_id
+		WHERE m.course_version_id = ?`, versionID).Row().Scan(&n)
+	return n, err
 }
 
 func (r *Repository) GetCourseBySlug(ctx context.Context, slug string) (*Course, error) {
@@ -126,15 +147,70 @@ func (r *Repository) PromoteVersion(ctx context.Context, courseID, newVersionID 
 	return nil
 }
 
-// SetVersionPublishing records that a publish workflow has started —
-// transitions the draft to `publishing` and stores its Temporal workflow
-// ID, so GetPublishStatus (and idx_one_draft_per_course, already in place
-// since M0) both have something real to read. Called once, right after
-// Service.Publish starts the workflow; never from inside the workflow
-// itself.
-func (r *Repository) SetVersionPublishing(ctx context.Context, id uuid.UUID, workflowID string) error {
-	return r.db.WithContext(ctx).Model(&CourseVersion{}).Where("id = ?", id).
-		Updates(map[string]any{"state": StatePublishing, "workflow_id": workflowID, "publish_error": nil}).Error
+// PublishClaim is what ClaimPublish took the version from, so a failed
+// workflow start can put it back exactly as it was.
+type PublishClaim struct {
+	PrevState      VersionState
+	PrevWorkflowID *string
+	PrevError      *string
+}
+
+// ClaimPublish atomically moves a version to `publishing` and records its
+// workflow ID and claim time, in ONE conditional UPDATE that runs before the
+// Temporal workflow is started. It returns claimed=false when another publish
+// already holds the version, which Service.Publish turns into a 409.
+//
+// A version can be claimed from `draft` or `publish_failed` (a retry), or from
+// `publishing` only when that earlier claim is older than staleAfter (or has
+// no timestamp), i.e. the process that took it died before the workflow ran
+// to completion. Doing this before the workflow starts, and never again after,
+// is what keeps a fast-failing workflow's own `publish_failed` write from being
+// overwritten by a late "publishing" write.
+func (r *Repository) ClaimPublish(ctx context.Context, id uuid.UUID, workflowID string, staleAfter time.Duration) (PublishClaim, bool, error) {
+	var prevState string
+	var prevWorkflow, prevError sql.NullString
+	err := r.db.WithContext(ctx).Raw(`
+		WITH prev AS (
+			SELECT id, state, workflow_id, publish_error, publish_started_at
+			FROM course_versions WHERE id = ? FOR UPDATE
+		)
+		UPDATE course_versions v
+		SET state = 'publishing', workflow_id = ?, publish_error = NULL, publish_started_at = now()
+		FROM prev
+		WHERE v.id = prev.id
+		  AND (prev.state IN ('draft', 'publish_failed')
+		       OR (prev.state = 'publishing'
+		           AND (prev.publish_started_at IS NULL
+		                OR prev.publish_started_at < now() - make_interval(secs => ?))))
+		RETURNING prev.state::text, prev.workflow_id, prev.publish_error`,
+		id, workflowID, staleAfter.Seconds()).Row().Scan(&prevState, &prevWorkflow, &prevError)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PublishClaim{}, false, nil
+	}
+	if err != nil {
+		return PublishClaim{}, false, err
+	}
+	c := PublishClaim{PrevState: VersionState(prevState)}
+	if prevWorkflow.Valid {
+		c.PrevWorkflowID = &prevWorkflow.String
+	}
+	if prevError.Valid {
+		c.PrevError = &prevError.String
+	}
+	return c, true, nil
+}
+
+// ReleasePublish undoes ClaimPublish when the workflow could not be started,
+// restoring the version's previous state, workflow ID and error. It only acts
+// if this claim is still the current one (state `publishing` with the same
+// workflow ID), so it can never clobber a newer claim or the workflow's own
+// terminal state.
+func (r *Repository) ReleasePublish(ctx context.Context, id uuid.UUID, workflowID string, c PublishClaim) error {
+	return r.db.WithContext(ctx).Exec(`
+		UPDATE course_versions
+		SET state = ?::version_state, workflow_id = ?, publish_error = ?, publish_started_at = NULL
+		WHERE id = ? AND state = 'publishing' AND workflow_id = ?`,
+		string(c.PrevState), c.PrevWorkflowID, c.PrevError, id, workflowID).Error
 }
 
 // GetInstructorName reads instructor_mirror the same way ListCatalogue's
@@ -175,6 +251,12 @@ func (r *Repository) UpsertSearchIndex(ctx context.Context, o *PublishOutline) e
 			instructor_name = EXCLUDED.instructor_name, category = EXCLUDED.category, level = EXCLUDED.level,
 			tags = EXCLUDED.tags, enrollment_count = EXCLUDED.enrollment_count,
 			search_vector = EXCLUDED.search_vector, indexed_at = EXCLUDED.indexed_at
+		-- Never replace the row serving the live version with a version that
+		-- is not promoted yet (F-08, ADR-0010): PromoteAndPublish re-runs
+		-- this upsert inside the promotion transaction.
+		WHERE NOT EXISTS (
+			SELECT 1 FROM courses c WHERE c.id = EXCLUDED.course_id
+			AND c.published_version_id IS NOT NULL AND c.published_version_id <> EXCLUDED.version_id)
 	`, o.CourseID, o.VersionID, o.Title, o.Description, o.InstructorName, o.Category, o.Level,
 		pq.StringArray(tags), o.EnrollmentCount, o.Title, o.Description).Error
 }
@@ -198,11 +280,11 @@ type SearchRow struct {
 // actually needs to link to; course_search_index itself doesn't carry it.
 func (r *Repository) SearchCourses(ctx context.Context, query string, limit int) ([]SearchRow, error) {
 	rows, err := r.db.WithContext(ctx).Raw(`
-		SELECT c.id, c.slug, csi.title, csi.instructor_name, csi.category, csi.level, csi.enrollment_count
+		SELECT c.id, c.slug, csi.title, csi.instructor_name, csi.category, csi.level, c.enrollment_count
 		FROM course_search_index csi
-		JOIN courses c ON c.id = csi.course_id
+		JOIN courses c ON c.id = csi.course_id AND c.published_version_id = csi.version_id
 		WHERE csi.search_vector @@ plainto_tsquery('english', ?) AND c.archived_at IS NULL
-		ORDER BY ts_rank(csi.search_vector, plainto_tsquery('english', ?)) DESC, csi.enrollment_count DESC
+		ORDER BY ts_rank(csi.search_vector, plainto_tsquery('english', ?)) DESC, c.enrollment_count DESC
 		LIMIT ?
 	`, query, query, limit).Rows()
 	if err != nil {
@@ -376,8 +458,8 @@ func (r *Repository) ListCatalogue(ctx context.Context, limit int, afterCreatedA
 		args = append(args, *filter.Level)
 	}
 	if filter.Search != "" {
-		q += ` AND cv.title ILIKE ?`
-		args = append(args, "%"+filter.Search+"%")
+		q += ` AND cv.title ILIKE ? ESCAPE '\'`
+		args = append(args, "%"+escapeLike(filter.Search)+"%")
 	}
 	if afterID != nil && afterCreatedAt != nil {
 		q += ` AND (c.created_at, c.id) < (?, ?)`

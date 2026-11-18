@@ -3,7 +3,7 @@
 # Dockerfile.analytics-api (ADR-0023). See any of those header comments for
 # why they exist.
 # Build context is the repo root: docker build -f Dockerfile.worker .
-FROM golang:1-alpine AS build
+FROM golang:1.26.5-alpine AS build
 ENV GOWORK=off CGO_ENABLED=0
 WORKDIR /src
 COPY libs/auth ./libs/auth
@@ -27,6 +27,8 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     go build -trimpath -o /out/worker ./cmd/worker
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates
+# Run as an unprivileged user: a compromise of the service should not be root in the container.
+RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 app
+USER app
 COPY --from=build /out/worker /usr/local/bin/worker
 ENTRYPOINT ["/usr/local/bin/worker"]

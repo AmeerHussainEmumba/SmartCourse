@@ -11,7 +11,25 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
 )
+
+// CanReadCourse decides whether the caller may read a course's analytics:
+// admins any course; instructors any course (analytics has no course
+// owner: course.course_published carries no instructor_id, so ownership
+// cannot be checked without an event change in services/course); students
+// only courses they hold an active or completed enrollment in (withdrawn
+// does not count). Everyone else gets false, which the handler maps to 404.
+func (s *Service) CanReadCourse(ctx context.Context, id auth.Identity, courseID uuid.UUID) (bool, error) {
+	switch id.Role {
+	case "admin", "instructor":
+		return true, nil
+	case "student":
+		return s.repo.StudentHasEnrollment(ctx, courseID, id.UserID)
+	}
+	return false, nil
+}
 
 type Service struct {
 	repo *Repository

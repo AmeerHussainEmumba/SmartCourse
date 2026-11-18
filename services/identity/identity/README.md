@@ -33,16 +33,16 @@ Three real bugs were caught reviewing this module against the baseline requireme
 
 | Method & path | Auth | Notes |
 |---|---|---|
-| `POST /auth/register` | — | Always issues student role |
-| `POST /auth/login` | — | |
+| `POST /auth/register` | — | Always issues student role. Answers `202` with the same body whether or not the email exists (no tokens: log in afterwards); a new address gets a verification email, an existing one a password-reset email |
+| `POST /auth/login` | — | Only failed attempts count toward the limits (5/min per account+IP, 20/min per account). A suspended or deleted account answers like a wrong password (`401`) |
 | `POST /auth/refresh` | — | Rotates the refresh token |
 | `POST /auth/logout` | — | Idempotent; revokes the presented token only |
 | `POST /auth/password-reset/request` | — | Always `202`, whether or not the email exists |
 | `POST /auth/password-reset/confirm` | — | Revokes all refresh tokens + bumps `token_version` on success |
 | `POST /auth/verify-email/resend` | — | Always `202` |
 | `GET /auth/verify-email/confirm?token=` | — | |
-| `GET /me`, `PATCH /me` | `RequireAuth` | |
-| `PATCH /admin/users/{id}/role` | `RequireAuth` + `RequireRole(admin)` + `RequireFreshPrivilege` | |
+| `GET /me`, `PATCH /me` | `RequireAuth` + token-version check | A demoted, suspended or deleted user's old token is refused (`token_stale`/`401`); on a Redis miss the version is read from Postgres, not assumed to be 1 |
+| `PATCH /admin/users/{id}/role` | `RequireAuth` + `RequireRole(admin)` + `RequireFreshPrivilege` | `404` for an unknown id with no side effects; `409 last_admin` if the change would leave no active admin |
 
 ## Testing
 

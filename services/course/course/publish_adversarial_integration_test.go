@@ -265,10 +265,11 @@ func TestAdvPublish_RedisFlushedOrCorrupt_FallsBackToPostgres(t *testing.T) {
 	}
 }
 
-// Concurrent Service.Publish calls for the same draft must all target one
-// deterministic workflow ID (that is what makes Temporal dedupe them) and must
-// leave the version in `publishing` with that ID, whatever the interleaving.
-func TestAdvPublish_ConcurrentPublishRequests_ShareOneWorkflowID(t *testing.T) {
+// Concurrent Service.Publish calls for the same draft: exactly ONE wins the
+// claim and starts the workflow; every other gets 409 publish_in_progress.
+// (Before the claim existed all 20 attached to the same workflow ID and
+// returned 202, so a client could not tell a duplicate from a fresh publish.)
+func TestAdvPublish_ConcurrentPublishRequests_OneWinsRestGet409(t *testing.T) {
 	env := testenv.Setup(t)
 	instr := seedInstructor(t, env)
 	ctx := context.Background()
@@ -285,26 +286,37 @@ func TestAdvPublish_ConcurrentPublishRequests_ShareOneWorkflowID(t *testing.T) {
 	authorDraft(t, svc, courseID, instr, 1, 1)
 
 	var wg sync.WaitGroup
-	var failures atomic.Int32
+	var ok, conflict, other atomic.Int32
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := svc.Publish(ctx, courseID, instr); err != nil {
-				failures.Add(1)
+			_, err := svc.Publish(ctx, courseID, instr)
+			switch ae, isApp := apperrors.As(err); {
+			case err == nil:
+				ok.Add(1)
+			case isApp && ae.HTTPStatus == 409 && ae.Code == "publish_in_progress":
+				conflict.Add(1)
+			default:
+				other.Add(1)
+				t.Errorf("unexpected error: %v", err)
 			}
 		}()
 	}
 	wg.Wait()
-	if failures.Load() != 0 {
-		t.Fatalf("%d publish calls failed", failures.Load())
+	if ok.Load() != 1 || conflict.Load() != 19 || other.Load() != 0 {
+		t.Fatalf("want 1 success and 19 x 409, got ok=%d conflict=%d other=%d", ok.Load(), conflict.Load(), other.Load())
 	}
-	if len(ids) != 1 {
-		t.Fatalf("workflow IDs used: %v (must be exactly one so Temporal can dedupe)", ids)
+	total := 0
+	for _, n := range ids {
+		total += n
+	}
+	if len(ids) != 1 || total != 1 {
+		t.Fatalf("the workflow must be started exactly once; starts by ID: %v", ids)
 	}
 	var state, wf string
 	env.DB.Raw(`SELECT state, workflow_id FROM course_versions WHERE id = ?`, draftID).Row().Scan(&state, &wf)
-	if state != "publishing" || ids[wf] != 20 {
+	if state != "publishing" || ids[wf] != 1 {
 		t.Fatalf("state=%s workflow_id=%s ids=%v", state, wf, ids)
 	}
 }

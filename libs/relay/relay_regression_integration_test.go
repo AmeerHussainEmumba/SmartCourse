@@ -1,8 +1,9 @@
-//go:build integration && bugrepro
+//go:build integration
 
-// Reproducers for REAL defects in libs/relay found by adversarial testing.
-// These FAIL today by design and are excluded from the default suite; run
-// with `go test -tags='integration bugrepro' -run Bugrepro ./...`.
+// Regression tests for defects in libs/relay found by adversarial testing and
+// since fixed (F-04 claim lock held through handling, F-05 handler panics
+// recovered, F-28 last_error persisted). They began as bugrepro reproducers;
+// test names are unchanged.
 package relay_test
 
 import (

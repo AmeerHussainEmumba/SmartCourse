@@ -7,6 +7,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -27,6 +28,22 @@ type Config struct {
 	Argon Argon2Config
 
 	CORSAllowedOrigins []string
+
+	// TrustedProxies lists the CIDRs/IPs of reverse proxies whose
+	// X-Forwarded-For / X-Real-IP headers may be believed (TRUSTED_PROXIES,
+	// comma-separated). Default none: the TCP peer address is the client IP.
+	TrustedProxies []string
+
+	// MaxBodyBytes caps request bodies (MAX_BODY_BYTES, default 1 MiB).
+	MaxBodyBytes int64
+	// HTTP server timeouts (HTTP_READ_TIMEOUT, HTTP_WRITE_TIMEOUT,
+	// HTTP_IDLE_TIMEOUT).
+	HTTPReadTimeout  time.Duration
+	HTTPWriteTimeout time.Duration
+	HTTPIdleTimeout  time.Duration
+	// EnableHSTS sends Strict-Transport-Security (HSTS_ENABLED); set it only
+	// when the service is served over TLS (directly or via a TLS terminator).
+	EnableHSTS bool
 }
 
 type PostgresConfig struct {
@@ -134,6 +151,23 @@ func Load() (*Config, error) {
 		return d
 	}
 
+	// Range-validate before narrowing: uint32(-1) wraps to ~4 TiB and a zero
+	// value panics inside argon2 (F-26).
+	argonMem := optInt("ARGON2_MEMORY_KIB", 64*1024)
+	argonIter := optInt("ARGON2_ITERATIONS", 3)
+	argonPar := optInt("ARGON2_PARALLELISM", 2)
+	inRange := func(key string, v, lo, hi int) {
+		if v < lo || v > hi {
+			errs = append(errs, fmt.Sprintf("%s must be between %d and %d", key, lo, hi))
+		}
+	}
+	inRange("ARGON2_MEMORY_KIB", argonMem, 8, maxArgonMemoryKiB)
+	inRange("ARGON2_ITERATIONS", argonIter, 1, maxArgonIterations)
+	inRange("ARGON2_PARALLELISM", argonPar, 1, maxArgonParallelism)
+	if argonPar >= 1 && argonPar <= maxArgonParallelism && argonMem < 8*argonPar {
+		errs = append(errs, "ARGON2_MEMORY_KIB must be at least 8 * ARGON2_PARALLELISM")
+	}
+
 	cfg := &Config{
 		Env:      envOr("APP_ENV", "development"),
 		HTTPPort: optInt("HTTP_PORT", 8080),
@@ -167,13 +201,19 @@ func Load() (*Config, error) {
 			Issuer:          envOr("JWT_ISSUER", "smartcourse"),
 		},
 		Argon: Argon2Config{
-			MemoryKiB:   uint32(optInt("ARGON2_MEMORY_KIB", 64*1024)),
-			Iterations:  uint32(optInt("ARGON2_ITERATIONS", 3)),
-			Parallelism: uint8(optInt("ARGON2_PARALLELISM", 2)),
+			MemoryKiB:   uint32(argonMem),
+			Iterations:  uint32(argonIter),
+			Parallelism: uint8(argonPar),
 			SaltLength:  16,
 			KeyLength:   32,
 		},
 		CORSAllowedOrigins: splitAndTrim(os.Getenv("CORS_ALLOWED_ORIGINS")),
+		TrustedProxies:     splitAndTrim(os.Getenv("TRUSTED_PROXIES")),
+		MaxBodyBytes:       int64(optInt("MAX_BODY_BYTES", 1<<20)),
+		HTTPReadTimeout:    optDuration("HTTP_READ_TIMEOUT", 15*time.Second),
+		HTTPWriteTimeout:   optDuration("HTTP_WRITE_TIMEOUT", 30*time.Second),
+		HTTPIdleTimeout:    optDuration("HTTP_IDLE_TIMEOUT", 120*time.Second),
+		EnableHSTS:         optBool("HSTS_ENABLED", false),
 	}
 
 	if len(cfg.JWT.SigningKey) < 32 {
@@ -184,10 +224,75 @@ func Load() (*Config, error) {
 		}
 	}
 
+	if cfg.JWT.AccessTokenTTL <= 0 {
+		errs = append(errs, "JWT_ACCESS_TTL must be greater than zero")
+	}
+	if cfg.JWT.RefreshTokenTTL <= 0 {
+		errs = append(errs, "JWT_REFRESH_TTL must be greater than zero")
+	}
+	if cfg.MaxBodyBytes <= 0 {
+		errs = append(errs, "MAX_BODY_BYTES must be greater than zero")
+	}
+	for key, d := range map[string]time.Duration{
+		"HTTP_READ_TIMEOUT": cfg.HTTPReadTimeout, "HTTP_WRITE_TIMEOUT": cfg.HTTPWriteTimeout, "HTTP_IDLE_TIMEOUT": cfg.HTTPIdleTimeout,
+	} {
+		if d <= 0 {
+			errs = append(errs, key+" must be greater than zero")
+		}
+	}
+	if cfg.Env != "development" && len(cfg.JWT.SigningKey) >= 32 {
+		if reason := weakSigningKey(cfg.JWT.SigningKey); reason != "" {
+			errs = append(errs, "JWT_SIGNING_KEY is not acceptable outside APP_ENV=development: "+reason)
+		}
+	}
+
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("invalid configuration:\n  - %s", strings.Join(errs, "\n  - "))
 	}
 	return cfg, nil
+}
+
+const (
+	maxArgonMemoryKiB   = 1 << 20 // 1 GiB per hash
+	maxArgonIterations  = 100
+	maxArgonParallelism = 64
+)
+
+// knownPlaceholderKeyMarkers are fragments of the signing keys published in
+// env.example and docker-compose.yml (and typical placeholders); a key
+// containing any of them is a public value.
+var knownPlaceholderKeyMarkers = []string{
+	"replace-with", "local-dev-only", "do-not-use", "changeme", "change-me",
+	"your-secret", "your_secret", "example", "placeholder",
+}
+
+// weakSigningKey returns a non-empty reason when key is a known placeholder
+// or obviously low-entropy. It never echoes the key.
+func weakSigningKey(key string) string {
+	lower := strings.ToLower(key)
+	for _, m := range knownPlaceholderKeyMarkers {
+		if strings.Contains(lower, m) {
+			return "it looks like a published placeholder/default key"
+		}
+	}
+	freq := map[rune]int{}
+	n := 0
+	for _, r := range key {
+		freq[r]++
+		n++
+	}
+	if len(freq) < 10 {
+		return "it has too few distinct characters"
+	}
+	var h float64
+	for _, c := range freq {
+		p := float64(c) / float64(n)
+		h -= p * math.Log2(p)
+	}
+	if h < 3.0 {
+		return "its entropy is too low"
+	}
+	return ""
 }
 
 func envOr(key, def string) string {

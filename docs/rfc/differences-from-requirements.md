@@ -42,6 +42,7 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-017](#dr-017--course_stats-and-daily_enrollments-were-computed-but-unreadable) | course_stats and daily_enrollments were computed but unreadable | Correction | Accepted |
 | [DR-020](#dr-020--one-go-module-per-service-and-per-shared-library-beyond-the-baselines-clear-moduleservice-separation) | One Go module per service and per shared library, beyond the baseline's "clear module/service separation" | Interpretation | Accepted |
 | [DR-021](#dr-021--the-analytics-metric-count-is-nine-not-ten) | The analytics metric count is nine, not ten | Correction | Accepted |
+| [DR-022](#dr-022--limits-and-behaviours-chosen-during-the-bug-fix-pass-confirmed) | Limits and behaviours chosen during the bug-fix pass, confirmed | Clarification | Accepted |
 
 ---
 
@@ -405,6 +406,35 @@ Same category as DR-007, DR-015 and DR-017: a correction to our own status claim
 ### If this turns out to be wrong
 
 If the brief's empty tenth bullet was meant to carry a metric, the right fix is to ask the reviewer what it was and log the answer here as a new entry.
+
+---
+
+## DR-022 — Limits and behaviours chosen during the bug-fix pass, confirmed
+
+**Category:** Clarification · **Date:** 2026-11-18 · **Related:** `docs/plans/module-split-findings.md` (F-17, F-18, F-02, F-26, F-29, F-33, F-36)
+
+### What was chosen
+
+The 38-defect fix pass (module-split-findings.md) left several values and behaviours that the requirements documents do not specify. The people who wrote the fixes chose them; the project owner reviewed them on 2026-11-18 and accepted them. They are recorded here so a later reader knows they are decisions, not accidents, and where to change them.
+
+| Area | Choice |
+|---|---|
+| Input bounds (F-17) | `enrollment_limit` 1,000,000; `position` 100,000; `duration_s` 86,400; category 100 chars; tag 50 chars; `asset_key` 500 chars; lesson content depth 32; lesson content 65,536 bytes |
+| Login limits (F-15) | Failures only: 5 per minute per account+IP, 20 per minute per account |
+| Route limits (F-15) | 5 per minute: register, password-reset request, verification resend. 20: login. 30: password-reset confirm, verification confirm. 60: refresh, logout |
+| HTTP hardening (F-29) | `MAX_BODY_BYTES` 1 MiB; read timeout 15 s, write timeout 30 s, idle timeout 120 s; all overridable by environment variable |
+| Argon2 (F-26) | Defaults 64 MiB, 3 iterations, parallelism 2; values outside the validated range stop the service starting |
+| Analytics (F-18) | Any authenticated user reads platform totals; a student reads per-course stats only for a course they are actively or completed-enrolled in, and a withdrawn student gets 404; instructors may read any course (ownership not enforced, see the assessment) |
+| Admin role (F-33) | An admin may demote themselves when another active admin exists; otherwise 409 `last_admin` |
+| Ownership (F-36) | A non-owner of an existing course gets 404 `not_found`, identical to an unknown id (an API contract change from 403 `not_owner`) |
+
+### Why this is logged
+
+None of these contradict the baseline; they fill gaps in it. They are numbers and edge-case behaviours a reviewer may reasonably want different.
+
+### If this turns out to be wrong
+
+Each value is a constant or an environment variable in the file named in the findings register. Changing one is a one-line edit plus the test that pins it.
 
 ---
 

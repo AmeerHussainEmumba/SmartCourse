@@ -62,7 +62,7 @@ docs/
 api/                 openapi.yaml — the API contract
 proto/               Event schemas (M3 — empty today, see proto/README.md)
 scripts/             Guards and helpers: check-link-graph.sh, check-module-graph.sh, for-each-module.sh
-test/                Cross-service test material (see test/README.md)
+test/e2e/            Tests that run services side by side (its own Go module; see test/README.md)
 deploy/              Compose service config (Grafana dashboards, Prometheus scrape config)
 go.work              Lists every Go module for local development; CI and Docker build with GOWORK=off
 ```

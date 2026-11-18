@@ -20,6 +20,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/router"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/identity/identity"
 )
@@ -73,8 +74,10 @@ func secJWTCfg() config.JWTConfig {
 
 var lightArgon = config.Argon2Config{MemoryKiB: 8 * 1024, Iterations: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32}
 
-// newHarness boots the real identity routes on a plain gin.New(), the same
-// engine shape router.New builds (no trusted-proxy configuration).
+// newHarness boots the real identity routes on the real router stack
+// (libs/router.New: request id, logging, recovery, CORS, security headers,
+// request-body cap, no trusted proxies), i.e. what identity-api serves, so the
+// security tests exercise the production middleware chain.
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	return newHarnessWith(t, testenv.Setup(t), lightArgon)
@@ -91,7 +94,7 @@ func newHarnessRDB(t *testing.T, env *testenv.Env, rdb *redis.Client, argon conf
 	mail := &captureMailer{reset: map[string]string{}, verify: map[string]string{}}
 	svc := identity.NewService(identity.NewRepository(env.DB), rdb, jwtCfg, argon, mail)
 	gin.SetMode(gin.TestMode)
-	r := gin.New()
+	r := router.New("test", nil)
 	identity.RegisterRoutes(r.Group("/api/v1"), svc, jwtCfg, rdb)
 	return &harness{t: t, r: r, svc: svc, env: env, jwtCfg: jwtCfg, mail: mail}
 }
@@ -131,8 +134,13 @@ func (h *harness) mustRegister(email, password string) identity.AuthResponse {
 	// Unique IP per registration so the per-IP register limit (5/min) is not the subject here.
 	ip := fmt.Sprintf("10.%d.%d.%d", uuid.New()[0], uuid.New()[1], uuid.New()[2])
 	rec := h.call("POST", "/api/v1/auth/register", map[string]any{"email": email, "password": password, "full_name": "Sec Tester"}, withIP(ip))
-	if rec.Code != http.StatusCreated {
+	if rec.Code != http.StatusAccepted {
 		h.t.Fatalf("register %s: %d %s", email, rec.Code, rec.Body.String())
+	}
+	// Register no longer issues a session (F-32): sign in to get one.
+	rec = h.login(email, password, withIP(ip))
+	if rec.Code != http.StatusOK {
+		h.t.Fatalf("login after register %s: %d %s", email, rec.Code, rec.Body.String())
 	}
 	var out identity.AuthResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {

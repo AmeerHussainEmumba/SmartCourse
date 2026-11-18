@@ -12,6 +12,7 @@ import (
 )
 
 var errNotYourEnrollment = apperrors.New(403, "not_your_enrollment", "This enrollment does not belong to you.")
+var errLessonNotFound = apperrors.New(404, "lesson_not_found", "This lesson is not part of the course you are enrolled in.")
 var errEnrollmentNotActive = apperrors.New(409, "enrollment_not_active", "This enrollment is not active.")
 
 type Service struct {
@@ -26,7 +27,9 @@ func NewService(repo *Repository) *Service { return &Service{repo: repo} }
 // transaction so completion status can never be read mid-update.
 func (s *Service) MarkComplete(ctx context.Context, studentID, enrollmentID, lessonKey uuid.UUID) error {
 	return s.repo.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		e, err := s.repo.getEnrollment(ctx, tx, enrollmentID)
+		// Row lock: serialises concurrent completions of one enrollment so
+		// the last two lessons cannot each miss the other (F-06).
+		e, err := s.repo.getEnrollmentForUpdate(ctx, tx, enrollmentID)
 		if err != nil {
 			return apperrors.ErrNotFound
 		}
@@ -46,6 +49,19 @@ func (s *Service) MarkComplete(ctx context.Context, studentID, enrollmentID, les
 			return errEnrollmentNotActive
 		}
 
+		inVersion, err := s.repo.lessonInPublishedVersion(ctx, tx, *e.PublishedVersionID, lessonKey)
+		if err != nil {
+			return apperrors.ErrInternal.Wrap(err)
+		}
+		if !inVersion {
+			return errLessonNotFound
+		}
+		// Lessons added by a republish have no row yet; create them lazily
+		// so completion is evaluated against the current version (F-07).
+		if err := s.repo.ensureProgressRows(ctx, tx, enrollmentID, *e.PublishedVersionID); err != nil {
+			return apperrors.ErrInternal.Wrap(err)
+		}
+
 		if err := s.repo.markLessonComplete(ctx, tx, enrollmentID, lessonKey); err != nil {
 			return apperrors.ErrInternal.Wrap(err)
 		}
@@ -58,9 +74,12 @@ func (s *Service) MarkComplete(ctx context.Context, studentID, enrollmentID, les
 			return nil
 		}
 
-		completedAt, err := s.repo.markEnrollmentCompleted(ctx, tx, enrollmentID)
+		completedAt, changed, err := s.repo.markEnrollmentCompleted(ctx, tx, enrollmentID)
 		if err != nil {
 			return apperrors.ErrInternal.Wrap(err)
+		}
+		if !changed {
+			return nil // already completed by another call: no second event (F-22)
 		}
 		// CourseCompleted triggers certificate issuance via a Kafka
 		// consumer — M3 scope (no consumer exists yet; see README.md).
@@ -99,6 +118,17 @@ func (s *Service) GetProgress(ctx context.Context, studentID, enrollmentID uuid.
 		return nil, apperrors.ErrInternal.Wrap(err)
 	}
 	out := make([]ProgressItem, 0, len(rows))
+	// Lessons added by a republish have no row until first completed; show
+	// them as not yet complete (F-07).
+	if e.PublishedVersionID != nil {
+		missing, err := s.repo.missingLessonKeys(ctx, s.repo.DB(), enrollmentID, *e.PublishedVersionID)
+		if err != nil {
+			return nil, apperrors.ErrInternal.Wrap(err)
+		}
+		for _, k := range missing {
+			out = append(out, ProgressItem{LessonKey: k.String()})
+		}
+	}
 	for _, row := range rows {
 		item := ProgressItem{LessonKey: row.LessonKey.String()}
 		if row.CompletedAt != nil {

@@ -18,7 +18,9 @@ func newEngineWithProbe(origins []string) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := New("test", origins)
 	r.GET("/ok", func(c *gin.Context) { c.JSON(200, gin.H{"ok": true}) })
-	r.GET("/boom", func(c *gin.Context) { panic("sql: connection to postgres://u:hunter2@db:5432/x failed at /srv/app/repo.go:42") })
+	r.GET("/boom", func(c *gin.Context) {
+		panic("sql: connection to postgres://u:hunter2@db:5432/x failed at /srv/app/repo.go:42")
+	})
 	return r
 }
 

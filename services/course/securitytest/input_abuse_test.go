@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// (NUL bytes and deep JSON nesting are reproduced separately in security_bugrepro_test.go.)
+// (NUL bytes and deep JSON nesting are reproduced separately in security_regression_integration_test.go.)
 // No search/catalogue input may produce a 5xx, a SQL error, or rows that are not public.
 func TestSearchAndCatalogue_HostileQueryParams_NeverBreakOrLeak(t *testing.T) {
 	w := newWorld(t)

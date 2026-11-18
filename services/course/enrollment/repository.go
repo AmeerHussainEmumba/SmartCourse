@@ -146,10 +146,14 @@ func (r *Repository) ListForStudent(ctx context.Context, studentID uuid.UUID) ([
 	return out, err
 }
 
-func (r *Repository) UpdateStatusWithdrawn(ctx context.Context, tx *gorm.DB, id uuid.UUID) error {
+// UpdateStatusWithdrawn flips an active enrollment to withdrawn and reports
+// whether a row actually changed. Callers must only decrement the seat
+// counter / emit an event when it did (F-01).
+func (r *Repository) UpdateStatusWithdrawn(ctx context.Context, tx *gorm.DB, id uuid.UUID) (bool, error) {
 	now := time.Now().UTC()
-	return tx.WithContext(ctx).Model(&Enrollment{}).Where("id = ? AND status = 'active'", id).
-		Updates(map[string]any{"status": StatusWithdrawn, "withdrawn_at": now}).Error
+	res := tx.WithContext(ctx).Model(&Enrollment{}).Where("id = ? AND status = 'active'", id).
+		Updates(map[string]any{"status": StatusWithdrawn, "withdrawn_at": now})
+	return res.RowsAffected > 0, res.Error
 }
 
 func (r *Repository) DB() *gorm.DB { return r.db }

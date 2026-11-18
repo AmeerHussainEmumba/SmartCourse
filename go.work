@@ -19,5 +19,6 @@ use (
 	./services/course
 	./services/identity
 	./services/worker
+	./test/e2e
 	./tools/seed
 )

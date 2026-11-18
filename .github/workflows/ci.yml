@@ -53,6 +53,12 @@ jobs:
       - name: Module hygiene (go mod tidy no-op, replace targets, no version skew)
         run: make check-module-hygiene
 
+      - name: Dev defaults and container policy (placeholder keys, seed guard, non-root, localhost ports)
+        run: make check-dev-defaults
+
+      - name: HTTP hardening (server timeouts, body cap, trusted proxies)
+        run: make check-http-hardening
+
       - name: Guards fail on injected violations
         run: make test-guards
 

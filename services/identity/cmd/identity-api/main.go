@@ -39,15 +39,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	r := router.New(cfg.Env, cfg.CORSAllowedOrigins)
+	r, err := router.NewWithOptions(router.Options{
+		Env:            cfg.Env,
+		AllowedOrigins: cfg.CORSAllowedOrigins,
+		TrustedProxies: cfg.TrustedProxies,
+		MaxBodyBytes:   cfg.MaxBodyBytes,
+		HSTS:           cfg.EnableHSTS,
+	})
+	if err != nil {
+		logger.Error("invalid router configuration", slog.Any("error", err))
+		os.Exit(1)
+	}
 	router.RegisterHealth(r, deps.HealthCheckers())
 	registerRoutes(r, deps, cfg)
 
-	srv := &http.Server{
-		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
-		Handler:           r,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	srv := router.NewServer(fmt.Sprintf(":%d", cfg.HTTPPort), r, router.ServerOptions{
+		ReadTimeout:  cfg.HTTPReadTimeout,
+		WriteTimeout: cfg.HTTPWriteTimeout,
+		IdleTimeout:  cfg.HTTPIdleTimeout,
+	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

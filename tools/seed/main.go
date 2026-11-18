@@ -49,6 +49,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Every account this tool creates, the admin included, has the same
+	// publicly documented password (seedPassword). Pointed at a real
+	// environment that is a known admin login, so refuse to run anywhere but
+	// development. APP_ENV defaults to "development" when unset.
+	if cfg.Env != "development" {
+		logger.Error("refusing to seed: this tool creates accounts with a known password and only runs when APP_ENV=development",
+			slog.String("app_env", cfg.Env))
+		os.Exit(1)
+	}
+
 	gdb, err := db.Open(cfg.Postgres)
 	if err != nil {
 		logger.Error("failed to connect to postgres", slog.Any("error", err))

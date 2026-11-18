@@ -1,5 +1,7 @@
 # Findings from the adversarial test phase
 
+> **Status update (2026-11-17, later the same day): all 36 findings are fixed** on branch `refactor/module-split-fixes`, by four fixing sessions with non-overlapping directory ownership, merged and verified (full suite green; every reproducer now passes and is a regular regression test with its original name). The register below is kept as the record of what was found. Read the section "How each was fixed, and what is still imperfect" at the end for the design choices and the trade-offs that remain. The original text, which says nothing is fixed, describes the state when the register was written.
+
 **Date:** 2026-11-17 · **Companion to:** `docs/plans/module-split.md` (phase 5), `docs/plans/module-split-assessment.md`
 
 ## Purpose
@@ -12,7 +14,7 @@ Two separate testing sessions, one on behaviour and concurrency and one on secur
 - **Verification:** the full default suite passes with all the new tests merged. Reproducers live behind the build tag `bugrepro` and **fail today by design**; run one with `cd services/course && go test -tags='integration bugrepro' -run <Name> ./enrollment/`. Three of the reproducers (F-01, F-06, F-08) were re-run independently by the lead and failed with exactly the described symptom; the rest are the testers' reports.
 - **F-01 was found independently by both testers** (the behaviour tester and the security tester reached it from different directions), which raises confidence in it.
 - **Reachability caveat:** no production code creates a second course version today (only `CreateCourse` creates a version), so findings that need a republish (F-07, and the republish halves of F-08 and F-20) are reachable only through direct SQL until a republish feature exists. They are latent defects in code that will matter once republish lands. F-08's other half (a failed first publish leaving the course searchable) is reachable today.
-- 36 open findings: 3 high, 16 medium, 2 low-medium, 14 low, 1 informational. Two further issues the testers found in this repository's own guard scripts were fixed (listed at the end).
+- 36 open findings at the time of writing: 3 high, 16 medium, 2 low-medium, 14 low, 1 informational. A 37th (F-37, below) was reported afterwards by the supervisor; all 37 are now fixed. Two further issues the testers found in this repository's own guard scripts were fixed (listed at the end).
 
 ## High
 
@@ -97,3 +99,85 @@ The testers also recorded what they attacked that did not break, which is what t
 ## Not tested
 
 A real Temporal server (only the test environment and a fake client); a true `kill -9` of the relay; a non-UTC database session timezone; Redis down entirely for the data path; real network behaviour (slow bodies, real proxy topology); MinIO and asset-key handling (no upload code exists); dependency CVE scanning; container runtime hardening beyond a static scan.
+
+## How each was fixed, and what is still imperfect
+
+All reproducers lost their `bugrepro` build tag and run in the default suite. None of the fixes needed a new config variable except the hardening settings in `env.example`; two needed a migration or none (see below). The fixers were told to report anything that was a judgment call; those are listed here so they can be overruled.
+
+| ID | Fix | Caveat or decision to confirm |
+|---|---|---|
+| F-01 | `Withdraw` decrements the count and emits its event only if the guarded `UPDATE` changed a row; ADR-0012's course-row lock is untouched | none |
+| F-02 | Gin trusts no proxy by default; new `TRUSTED_PROXIES` setting (IPs/CIDRs); an invalid entry stops the service starting | **A deployment behind a load balancer must set `TRUSTED_PROXIES`**, or every client shares the proxy's address and per-IP limits become global |
+| F-03 | On a Redis miss the middleware reads `users.token_version` from Postgres through a new `auth.TokenVersionSource` and writes it back with `SET NX` (so a concurrent role change is never overwritten); Redis errors still fail closed | direct SQL that suspends a user without bumping `token_version` is caught only on a Redis miss |
+| F-04 | Each relay worker claims one row (`FOR UPDATE SKIP LOCKED LIMIT 1`) in its own transaction, held through handling and the mark-published; no schema change | each worker now holds one extra DB connection while handling, so the pool needs about 2x the worker count; `WithBatchSize` is kept but is a no-op. See ADR-0027 |
+| F-05 | `recover()` around handler execution; a panic is logged with the stack and counted as a failed delivery | none |
+| F-06 | `MarkComplete` locks the enrollment row (not the course row, so no deadlock with `Withdraw`) | none |
+| F-07 | Missing progress rows for the published version are created lazily in `MarkComplete`; `GetProgress` shows lessons without a row as incomplete | none |
+| F-08 | Search joins on the published version and returns the live enrollment count; promotion refreshes the index in its own transaction | kept the IndexSearch-before-Promote order rather than indexing after promote (which would change the workflow graph) |
+| F-09 | `enrollment_mirror` gets a `last_event_id` ordering guard like `user_role_mirror`; **migration** `migrations/analytics/000002_enrollment_mirror_ordering` | a withdrawal arriving first creates a placeholder row (`enrolled_at` NULL) that the enroll event fills in; the down migration deletes placeholders |
+| F-10 | `DeleteModule`/`DeleteLesson` return 409 `no_draft` for a non-draft version | none |
+| F-11 | `RequireFreshPrivilege` on all instructor write routes; `/me` uses the same check | one Redis `GET` per instructor write; fails closed with 503 if Redis is down |
+| F-12 | Outside development, `Load` rejects known placeholder keys and keys with low entropy; the error never echoes the key | `APP_ENV` defaults to `development` when unset, so a deployment that forgets to set it stays lenient. **Set `APP_ENV` explicitly in every real deployment** |
+| F-13 | `/health/ready` returns only `ok`/`failed` per dependency; detail goes to the log | response body shape changed |
+| F-14 | One conditional `UPDATE ... WHERE used_at IS NULL ... RETURNING` inside the same transaction | none |
+| F-15 | Per-IP limits on every unauthenticated identity route; a per-address email budget (5/hour, silent over budget so it cannot probe addresses); a new reset or verification token invalidates earlier unused ones | the limits (reset 5/min, refresh 60/min, and so on) are the fixer's choices |
+| F-16 | New `httpx.MaxBodyBytes` (1 MiB default, `MAX_BODY_BYTES`) and `router.NewServer` setting read/write/idle timeouts (15s/30s/120s) | defaults are the fixer's choices; 413 `PAYLOAD_TOO_LARGE` is new |
+| F-17 | NUL bytes rejected (400); lesson content depth capped at 32; integer upper bounds; LIKE metacharacters escaped; Postgres 22021/22003/23514 map to 400 | **the bounds are the fixer's choice and need confirming**: `enrollment_limit` 1,000,000, `position` 100,000, `duration_s` 86,400, category 100 chars, tag 50, asset_key 500. The `total_duration_s` column is a 32-bit INT, so a very large number of lessons could still overflow its sum (error ignored, as before) |
+| F-18 | Rule given by the project owner: any authenticated user may read platform totals; per-course stats: admin any course, instructor any course, student only a course they have an active or completed enrollment in (from analytics' own mirror); everyone else 404 | **instructor ownership is not enforced** (the `course_published` event carries no instructor id), so an instructor can read any course. Enforcing it needs `instructor_id` in that event's payload, a mirror column and a backfill. A withdrawn student gets 404 (the fixer's choice) |
+| F-19 | `tools/seed` refuses to run unless `APP_ENV=development` | none |
+| F-20 | `GetPublishedDetail` overlays live `enrollment_count`/`enrollment_limit` on the cached payload | none |
+| F-21 | `Publish` returns 409 `course_archived`; `PromoteAndPublish` refuses and emits nothing | the activity error is retryable, so Temporal retries it up to 5 times before failing the workflow |
+| F-22 | One `course_completed` event, guarded by the row lock and the `UPDATE`'s row count | none |
+| F-23 | `PromoteAndPublish` takes the course row lock and checks idempotency inside the transaction | none |
+| F-24 | `IncrementDailyEnrollment` buckets by the payload's `enrolled_at` in UTC | none |
+| F-25 | `ValidateMetadata` requires at least one lesson | none |
+| F-26 | `ARGON2_*` and TTLs range-validated before narrowing (memory 8 to 1,048,576 KiB, iterations 1 to 100, parallelism 1 to 64, TTLs > 0) | **argon2 concurrency is still unbounded** (the register mentioned it; the item only asked for range validation), so a flood of logins can still use a lot of memory |
+| F-27 | Unknown `lesson_key` returns 404 `lesson_not_found` | was 204 |
+| F-28 | `outbox.last_error` and the final attempt count are persisted on failure and give-up | there is still **no dead-letter store** |
+| F-29 | `httpx.SecurityHeaders` (nosniff, X-Frame-Options DENY, Referrer-Policy, a restrictive CSP, `Cache-Control: no-store`); HSTS only over TLS or with `HSTS_ENABLED=true`; client `X-Request-Id` kept only if 1-64 chars of `[A-Za-z0-9._-]` | none |
+| F-30 | The dummy hash is built from the configured Argon2 parameters | none |
+| F-31 | Only failures count; 5/min per account+IP and 20/min per account across all IPs, both checked before verifying the password | the all-IP cap went from 5 to 20 so the owner is not locked out by five failures from elsewhere; **a distributed attacker can still push an account to 20 failures a minute and block its logins from every IP for that minute**, which is inherent to a stuffing cap |
+| F-32 | Register answers 202 with the same body whether or not the email exists (new: verification email; existing: password-reset email); a suspended or deleted account answers login like a wrong password | **API contract change** (was 201 with tokens, 409 for an existing email); a small timing difference remains between the new-email and existing-email paths |
+| F-33 | The existence check runs first inside the transaction; a change that would leave no active admin returns 409 `last_admin` (serialised with an advisory lock) | self-demotion is allowed when another active admin exists (a legitimate handover) |
+| F-34 | Final stage runs as uid 10001; build image pinned to `golang:1.26.5-alpine` | none |
+| F-35 | All 18 published compose ports bind to `127.0.0.1` | developer stack only |
+| F-36 | A non-owner of an existing course gets 404 `not_found`, identical to an unknown id | **API contract change** (was 403 `not_owner`); admins have no instructor write access, as before |
+
+### Judgment calls: confirmed
+
+The project owner reviewed the caveats above on 2026-11-18 and accepted them (integer bounds, rate-limit numbers, 404 for a withdrawn student on analytics, self-demotion when another admin exists, body and timeout defaults). They are recorded as DR-022 in `docs/rfc/differences-from-requirements.md`. The supervisor has not yet reviewed them; the module-split PRs are where she can.
+
+### Tests changed to fit the fixes
+
+Tests that pinned the old behaviour were updated, with the reason recorded in the commit: the three 403 `not_owner` tests became 404; analytics HTTP tests that used student tokens against any course now use instructor tokens; the register tests now expect 202 and then log in; `TestSecurity_RateLimit_AccountLimit_StopsDistributedStuffing` uses 20 failures across 20 IPs; `TestSecurity_RefreshForSuspendedUser_IsDenied_AndLoginToo` expects 401 on login. The identity security harness now serves on the real `libs/router` stack so the router-level fixes (F-02, F-16) are tested end to end.
+
+### Still open, by design
+
+Instructor ownership of analytics (F-18), argon2 concurrency (F-26), a dead-letter store (F-28), and the follow-ups noted above. None blocks the findings being closed; each is listed so it is not forgotten.
+
+## Reported by the supervisor after the scan (2026-11-17)
+
+The supervisor's Week 2 review raised two points: set the publishing state before starting the workflow and return 409 if a publish is already running, and withdraw can still double-decrement the seat count. Whether the QA scan had already covered each was checked against the code, not assumed.
+
+| Point | Covered by the scan? | Status |
+|---|---|---|
+| **Withdraw can double-decrement the seat count** | **Yes: F-01**, found independently by both testers. The review most likely observed the pre-fix Week 2 code | Fixed. Re-verified on the current code: `Withdraw` decrements only when its guarded `UPDATE` changed a row, under the course row lock; the course-archive handler, the only other decrement, locks the same row and decrements by rows actually changed. The double-withdraw, churn and archive-race tests pass three times in a row with `-race` |
+| **Set the publishing state before starting the workflow; 409 if a publish is already running** | **No.** Not in the register. The scan's publish test asserted that 20 concurrent calls share one workflow ID, which encoded the old attach-and-202 behaviour instead of questioning it | **F-37, fixed (ADR-0028).** See below |
+
+### F-37 — publish wrote its state after starting the workflow, and never refused a duplicate (medium)
+
+- **Where:** `services/course/course/service.go` (`Publish`) and `repository.go` (`SetVersionPublishing`, now removed).
+- **What was wrong:** the workflow was started first and the `publishing` state written afterwards with an unconditional `UPDATE`. (1) A second publish while one was running attached to the running workflow and also returned 202, so a client could not tell a duplicate from a fresh publish. (2) A workflow that failed fast wrote `publish_failed` from inside an activity, and the late `publishing` write then overwrote it and cleared the error, leaving the version stuck "publishing" with a finished workflow. (3) A failed state write after a successful start left a running workflow with no record of it.
+- **Fix:** `Publish` now claims the version with one conditional `UPDATE` (`ClaimPublish`) before starting the workflow; a duplicate gets **409 `publish_in_progress`**; a failed workflow start releases the claim and restores the previous state and error; a claim older than 15 minutes is treated as abandoned and may be reclaimed. New migration `migrations/course/000006_publish_started_at` (round-trip checked up, down, up).
+- **Tests:** seven new tests in `publish_claim_integration_test.go` and `TestAdvPublish_ConcurrentPublishRequests_OneWinsRestGet409` (the old test, rewritten: exactly one of 20 concurrent calls wins, 19 get 409). Run against the old code the duplicate and fast-failing tests fail (`ok=20 conflict=0`; state overwritten to `publishing` with the error cleared), so they do detect the defect.
+- **Contract change:** a duplicate `POST /courses/{id}/publish` is now 409, not 202.
+- **Trade-offs:** the 15-minute lease is a chosen number; a process that dies between claiming and starting blocks that course's publish for up to 15 minutes. ADR-0028 records both and the trigger for replacing the lease with a Temporal liveness check.
+
+### F-38 — instructors locked out of `course-api` after a Redis restart (caused by our own fix; found in live verification)
+
+- **Found:** while smoke-testing F-37 against the real stack. After the compose stack was recreated (empty Redis, persistent Postgres), every instructor call to `course-api` returned `401 token_stale`, **including with a token issued seconds earlier**. The token's version (2) matched the database (2).
+- **Cause:** a cross-effect of two fixes. F-11 put `RequireFreshPrivilege` on all instructor write routes. That variant has no durable source (`course-api` cannot read `identity.users` under ADR-0024), so on a Redis miss it assumes version 1 and rejects any token with a higher version. F-03 repopulates Redis from Postgres only on identity's own routes. Nothing repopulated it at login, so any user whose version is above 1 (anyone ever promoted, demoted or suspended-then-restored) stayed locked out of every course write after a Redis flush, until a role change happened to rewrite the key.
+- **Why the tests missed it:** the course and security tests populate Redis themselves, and the live checks earlier in the session ran on a stack whose Redis still held the keys.
+- **Fix:** identity now seeds the user's current token version in Redis at login and at refresh, with `SET NX`, so it can never overwrite a newer value written by a role change; it is best effort and cannot fail a login. After a flush, a user holding an old token gets one `token_stale` and a re-login restores access. `course-api` stays strict (a revoked token is still refused whenever Redis holds the current version). The tempting alternative, trusting the token on a miss, was rejected: it would let a revoked token through whenever Redis is empty, which is exactly the hole F-03 closed.
+- **Tests:** three layers, because `services/course` cannot import identity. `TestFix_LoginAndRefreshAfterRedisFlush_SeedTokenVersion` (identity) covers the seeding and fails without the fix (`redis="", want 3`). `TestCourseAPI_InstructorWithVersionAboveOne_RedisFlush_RecoversOnceVersionSeeded` (`services/course/securitytest`) drives real `course-api` writes and pins the contract the seeding relies on: after a flush a version-2 token is refused with `token_stale` (never a 5xx); once the version is seeded the same token works with no role change; an older token and a demoted user's token are still refused; and `SET NX` never rolls a newer version back. It fails if the token-version check is removed (checked by mutation: the write succeeds with 201 after a flush). The end-to-end path (a real admin role change, real logins and a real refresh against real identity and course routes, after a flush) is automated in `test/e2e` (`TestE2E_InstructorAfterRedisRestart_LoginReseedsAndCourseAPIWorks`, a new module because neither service's own tests can host it). It fails when identity's seeding is disabled (checked by mutation: `login should have re-seeded the cached version (want 2), got ""`) and it confirms revocation still holds after a restart plus a re-login.
+- **Still imperfect:** between a Redis flush and a user's next login, their existing instructor token is refused on `course-api` writes (one `401 token_stale`, then re-login). A durable version source for `course-api`, for example a `token_version` column on `instructor_mirror` fed by identity events, would remove that window; it is a larger change and is not done.

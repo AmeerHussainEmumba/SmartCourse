@@ -46,8 +46,8 @@ func TestDeleteModule_RemovesModule_RejectsNonOwner(t *testing.T) {
 	other := seedInstructor(t, env)
 	if err := svc.DeleteModule(ctx, courseID, other, moduleID); err == nil {
 		t.Fatal("expected a non-owning instructor to be rejected")
-	} else if appErr, ok := apperrors.As(err); !ok || appErr.Code != "not_owner" {
-		t.Fatalf("expected not_owner error, got: %v", err)
+	} else if appErr, ok := apperrors.As(err); !ok || appErr.Code != "not_found" {
+		t.Fatalf("expected not_found error (F-36: ownership denial must not reveal existence), got: %v", err)
 	}
 
 	if err := svc.DeleteModule(ctx, courseID, instructorID, moduleID); err != nil {
@@ -129,8 +129,8 @@ func TestGetPublishStatus_RejectsNonOwner_And_NotFound(t *testing.T) {
 	other := seedInstructor(t, env)
 	if _, err := svc.GetPublishStatus(ctx, courseID, other); err == nil {
 		t.Fatal("expected a non-owning instructor to be rejected")
-	} else if appErr, ok := apperrors.As(err); !ok || appErr.Code != "not_owner" {
-		t.Fatalf("expected not_owner error, got: %v", err)
+	} else if appErr, ok := apperrors.As(err); !ok || appErr.Code != "not_found" {
+		t.Fatalf("expected not_found error (F-36: ownership denial must not reveal existence), got: %v", err)
 	}
 
 	if _, err := svc.GetPublishStatus(ctx, uuid.Must(uuid.NewV7()), instructorID); err == nil {

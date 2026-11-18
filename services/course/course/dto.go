@@ -5,22 +5,22 @@ type CreateCourseRequest struct {
 	Title           string  `json:"title" binding:"required,min=1,max=200"`
 	Slug            string  `json:"slug" binding:"required,min=1,max=200"` // format (lowercase, digits, hyphens) validated in service.go — see slugPattern
 	Description     string  `json:"description" binding:"max=10000"`
-	Category        *string `json:"category"`
+	Category        *string `json:"category" binding:"omitempty,max=100"`
 	Level           *string `json:"level" binding:"omitempty,oneof=beginner intermediate advanced"`
-	EnrollmentLimit *int    `json:"enrollment_limit" binding:"omitempty,min=1"`
+	EnrollmentLimit *int    `json:"enrollment_limit" binding:"omitempty,min=1,max=1000000"`
 }
 
 type UpdateDraftRequest struct {
 	Title       string   `json:"title" binding:"required,min=1,max=200"`
 	Description string   `json:"description" binding:"max=10000"`
-	Category    *string  `json:"category"`
+	Category    *string  `json:"category" binding:"omitempty,max=100"`
 	Level       *string  `json:"level" binding:"omitempty,oneof=beginner intermediate advanced"`
-	Tags        []string `json:"tags" binding:"max=20"`
+	Tags        []string `json:"tags" binding:"max=20,dive,max=50"`
 }
 
 type CreateModuleRequest struct {
 	Title    string `json:"title" binding:"required,min=1,max=200"`
-	Position int    `json:"position" binding:"required,min=1"`
+	Position int    `json:"position" binding:"required,min=1,max=100000"`
 }
 
 // UpdateModuleRequest only covers title — position is set once, at
@@ -34,11 +34,11 @@ type UpdateModuleRequest struct {
 
 type CreateLessonRequest struct {
 	Title       string         `json:"title" binding:"required,min=1,max=200"`
-	Position    int            `json:"position" binding:"required,min=1"`
+	Position    int            `json:"position" binding:"required,min=1,max=100000"`
 	ContentType string         `json:"content_type" binding:"required,oneof=video text pdf link"`
 	Content     map[string]any `json:"content"`
-	AssetKey    *string        `json:"asset_key"`
-	DurationS   int            `json:"duration_s" binding:"min=0"`
+	AssetKey    *string        `json:"asset_key" binding:"omitempty,max=500"`
+	DurationS   int            `json:"duration_s" binding:"min=0,max=86400"`
 }
 
 // UpdateLessonRequest mirrors repository.go's UpdateLesson column set —
@@ -54,7 +54,7 @@ type UpdateLessonRequest struct {
 	Title       string         `json:"title" binding:"required,min=1,max=200"`
 	ContentType string         `json:"content_type" binding:"required,oneof=video text pdf link"`
 	Content     map[string]any `json:"content"`
-	DurationS   int            `json:"duration_s" binding:"min=0"`
+	DurationS   int            `json:"duration_s" binding:"min=0,max=86400"`
 }
 
 type CourseResponse struct {

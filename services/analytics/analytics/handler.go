@@ -23,8 +23,33 @@ func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig) {
 	g := r.Group("/analytics")
 	g.Use(auth.RequireAuth(jwtCfg))
 	g.GET("/platform", h.getPlatformSnapshot)
-	g.GET("/courses/:id", h.getCourseStats)
-	g.GET("/courses/:id/daily-enrollments", h.listDailyEnrollments)
+	g.GET("/courses/:id", h.authorizeCourse, h.getCourseStats)
+	g.GET("/courses/:id/daily-enrollments", h.authorizeCourse, h.listDailyEnrollments)
+}
+
+// authorizeCourse gates the per-course routes (Service.CanReadCourse).
+// Denial is a 404, not 403, so a caller cannot probe which courses exist.
+func (h *Handler) authorizeCourse(c *gin.Context) {
+	courseID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(err))
+		return
+	}
+	id, ok := auth.FromContext(c.Request.Context())
+	if !ok {
+		httpx.Fail(c, apperrors.ErrUnauthorized)
+		return
+	}
+	allowed, err := h.svc.CanReadCourse(c.Request.Context(), id, courseID)
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrInternal.Wrap(err))
+		return
+	}
+	if !allowed {
+		httpx.Fail(c, apperrors.ErrNotFound)
+		return
+	}
+	c.Next()
 }
 
 func (h *Handler) getPlatformSnapshot(c *gin.Context) {
@@ -43,10 +68,9 @@ func (h *Handler) getPlatformSnapshot(c *gin.Context) {
 
 // getCourseStats backs GET /analytics/courses/{id} (FR-5: total/active
 // enrollments, completions, completion rate, average time to complete).
-// Same auth as the platform snapshot — RequireAuth only, no ownership
-// check — matching this module's existing read-only, any-authenticated-
-// caller exposure policy; it doesn't carry anything a course's catalogue
-// listing doesn't already surface in aggregate.
+// Gated by authorizeCourse: admin/instructor any course, student only an
+// enrolled course, else 404. No instructor ownership check: the events
+// carry no instructor_id.
 func (h *Handler) getCourseStats(c *gin.Context) {
 	courseID, err := uuid.Parse(c.Param("id"))
 	if err != nil {

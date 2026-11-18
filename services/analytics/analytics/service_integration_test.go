@@ -136,10 +136,10 @@ func TestListDailyEnrollments_ReturnsTimeSeries(t *testing.T) {
 	}
 
 	if err := env.DB.Transaction(func(tx *gorm.DB) error {
-		if err := analytics.IncrementDailyEnrollment(ctx, tx, courseID); err != nil {
+		if err := analytics.IncrementDailyEnrollment(ctx, tx, courseID, time.Now()); err != nil {
 			return err
 		}
-		return analytics.IncrementDailyEnrollment(ctx, tx, courseID)
+		return analytics.IncrementDailyEnrollment(ctx, tx, courseID, time.Now())
 	}); err != nil {
 		t.Fatalf("IncrementDailyEnrollment: %v", err)
 	}

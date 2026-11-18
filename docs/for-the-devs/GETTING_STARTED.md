@@ -108,7 +108,7 @@ curl -X POST localhost:8090/api/v1/auth/register \
   -d '{"email":"you@example.com","password":"correct-horse-battery","full_name":"Your Name"}'
 ```
 
-Either way you should get back an access token, a refresh token, and a user record. Courses live in `course-api`, port **8091**:
+Register answers `202` with no tokens (the same answer whether or not the email exists, so it cannot be used to discover registered emails). Log in with the same credentials to get tokens. Either way, login gives you an access token, a refresh token, and a user record. Courses live in `course-api`, port **8091**:
 
 ```bash
 curl localhost:8091/api/v1/courses
@@ -173,7 +173,7 @@ If you want to see what a real concurrency bug looks like when it's *not* caught
 
 **Eight domain modules, one shared kernel.** Each module (`services/identity/identity`, `services/course/course`, `services/course/enrollment`, `services/course/progress`, `services/analytics/analytics`, and three not yet built — search, notification, audit) owns one business capability and follows the same internal shape: `handler.go` (HTTP), `service.go` (business logic and transactions), `repository.go` (the only file touching the database directly), `dto.go` (API request/response types), `domain.go` (entities). None of them import each other's internals directly. Between services that is enforced by Go itself (each service is its own Go module, see below); inside the `course` service, where course, enrollment and progress share one module, by a lint rule rather than just convention. `services/README.md` has the full module map.
 
-**One repository, 19 Go modules (ADR-0026).** Each service is its own Go module under `services/` (`identity`, `course`, `analytics`, `worker`), the shared kernel is split into one module per package under `libs/` (`auth`, `db`, `config`, `errors`, ...), and `tools/seed` is a module too. Three things follow that will surprise you if you come from a single-module project:
+**One repository, 20 Go modules (ADR-0026).** Each service is its own Go module under `services/` (`identity`, `course`, `analytics`, `worker`), the shared kernel is split into one module per package under `libs/` (`auth`, `db`, `config`, `errors`, ...), and `tools/seed` is a module too. Three things follow that will surprise you if you come from a single-module project:
 
 - **A service can only import what its `go.mod` lists.** `identity` cannot import `course` — not because a linter says so, but because it doesn't depend on it. `scripts/check-module-graph.sh` fails CI if that changes. The `worker` is the one service allowed to depend on others (it runs `course` and `analytics` event handlers and the publish workflow).
 - **Each binary links only what it uses.** `identity-api` has no Temporal SDK in it. `scripts/check-link-graph.sh` enforces that. This is what the Week 2 review asked for.

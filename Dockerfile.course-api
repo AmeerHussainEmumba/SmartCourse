@@ -6,7 +6,7 @@
 # step with the module's go.mod `replace` directives — GOWORK=off below means
 # a missing module fails this build instead of being papered over by go.work.
 # Build context is the repo root: docker build -f Dockerfile.course-api .
-FROM golang:1-alpine AS build
+FROM golang:1.26.5-alpine AS build
 ENV GOWORK=off CGO_ENABLED=0
 WORKDIR /src
 COPY libs/auth ./libs/auth
@@ -28,7 +28,9 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     go build -trimpath -o /out/course-api ./cmd/course-api
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates
+# Run as an unprivileged user: a compromise of the service should not be root in the container.
+RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 app
+USER app
 COPY --from=build /out/course-api /usr/local/bin/course-api
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/course-api"]

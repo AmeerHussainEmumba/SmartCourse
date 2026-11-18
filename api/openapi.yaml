@@ -9,12 +9,31 @@ info:
     error shape, Idempotency-Key) and docs/rfc/smartcourse-prd.md for
     product context. Publishing workflow status (M2, ADR-0025) is built —
     see POST/GET on /courses/{id}/publish[-status] and GET /courses/search
-    below. 7 of FR-5's 10 analytics metrics are live — see /analytics/*
+    below. 7 of FR-5's 9 analytics metrics are live (DR-021) — see /analytics/*
     below (DR-017: the last two of these had been computed since ADR-0024
     but had no read path until this spec caught up to reality). Endpoints
     not yet built (certificates, "Most Popular Courses"/"Failed Events"
     analytics, admin/audit beyond role change) are not listed here — an
     absent path means "not built yet," not "undocumented."
+
+    Cross-cutting behaviour (all services). Request bodies are capped at
+    1 MiB by default (413 PAYLOAD_TOO_LARGE; MAX_BODY_BYTES). Every response
+    carries security headers (X-Content-Type-Options: nosniff,
+    X-Frame-Options: DENY, Referrer-Policy: no-referrer, a restrictive
+    Content-Security-Policy, Cache-Control: no-store; HSTS only over TLS or
+    when HSTS_ENABLED=true). A client X-Request-Id is honoured only if it is
+    1-64 characters of [A-Za-z0-9._-]; otherwise one is generated. A caller
+    who does not own a course, module or lesson gets 404, never 403, so
+    existence is not leaked. Instructor write routes check the caller's
+    token version, so a demoted or suspended user's old access token is
+    refused (token_stale), and the check fails closed with 503 if Redis is
+    unreachable. Text fields reject NUL characters (400 validation_failed).
+    The unauthenticated identity routes (register, refresh, logout, password
+    reset and email verification) are rate limited per IP, and the routes
+    that send email also per address (429; going over the per-address budget
+    is silent so it cannot be used to probe addresses).
+    GET /health/ready reports per-dependency "ok"/"failed" only; the detail
+    goes to the service log, not the response.
 servers:
   # One spec, three backing processes (ADR-0023) — route paths and
   # shapes didn't change, only which service answers them. Pick the
@@ -32,15 +51,22 @@ servers:
 paths:
   /auth/register:
     post:
-      summary: Register a new student account
+      summary: >
+        Register a new student account. Answers 202 with the same body
+        whether or not the email already exists, so the endpoint cannot be
+        used to find out which emails are registered (F-32). A new address
+        gets a verification email; an existing one gets a password-reset
+        email. No tokens are returned: call /auth/login afterwards (login
+        does not require a verified email). Previously 201 with an
+        AuthResponse, and 409 email_taken for an existing address.
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/RegisterRequest' }
       responses:
-        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResponse' } } } }
-        '409': { description: Email already registered, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '202': { description: Accepted, content: { application/json: { schema: { type: object, properties: { message: { type: string } } } } } }
+        '429': { description: Too many requests from this IP, or too many emails to this address, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /auth/login:
     post:
@@ -52,8 +78,8 @@ paths:
             schema: { $ref: '#/components/schemas/LoginRequest' }
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AuthResponse' } } } }
-        '401': { description: Invalid credentials, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '403': { description: Account suspended, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: "Invalid credentials. A suspended or deleted account answers exactly like a wrong password, so the status cannot be used to confirm a password (F-32).", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '429': { description: "Too many failed attempts: 5 per minute per account+IP, 20 per minute per account across all IPs. Only failures count.", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /auth/refresh:
     post:
@@ -152,6 +178,8 @@ paths:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
         '401': { description: "Token stale — token_version mismatch (ADR-0015 addendum)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '403': { description: Not an admin, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: "Unknown user id. Nothing is written (no cache key, no outbox event).", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: "last_admin: the change would leave the platform with no active admin", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /courses:
     get:
@@ -193,7 +221,7 @@ paths:
         content: { application/json: { schema: { $ref: '#/components/schemas/UpdateDraftRequest' } } }
       responses:
         '200': { description: OK }
-        '403': { description: Not the owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: "Course not found, or not owned by the caller (a non-owner gets the same 404 as an unknown id so existence is not leaked; ADR-0026 phase 5, F-36)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /courses/{id}/modules:
     post:
@@ -265,14 +293,18 @@ paths:
       summary: >
         Start publishing the draft (instructor, owner only). Async as of M2
         (ADR-0025): starts services/course/workflows.PublishCourseWorkflow and
-        returns immediately. A duplicate call while one is already running
-        attaches to it (same workflow ID) rather than starting a second
-        one. Poll GET /courses/{id}/publish-status for the result.
+        returns immediately. The draft is claimed (state publishing) before
+        the workflow starts, so a duplicate call while a publish is running
+        gets 409 publish_in_progress instead of attaching to it (ADR-0028).
+        If the workflow cannot be started (503) the claim is released and the
+        call can simply be retried. Poll GET /courses/{id}/publish-status for
+        the result.
       security: [{ bearerAuth: [] }]
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         '202': { description: Publish workflow started, content: { application/json: { schema: { $ref: '#/components/schemas/PublishAccepted' } } } }
-        '409': { description: "No draft to publish", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: "Course not found, or not owned by the caller", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: "No draft to publish (no_draft), the course is archived (course_archived), or a publish is already running for it (publish_in_progress)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /courses/{id}/publish-status:
     get:
@@ -286,8 +318,7 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PublishStatus' } } } }
-        '403': { description: Not the owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '404': { description: Course has never had a draft or a published version, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: "Course has never had a draft or a published version, or is not owned by the caller (same 404 either way)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /courses/search:
     get:
@@ -315,11 +346,13 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         '204': { description: No Content }
-        '403': { description: Not the owner, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: "Course not found, or not owned by the caller (a non-owner gets the same 404 as an unknown id so existence is not leaked; ADR-0026 phase 5, F-36)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /analytics/platform:
     get:
-      summary: Platform-wide totals (SmartCourse.md FR-5) — total students/instructors/courses published, average courses per student
+      summary: >
+        Platform-wide totals (SmartCourse.md FR-5) — total students/instructors/courses published, average courses per student.
+        Aggregate numbers only (no per-person data): any authenticated user may read them.
       security: [{ bearerAuth: [] }]
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformSnapshot' } } } }
@@ -331,14 +364,23 @@ paths:
         to complete) — zeros if the course has never been published, not a
         404 (this schema never queries services/course/course directly, ADR-0024,
         so it can't distinguish "never published" from "doesn't exist").
+        Access: admins and instructors may read any course; a student may
+        read it only if they have an active or completed enrollment in it
+        (from analytics' own enrollment mirror). Everyone else gets 404, not
+        403, so a course's existence is not leaked. (Instructor ownership is
+        not yet enforced: the course_published event carries no instructor id.)
       security: [{ bearerAuth: [] }]
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CourseStats' } } } }
+        '404': { description: "Caller is a student without an active or completed enrollment in the course", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /analytics/courses/{id}/daily-enrollments:
     get:
-      summary: One course's daily enrollment counts (FR-5 — "New Enrollments Over Time"), oldest first.
+      summary: >
+        One course's daily enrollment counts (FR-5 — "New Enrollments Over Time"), oldest first,
+        bucketed by the enrollment's UTC day. Same access rule as GET /analytics/courses/{id}:
+        admins and instructors any course, a student only a course they are enrolled in, otherwise 404.
       security: [{ bearerAuth: [] }]
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
@@ -398,7 +440,9 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: lessonKey, in: path, required: true, schema: { type: string, format: uuid }, description: "lessons.lesson_key — NOT lessons.id (ADR-0011)" }
-      responses: { '204': { description: No Content } }
+      responses:
+        '204': { description: No Content }
+        '404': { description: "Enrollment not found or not yours, or lessonKey is not a lesson of the published version (lesson_not_found). Previously 204 for an unknown key.", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
 components:
   securitySchemes:

@@ -19,8 +19,11 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -76,14 +79,12 @@ type Relay struct {
 
 	handlers []Handler
 
-	// inFlight is a legitimately process-local set (RFC §10.3): which
-	// outbox rows THIS relay instance currently has a worker on. Guarded
-	// by a plain sync.Mutex rather than Redis deliberately — unlike the
-	// rate limiter or the token-version cache, no OTHER replica needs to
-	// see this; it exists only to stop this process's own next poll tick
-	// from re-claiming a row its own worker hasn't finished yet.
-	inFlightMu sync.Mutex
-	inFlight   map[int64]bool
+	// cooldown is process-local (RFC §10.3): rows THIS instance just failed
+	// to deliver and when it may retry them, so a failing row is not
+	// re-claimed in a hot loop. Cross-replica safety comes from the row
+	// lock held for the whole delivery.
+	cooldownMu sync.Mutex
+	cooldown   map[int64]time.Time
 
 	processed atomic.Int64
 	failed    atomic.Int64
@@ -108,7 +109,7 @@ func New(db *gorm.DB, opts ...Option) *Relay {
 		batchSize:    100,
 		workerCount:  4,
 		maxAttempts:  5,
-		inFlight:     make(map[int64]bool),
+		cooldown:     make(map[int64]time.Time),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -129,170 +130,183 @@ func (r *Relay) Stats() (processed, failed, givenUp int64) {
 	return r.processed.Load(), r.failed.Load(), r.givenUp.Load()
 }
 
-// Run polls until ctx is cancelled. Bounded worker pool (SmartCourse.md
-// §7 — "Fixed-size worker pools... preventing resource exhaustion"): a
-// fixed number of goroutines read from jobs, a buffered channel the
-// poller writes to. Backpressure is structural, not a separate mechanism
-// bolted on: if every worker is busy, the channel fills, and the poller's
-// send blocks until a worker frees up, rather than an unbounded in-memory
-// queue growing during a spike (§7's specific ask).
+// Run drains the outbox until ctx is cancelled. Bounded worker pool
+// (SmartCourse.md §7 — "Fixed-size worker pools... preventing resource
+// exhaustion"): a fixed number of workers, each claiming one row at a time.
 //
-// Shutdown is graceful (§7 — "Graceful worker shutdown"): on
-// cancellation, the poll loop stops claiming new work, closes jobs once
-// nothing more will be sent, and a sync.WaitGroup blocks Run's return
-// until every in-flight worker finishes its current event. A kill mid-job
-// is still safe (at-least-once delivery + idempotent handlers), just
-// wasteful — RFC §10.2's exact reasoning for why every pool here drains
-// rather than dying abruptly.
+// Shutdown is graceful (§7 — "Graceful worker shutdown"): on cancellation,
+// workers stop claiming new rows and a sync.WaitGroup blocks Run's return
+// until every worker finishes the event it is on. A kill mid-job is still
+// safe (at-least-once delivery + idempotent handlers), just wasteful.
 func (r *Relay) Run(ctx context.Context) {
-	jobs := make(chan DecodedEvent, r.batchSize)
 	var wg sync.WaitGroup
-
 	for i := 0; i < r.workerCount; i++ {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			r.worker(ctx, workerID, jobs)
+			r.worker(ctx, workerID)
 		}(i)
 	}
+	<-ctx.Done()
+	wg.Wait()
+	p, f, g := r.Stats()
+	slog.Info("relay stopped", slog.Int64("processed", p), slog.Int64("failed", f), slog.Int64("given_up", g))
+}
 
-	ticker := time.NewTicker(r.pollInterval)
-	defer ticker.Stop()
-
-	for {
+// worker claims ONE unpublished row at a time inside its own transaction and
+// keeps that transaction (and so the FOR UPDATE row lock) open until the
+// handlers have run and the row is marked published (or its attempt count
+// and last_error recorded). This is what makes SKIP LOCKED actually protect
+// processing across replicas (ADR-0006, F-04): a second replica skips the
+// row for as long as the first is handling it. The pool is bounded by
+// workerCount (each worker holds one connection for the claim plus the
+// handlers' own transactions), and backpressure is structural: a worker
+// takes no new row until it finishes the current one.
+//
+// Graceful shutdown: ctx only stops a worker from claiming NEW rows. Once a
+// row is claimed, delivery runs on a context detached from cancellation
+// (bounded by a timeout) so the commit that records the result cannot fail
+// with "context canceled" at the moment the work is done.
+func (r *Relay) worker(ctx context.Context, id int) {
+	for ctx.Err() == nil {
+		claimed, err := r.claimAndProcess(ctx)
+		if err != nil {
+			slog.Error("relay poll failed", slog.Int("worker", id), slog.Any("error", err))
+		}
+		if claimed && err == nil {
+			continue // more work may be waiting; don't sleep
+		}
 		select {
 		case <-ctx.Done():
-			close(jobs)
-			wg.Wait()
-			p, f, g := r.Stats()
-			slog.Info("relay stopped", slog.Int64("processed", p), slog.Int64("failed", f), slog.Int64("given_up", g))
 			return
-		case <-ticker.C:
-			r.pollAndDispatch(ctx, jobs)
+		case <-time.After(r.pollInterval):
 		}
 	}
 }
 
-func (r *Relay) pollAndDispatch(ctx context.Context, jobs chan<- DecodedEvent) {
-	events, err := r.poll(ctx)
+type outboxRow struct {
+	ID            int64
+	EventID       uuid.UUID
+	AggregateType string
+	AggregateID   uuid.UUID
+	EventType     string
+	SchemaVersion int
+	Payload       []byte
+	OccurredAt    time.Time
+	Attempts      int
+}
+
+// claimAndProcess returns claimed=true when a row was found and delivered
+// (successfully or not).
+func (r *Relay) claimAndProcess(ctx context.Context) (claimed bool, err error) {
+	if ctx.Err() != nil {
+		return false, nil
+	}
+	workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+
+	tx := r.db.WithContext(workCtx).Begin()
+	if tx.Error != nil {
+		return false, fmt.Errorf("begin claim tx: %w", tx.Error)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
+
+	skip := r.activeCooldowns()
+	q := `SELECT id, event_id, aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at, attempts
+		FROM outbox WHERE published_at IS NULL`
+	args := []any{}
+	if len(skip) > 0 {
+		q += ` AND id NOT IN ?`
+		args = append(args, skip)
+	}
+	q += ` ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`
+	var rows []outboxRow
+	if err := tx.Raw(q, args...).Scan(&rows).Error; err != nil {
+		return false, fmt.Errorf("poll outbox: %w", err)
+	}
+	if len(rows) == 0 {
+		return false, nil
+	}
+	row := rows[0]
+	evt := DecodedEvent{
+		OutboxID: row.ID, EventID: row.EventID, AggregateType: row.AggregateType,
+		AggregateID: row.AggregateID, EventType: row.EventType, SchemaVersion: row.SchemaVersion,
+		Payload: row.Payload, OccurredAt: row.OccurredAt, Attempts: row.Attempts,
+	}
+
+	if lastErr := r.process(workCtx, evt); lastErr != nil {
+		err = r.recordFailure(tx, evt, lastErr)
+	} else {
+		err = tx.Exec(`UPDATE outbox SET published_at = ? WHERE id = ?`, time.Now().UTC(), evt.OutboxID).Error
+		if err == nil {
+			r.processed.Add(1)
+		}
+	}
 	if err != nil {
-		slog.Error("relay poll failed", slog.Any("error", err))
-		return
+		return true, fmt.Errorf("record result for outbox %d: %w", evt.OutboxID, err)
 	}
-	for _, evt := range events {
-		select {
-		case jobs <- evt:
-		case <-ctx.Done():
-			return
+	if err := tx.Commit().Error; err != nil {
+		return true, fmt.Errorf("commit claim tx: %w", err)
+	}
+	committed = true
+	return true, nil
+}
+
+func (r *Relay) activeCooldowns() []int64 {
+	r.cooldownMu.Lock()
+	defer r.cooldownMu.Unlock()
+	now := time.Now()
+	var ids []int64
+	for id, until := range r.cooldown {
+		if now.After(until) {
+			delete(r.cooldown, id)
+			continue
 		}
+		ids = append(ids, id)
 	}
+	return ids
 }
 
-// poll claims up to batchSize unpublished rows this relay instance hasn't
-// already got a worker on. FOR UPDATE SKIP LOCKED (ADR-0006) is what lets
-// multiple relay REPLICAS drain the outbox concurrently without
-// double-processing a row or blocking each other — that guarantee holds
-// regardless of how many relay processes are running. inFlight closes the
-// narrower gap WITHIN one process, between "claimed" and "a worker
-// finished it": the claiming transaction commits immediately rather than
-// staying open for the full processing duration, because holding it open
-// would force every worker through one serialized connection, defeating
-// the point of a pool.
-func (r *Relay) poll(ctx context.Context) ([]DecodedEvent, error) {
-	type row struct {
-		ID            int64
-		EventID       uuid.UUID
-		AggregateType string
-		AggregateID   uuid.UUID
-		EventType     string
-		SchemaVersion int
-		Payload       []byte
-		OccurredAt    time.Time
-		Attempts      int
-	}
-	var rows []row
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return tx.Raw(`
-			SELECT id, event_id, aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at, attempts
-			FROM outbox WHERE published_at IS NULL ORDER BY id
-			LIMIT ? FOR UPDATE SKIP LOCKED`, r.batchSize).Scan(&rows).Error
-	})
-	if err != nil {
-		return nil, fmt.Errorf("poll outbox: %w", err)
-	}
-
-	r.inFlightMu.Lock()
-	defer r.inFlightMu.Unlock()
-
-	out := make([]DecodedEvent, 0, len(rows))
-	for _, row := range rows {
-		if r.inFlight[row.ID] {
-			continue // a previous poll tick's worker still has this one
-		}
-		r.inFlight[row.ID] = true
-		out = append(out, DecodedEvent{
-			OutboxID: row.ID, EventID: row.EventID, AggregateType: row.AggregateType,
-			AggregateID: row.AggregateID, EventType: row.EventType, SchemaVersion: row.SchemaVersion,
-			Payload: row.Payload, OccurredAt: row.OccurredAt, Attempts: row.Attempts,
-		})
-	}
-	return out, nil
-}
-
-// worker processes each job with a context DETACHED from ctx's
-// cancellation, not ctx itself. This is the subtle half of "graceful
-// shutdown": once a job has been pulled off the channel, letting the
-// handler's Go code finish isn't enough if the context it's handed is
-// already cancelled — the transaction committing processed_events and
-// marking the outbox row published would fail with "context canceled" at
-// exactly the moment the work is otherwise done, which is worse than not
-// draining at all: it looks graceful (the handler ran) while silently
-// losing the result. context.WithoutCancel keeps any request-scoped
-// values but drops the cancellation signal; the timeout bounds how long a
-// genuinely stuck handler can delay shutdown.
-func (r *Relay) worker(ctx context.Context, id int, jobs <-chan DecodedEvent) {
-	for evt := range jobs {
-		workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		r.process(workCtx, evt)
-		cancel()
-		r.inFlightMu.Lock()
-		delete(r.inFlight, evt.OutboxID)
-		r.inFlightMu.Unlock()
-	}
-}
-
-// process runs every registered handler for evt.EventType. One handler's
-// failure doesn't block another's (RFC §4.6 — "A failure in one consumer
-// never blocks another"): each runs in its own transaction with its own
+// process runs every registered handler for evt.EventType and returns a
+// non-nil error summarising failures. One handler's failure doesn't block
+// another's (RFC §4.6): each runs in its own transaction with its own
 // idempotency check.
-func (r *Relay) process(ctx context.Context, evt DecodedEvent) {
-	anyFailed := false
+func (r *Relay) process(ctx context.Context, evt DecodedEvent) error {
+	var errs []error
 	for _, h := range r.handlers {
 		if !h.EventTypes[evt.EventType] {
 			continue
 		}
 		if err := r.runOne(ctx, h, evt); err != nil {
-			anyFailed = true
+			errs = append(errs, fmt.Errorf("%s: %w", h.ConsumerName, err))
 			r.failed.Add(1)
 			slog.Error("relay handler failed",
 				slog.String("consumer", h.ConsumerName), slog.String("event_type", evt.EventType),
 				slog.Int64("outbox_id", evt.OutboxID), slog.Any("error", err))
 		}
 	}
-	if anyFailed {
-		r.bumpAttempts(ctx, evt)
-		return
-	}
-	r.processed.Add(1)
-	r.markPublished(ctx, evt.OutboxID)
+	return errors.Join(errs...)
 }
 
 // runOne is RFC §6.6's idempotency rule, concretely: check
 // processed_events before acting, write the marker in the SAME
-// transaction as the handler's own effect — so a replayed event (this
-// relay retries on failure; a future Kafka consumer retries on redelivery)
-// cannot double-apply.
-func (r *Relay) runOne(ctx context.Context, h Handler, evt DecodedEvent) error {
+// transaction as the handler's own effect — so a replayed event cannot
+// double-apply. A panic in the handler is recovered and reported as a
+// failed delivery (F-05); the surrounding transaction is rolled back.
+func (r *Relay) runOne(ctx context.Context, h Handler, evt DecodedEvent) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			slog.Error("relay handler panicked",
+				slog.String("consumer", h.ConsumerName), slog.Int64("outbox_id", evt.OutboxID),
+				slog.Any("panic", p), slog.String("stack", string(debug.Stack())))
+			err = fmt.Errorf("handler panic: %v", p)
+		}
+	}()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var already int64
 		if err := tx.Raw(`SELECT count(*) FROM processed_events WHERE consumer_name = ? AND event_id = ?`,
@@ -310,29 +324,29 @@ func (r *Relay) runOne(ctx context.Context, h Handler, evt DecodedEvent) error {
 	})
 }
 
-func (r *Relay) markPublished(ctx context.Context, outboxID int64) {
-	now := time.Now().UTC()
-	if err := r.db.WithContext(ctx).Exec(`UPDATE outbox SET published_at = ? WHERE id = ?`, now, outboxID).Error; err != nil {
-		slog.Error("relay: failed to mark outbox row published", slog.Int64("outbox_id", outboxID), slog.Any("error", err))
-	}
-}
+const maxLastErrorLen = 2000
 
-// bumpAttempts is the retry mechanism (SmartCourse.md §7 — "Retry
-// mechanisms"). No dead-letter store exists yet (MongoDB failed_events is
-// M3 scope, RFC §21.0), so exceeding maxAttempts means giving up by
-// marking the row published anyway — an honest limitation, logged loudly
-// at ERROR, not a silent swallow. A future consumer replacing today's
-// in-process handler regains real dead-lettering for free (RFC §6.9).
-func (r *Relay) bumpAttempts(ctx context.Context, evt DecodedEvent) {
+// recordFailure is the retry mechanism (SmartCourse.md §7). It persists the
+// attempt count and last_error in the claim transaction. No dead-letter
+// store exists yet (MongoDB failed_events is M3 scope, RFC §21.0), so
+// exceeding maxAttempts means giving up by marking the row published
+// anyway — logged loudly at ERROR, with the reason kept in last_error.
+func (r *Relay) recordFailure(tx *gorm.DB, evt DecodedEvent, cause error) error {
 	attempts := evt.Attempts + 1
+	msg := cause.Error()
+	if len(msg) > maxLastErrorLen {
+		msg = msg[:maxLastErrorLen]
+	}
+	msg = strings.ToValidUTF8(msg, "")
 	if attempts >= r.maxAttempts {
 		r.givenUp.Add(1)
 		slog.Error("relay: giving up on event after max attempts",
 			slog.String("event_type", evt.EventType), slog.Int64("outbox_id", evt.OutboxID), slog.Int("attempts", attempts))
-		r.markPublished(ctx, evt.OutboxID)
-		return
+		return tx.Exec(`UPDATE outbox SET attempts = ?, last_error = ?, published_at = ? WHERE id = ?`,
+			attempts, msg, time.Now().UTC(), evt.OutboxID).Error
 	}
-	if err := r.db.WithContext(ctx).Exec(`UPDATE outbox SET attempts = ? WHERE id = ?`, attempts, evt.OutboxID).Error; err != nil {
-		slog.Error("relay: failed to bump attempts", slog.Int64("outbox_id", evt.OutboxID), slog.Any("error", err))
-	}
+	r.cooldownMu.Lock()
+	r.cooldown[evt.OutboxID] = time.Now().Add(r.pollInterval)
+	r.cooldownMu.Unlock()
+	return tx.Exec(`UPDATE outbox SET attempts = ?, last_error = ? WHERE id = ?`, attempts, msg, evt.OutboxID).Error
 }
