@@ -261,6 +261,20 @@ Nine parallel agents, each in an isolated worktree with separate file ownership,
 7. `scripts/verify-deliverables.sh` writes test users and courses into whatever database the stack uses. Run it against a disposable compose project name, not the developer database.
 8. The link-graph guard now forbids `libs/mongostore` and `libs/asynqx` in identity-api and analytics-api. When Kafka client code lands, add it to the same rule.
 
+### Verification of the merged tier (2026-11-18, quiet machine, local only)
+
+| Check | Result |
+|---|---|
+| `make test-integration`, every module, `-race -tags=integration` | exit 0, 25 packages ok, no FAIL or panic lines |
+| `golangci-lint` v2.14.0 in all 24 modules | 0 issues |
+| `go vet -tags=integration`, `gofmt` | clean |
+| Standalone `GOWORK=off` build of all 24 modules | pass |
+| Docker build of identity-api, course-api, analytics-api, worker on Go 1.26.11 | built |
+| Guards: module graph, link graph, Dockerfile closure, module hygiene, dev defaults, HTTP hardening | pass |
+| `scripts/test-guards.sh` | 18 passed, 0 failed |
+
+Not verified: CI on a GitHub runner for this branch; the built images running as a stack with the new code; a trace through real Jaeger; `ReconcileStalePublishes` against a real Temporal server.
+
 ### Known test flakiness to resolve before the defense
 
-Under heavy machine load (nine agents sharing Docker), single runs of the relay suite, `services/analytics` (`TestGetPlatformSnapshot_NoAuthHeader_Rejected`) and two `services/course` packages failed once and passed on rerun. The cause was not diagnosed. The full suite is re-run here on a quiet machine; any repeat is a defect to fix, not noise.
+Under heavy machine load (nine agents sharing Docker), single runs of the relay suite, `services/analytics` (`TestGetPlatformSnapshot_NoAuthHeader_Rejected`) and two `services/course` packages failed once and passed on rerun. The cause was not diagnosed. The full suite was re-run on a quiet machine and passed in one run (above); that is one run, not proof the tests are stable, so repeat runs are still wanted before the defense, and any repeat failure is a defect to fix, not noise.
