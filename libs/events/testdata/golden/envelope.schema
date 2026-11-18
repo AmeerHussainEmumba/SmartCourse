@@ -1,0 +1,11 @@
+smartcourse.events.v1.Envelope
+actor_id 9 string optional
+aggregate_id 5 string optional
+aggregate_type 4 string optional
+event_id 1 string optional
+event_type 2 string optional
+occurred_at 6 message optional
+payload 10 bytes optional
+schema_version 3 int32 optional
+span_id 8 string optional
+trace_id 7 string optional

@@ -1,0 +1,4 @@
+smartcourse.enrollment.v1.StudentWithdrawn
+course_id 3 string optional
+enrollment_id 1 string optional
+student_id 2 string optional

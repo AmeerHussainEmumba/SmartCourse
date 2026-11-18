@@ -1,0 +1,3 @@
+smartcourse.identity.v1.UserProfileUpdated
+full_name 2 string optional
+user_id 1 string optional

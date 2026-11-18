@@ -1,0 +1,5 @@
+smartcourse.enrollment.v1.StudentEnrolled
+course_id 3 string optional
+enrolled_at 4 message optional
+enrollment_id 1 string optional
+student_id 2 string optional

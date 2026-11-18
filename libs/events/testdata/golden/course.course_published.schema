@@ -1,0 +1,5 @@
+smartcourse.course.v1.CoursePublished
+course_id 1 string optional
+instructor_id 4 string optional
+title 3 string optional
+version_id 2 string optional
