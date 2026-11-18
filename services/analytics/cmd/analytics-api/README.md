@@ -3,7 +3,7 @@
 SmartCourse's analytics HTTP service — one of the services `cmd/api` was split into (ADR-0023, extending ADR-0022's api/worker split).
 
 ```
-go run ./cmd/analytics-api
+go run ./services/analytics/cmd/analytics-api
 docker compose --profile core up -d   # or containerized, alongside identity-api, course-api, worker + infra
 ```
 

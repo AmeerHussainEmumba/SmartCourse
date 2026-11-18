@@ -3,7 +3,7 @@
 SmartCourse's identity HTTP service — one of the services `cmd/api` was split into (ADR-0023, extending ADR-0022's api/worker split).
 
 ```
-go run ./cmd/identity-api
+go run ./services/identity/cmd/identity-api
 docker compose --profile core up -d   # or containerized, alongside course-api, analytics-api, worker + infra
 ```
 

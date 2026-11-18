@@ -3,7 +3,7 @@
 SmartCourse's background service — one of four independently built, deployed, and run binaries (ADR-0022, ADR-0023; `services/identity/cmd/identity-api`, `services/course/cmd/course-api`, and `services/analytics/cmd/analytics-api` are the other three).
 
 ```
-go run ./cmd/worker            # natively
+go run ./services/worker/cmd/worker            # natively
 docker compose --profile core up -d    # or containerized, alongside the api services + infra
 ```
 
