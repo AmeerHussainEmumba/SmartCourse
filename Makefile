@@ -169,5 +169,23 @@ test-race:
 test-integration:
 	scripts/for-each-module.sh go test -race -tags=integration ./...
 
+# `make seed` runs on the HOST, not in a container, so it must dial the host-
+# published ports (docker-compose.yml publishes them on 127.0.0.1), never the
+# compose-internal names (temporal:7233, postgres:5432, redis:6379,
+# minio:9000) that the containers use among themselves. A .env copied from
+# docker-compose.yml's environment blocks has the internal names and the seed
+# then fails to connect (Temporal first, as the publish step dials it).
+# TEMPORAL_HOST_PORT is therefore always overridden here, ignoring .env. The
+# other three are rewritten only when they still point at the compose-internal
+# host, so a custom host port or credential in .env is left alone. Override the
+# Temporal address with SEED_TEMPORAL_HOST_PORT=host:port if yours differs.
+SEED_TEMPORAL_HOST_PORT ?= localhost:7233
+
 seed:
+	@dsn="$${POSTGRES_DSN-}"; redis="$${REDIS_ADDR-}"; minio="$${MINIO_ENDPOINT-}"; \
+	case "$$dsn" in *@postgres:5432/*) dsn="$${dsn/@postgres:5432/@localhost:5433}"; echo "seed: POSTGRES_DSN pointed at the compose-internal postgres:5432; using localhost:5433";; esac; \
+	case "$$redis" in redis:6379) redis="localhost:6380"; echo "seed: REDIS_ADDR pointed at the compose-internal redis:6379; using localhost:6380";; esac; \
+	case "$$minio" in *//minio:9000*) minio="$${minio%%//minio:9000*}//localhost:9002$${minio#*//minio:9000}"; echo "seed: MINIO_ENDPOINT pointed at the compose-internal minio:9000; using localhost:9002";; esac; \
+	POSTGRES_DSN="$$dsn" REDIS_ADDR="$$redis" MINIO_ENDPOINT="$$minio" \
+	TEMPORAL_HOST_PORT="$(SEED_TEMPORAL_HOST_PORT)" \
 	POSTGRES_SEARCH_PATH=identity,course,platform,public go run ./tools/seed
