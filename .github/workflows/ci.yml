@@ -31,7 +31,12 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.5"
+          # 1.26.11 rather than the go.mod floor (1.26.5): govulncheck reports
+          # reachable standard-library vulnerabilities in net/http, crypto/tls,
+          # crypto/x509 and others for every release below 1.26.11, so the
+          # govulncheck step below cannot pass on 1.26.5. go.mod's `go 1.26.5`
+          # is a minimum and stays as is.
+          go-version: "1.26.11"
           cache: true
           cache-dependency-path: "**/go.sum"
 
@@ -70,6 +75,20 @@ jobs:
 
       - name: golangci-lint in every module (boundaries inside services/course, RFC §4.4)
         run: scripts/for-each-module.sh golangci-lint run ./...
+
+      - name: Install govulncheck (pinned)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # govulncheck exits non-zero only for vulnerabilities whose vulnerable
+      # symbol is actually called from the module's code; findings in packages
+      # that are imported but not called, or in required modules that are not
+      # even imported, are printed but do not fail the job. The vulnerability
+      # database is live, so a new advisory can fail an unrelated PR: bump the
+      # dependency (or the Go version above) rather than skipping the step.
+      - name: govulncheck in every module (fails on reachable vulnerabilities only)
+        run: scripts/for-each-module.sh govulncheck ./...
 
       - name: Run migrations
         run: |
