@@ -21,7 +21,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// Row mirrors the `outbox` table (migrations/platform/000002_platform.up.sql).
+// Row mirrors the `outbox` table (migrations/platform/000002_platform.up.sql
+// and 000003_outbox_trace_actor.up.sql).
 type Row struct {
 	ID            int64 `gorm:"primaryKey"`
 	EventID       uuid.UUID
@@ -35,6 +36,9 @@ type Row struct {
 	PublishedAt   *time.Time
 	Attempts      int
 	LastError     *string
+	TraceID       *string    // NULL when the writer had no trace context (000003)
+	SpanID        *string    // NULL likewise
+	ActorID       *uuid.UUID // NULL for system-originated events
 }
 
 func (Row) TableName() string { return "outbox" }
@@ -48,9 +52,19 @@ type Event struct {
 	EventType     string
 	SchemaVersion int
 	Payload       any // marshalled to JSON; see package doc re: protobuf migration
-	// Headers currently carries only what's set explicitly; trace_id/span_id
-	// propagation (RFC §12.2) is wired in when OpenTelemetry lands (M4).
+	// Headers carries only what's set explicitly.
 	Headers map[string]any
+	// TraceID and SpanID are the W3C trace-context ids (lowercase hex, 32 and
+	// 16 chars) of the request that caused the event (RFC §6.4, §12.2). Empty
+	// means "no trace context" and is stored as NULL. Callers that predate
+	// these fields leave them empty and behave exactly as before. This
+	// package does not validate or generate them; libs/telemetry supplies
+	// them.
+	TraceID string
+	SpanID  string
+	// ActorID is the authenticated user who caused the event, for audit
+	// (RFC §6.4). Nil means system-originated and is stored as NULL.
+	ActorID *uuid.UUID
 }
 
 // Write inserts evt into the outbox using tx — the caller's transaction,
@@ -77,9 +91,19 @@ func Write(ctx context.Context, tx *gorm.DB, evt Event) error {
 		Payload:       payload,
 		Headers:       headers,
 		OccurredAt:    time.Now().UTC(),
+		TraceID:       nullIfEmpty(evt.TraceID),
+		SpanID:        nullIfEmpty(evt.SpanID),
+		ActorID:       evt.ActorID,
 	}
 	if err := tx.WithContext(ctx).Create(&row).Error; err != nil {
 		return fmt.Errorf("write outbox row: %w", err)
 	}
 	return nil
+}
+
+func nullIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
