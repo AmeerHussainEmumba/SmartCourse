@@ -23,9 +23,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/enrollment"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/auth"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
-	"github.com/AmeerHussainEmumba/SmartCourse/test/integration/testenv"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 func testJWTCfg() config.JWTConfig {

@@ -4,11 +4,11 @@ Users, credentials, roles, and every token type that authenticates a request: JW
 
 ## Why this module looks the way it does
 
-**Three token types, one shape.** Refresh, password-reset, and email-verification tokens are all opaque random values handed to the client once; only a SHA-256 hash is ever stored (`internal/platform/auth/tokens.go`). A database disclosure yields no usable token for any of the three. See ADR-0015 and `docs/rfc/differences-from-requirements.md` DR-008 (password reset / email verification weren't in the original brief — added deliberately, not by accident).
+**Three token types, one shape.** Refresh, password-reset, and email-verification tokens are all opaque random values handed to the client once; only a SHA-256 hash is ever stored (`libs/auth/tokens.go`). A database disclosure yields no usable token for any of the three. See ADR-0015 and `docs/rfc/differences-from-requirements.md` DR-008 (password reset / email verification weren't in the original brief — added deliberately, not by accident).
 
 **Refresh rotation with reuse detection.** Every refresh issues a new token and marks the old one `replaced_by`. Presenting an already-replaced token means it was stolen — the entire `family_id` is revoked, not just the presented token. `TestRefresh_ReuseDetection_RevokesWholeFamily` in `service_integration_test.go` is the test that proves this actually happens, not just that the code intends it.
 
-**The privilege-revocation check (ADR-0015 addendum).** `UpdateUserRole` bumps `users.token_version` in Postgres *and* writes the new value to Redis in the same request. `internal/platform/auth.RequireFreshPrivilege` reads that Redis value on admin/privilege-mutating routes only — see `internal/platform/README.md` for why this is a third, narrow layer rather than a general per-request check.
+**The privilege-revocation check (ADR-0015 addendum).** `UpdateUserRole` bumps `users.token_version` in Postgres *and* writes the new value to Redis in the same request. `libs/auth.RequireFreshPrivilege` reads that Redis value on admin/privilege-mutating routes only — see `libs/README.md` for why this is a third, narrow layer rather than a general per-request check.
 
 **No self-service role escalation.** `RegisterRequest` (`dto.go`) has no `role` field. Every new account is `student`/`active`. Becoming an instructor or admin is exclusively `PATCH /admin/users/{id}/role`, gated by `RequireRole("admin")` *and* `RequireFreshPrivilege` — see `handler.go`.
 
@@ -46,8 +46,8 @@ Three real bugs were caught reviewing this module against the baseline requireme
 
 ## Testing
 
-- **Unit** (`internal/platform/auth/*_test.go`): password hashing, JWT issue/parse, alg-confusion rejection — no database.
-- **Integration** (`service_integration_test.go`, build tag `integration`): duplicate/case-insensitive email rejection, login failure-path equivalence, refresh rotation, reuse detection, the Redis token-version cache write, and — since this module's HTTP tier was added (below) alongside the rest of its `Service` surface — `Logout` (real revocation, and a no-op on an already-unknown token), `GetMe`/`UpdateMe` (including the `identity.user_profile_updated` outbox write), and email verification's resend/confirm pair (no email-enumeration on resend, a no-op once already verified) — all against real Postgres and Redis via `test/integration/testenv`.
+- **Unit** (`libs/auth/*_test.go`): password hashing, JWT issue/parse, alg-confusion rejection — no database.
+- **Integration** (`service_integration_test.go`, build tag `integration`): duplicate/case-insensitive email rejection, login failure-path equivalence, refresh rotation, reuse detection, the Redis token-version cache write, and — since this module's HTTP tier was added (below) alongside the rest of its `Service` surface — `Logout` (real revocation, and a no-op on an already-unknown token), `GetMe`/`UpdateMe` (including the `identity.user_profile_updated` outbox write), and email verification's resend/confirm pair (no email-enumeration on resend, a no-op once already verified) — all against real Postgres and Redis via `libs/testenv`.
 - **HTTP-level** (`identity_http_test.go`, build tag `integration`): this repo's first tier that boots a real `gin.Engine` and drives it with real `httptest` requests, rather than calling `Service` methods directly — route registration actually succeeding (the regression test for a gin router-panic bug class found live in `internal/course`, ADR-0025), request binding/validation over real HTTP (not just that a DTO declares `binding` tags), and `RequireAuth`/`RequireRole` rejecting requests at the HTTP layer exactly where the route table says they should (`/me` with no token, `/admin/users/{id}/role` with no token and with a non-admin token).
 
 Run: `make test` (unit) or `make test-integration` (integration, needs Docker). Full index: `docs/guides/testing.md`.

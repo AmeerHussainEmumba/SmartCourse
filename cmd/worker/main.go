@@ -3,7 +3,7 @@
 // three are the HTTP services, identity-api/course-api/analytics-api,
 // split out of what used to be one cmd/api — ADR-0023). It runs two
 // independent things side by side: the outbox relay
-// (internal/platform/relay, ADR-0021) and, as of M2, the Temporal worker
+// (libs/relay, ADR-0021) and, as of M2, the Temporal worker
 // that executes PublishCourseWorkflow (internal/workflows, ADR-0009/0025).
 // Kafka consumers and Asynq pools are still M3 scope (RFC §21.0). No HTTP
 // surface at all.
@@ -19,10 +19,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/infra"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/logging"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/temporal"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/logging"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/temporal"
 )
 
 func main() {

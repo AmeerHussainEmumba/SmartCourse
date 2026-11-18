@@ -10,7 +10,7 @@
 // the service layer, and that RequireAuth/RequireRole actually reject an
 // unauthenticated or wrong-role request when wired into this module's real
 // routes (not just the middleware in isolation — that's covered
-// separately in internal/platform/auth). Every other test in this package
+// separately in libs/auth). Every other test in this package
 // calls Service methods directly; this file is the one place the full
 // chain — routing, binding, middleware, service, JSON response — is
 // exercised together.
@@ -28,9 +28,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/course"
-	identityauth "github.com/AmeerHussainEmumba/SmartCourse/internal/platform/auth"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/config"
-	"github.com/AmeerHussainEmumba/SmartCourse/test/integration/testenv"
+	identityauth "github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 func testJWTCfg() config.JWTConfig {

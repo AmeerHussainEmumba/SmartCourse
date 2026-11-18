@@ -15,7 +15,7 @@ Four independent migration sets, one per Postgres schema, matching ADR-0023's se
 
 **No foreign key crosses a schema boundary.** `courses.instructor_id`, `enrollments.student_id`, and `idempotency_keys.user_id` are plain `UUID` columns, not `REFERENCES identity.users(id)` — none of them were ever read across that boundary by application code (callers are authorized via JWT claims), and there's no user-delete feature, so nothing relied on the database catching a dangling reference. See ADR-0024 for the full reasoning, including why `platform` is a deliberate exception (it's integration infrastructure, not domain data).
 
-Each service's connection sets `search_path` (`POSTGRES_SEARCH_PATH`, wired through `internal/platform/config` → `internal/platform/db.Open`) so bare table names in `internal/*/repository.go` resolve to the right schema without every query being hand-qualified — see `docker-compose.yml` and `Makefile`'s `run-*` targets for the exact value each binary uses.
+Each service's connection sets `search_path` (`POSTGRES_SEARCH_PATH`, wired through `libs/config` → `libs/db.Open`) so bare table names in `internal/*/repository.go` resolve to the right schema without every query being hand-qualified — see `docker-compose.yml` and `Makefile`'s `run-*` targets for the exact value each binary uses.
 
 ## Running migrations
 
@@ -30,7 +30,7 @@ make migrate-create service=course name=add_something
 
 Under the hood these call `golang-migrate`'s CLI via `go run`, against `$POSTGRES_DSN` (see `.env.example`). Migrations run as an explicit step, never automatically on service start (RFC §5.8) — an API replica starting mid-rolling-restart must not race another replica to alter a table.
 
-Test code (`test/integration/testenv`) runs the same four migration sets, in the same order, against each test's own ephemeral `testcontainers-go` Postgres — see that package for why tests always apply every service's schema regardless of which module is under test (fixtures commonly span schemas).
+Test code (`libs/testenv`) runs the same four migration sets, in the same order, against each test's own ephemeral `testcontainers-go` Postgres — see that package for why tests always apply every service's schema regardless of which module is under test (fixtures commonly span schemas).
 
 ## Rules for adding a migration
 

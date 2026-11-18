@@ -16,9 +16,9 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/enrollment"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/outbox"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/relay"
-	"github.com/AmeerHussainEmumba/SmartCourse/test/integration/testenv"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 // TestHandleCourseArchived_WithdrawsActiveEnrollments is the regression

@@ -16,9 +16,9 @@ import (
 	temporalclient "go.temporal.io/sdk/client"
 	"gorm.io/gorm"
 
-	apperrors "github.com/AmeerHussainEmumba/SmartCourse/internal/platform/errors"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/httpx"
-	"github.com/AmeerHussainEmumba/SmartCourse/internal/platform/outbox"
+	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/httpx"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 )
 
 // isUniqueViolation duplicates identity's helper of the same name —

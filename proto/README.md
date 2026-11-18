@@ -4,7 +4,7 @@ Will hold Protobuf schemas for every domain event (`StudentEnrolled`, `CoursePub
 
 ## Currently empty
 
-Events, the outbox, and Kafka are **M3 scope** (`docs/rfc/smartcourse-rfc.md` §21.0). Right now, `internal/platform/outbox` writes events as JSON (see that package's doc comment) — a deliberate, documented stand-in until these schemas exist. The event *shape* (envelope fields: `event_id`, `event_type`, `schema_version`, `aggregate_type`/`aggregate_id`, `occurred_at`, `payload`) is already fixed by RFC §6.4, so writing the `.proto` files is mechanical once M3 starts; what doesn't exist yet is the Schema Registry, the compatibility-check tooling, and the consumers that would decode them.
+Events, the outbox, and Kafka are **M3 scope** (`docs/rfc/smartcourse-rfc.md` §21.0). Right now, `libs/outbox` writes events as JSON (see that package's doc comment) — a deliberate, documented stand-in until these schemas exist. The event *shape* (envelope fields: `event_id`, `event_type`, `schema_version`, `aggregate_type`/`aggregate_id`, `occurred_at`, `payload`) is already fixed by RFC §6.4, so writing the `.proto` files is mechanical once M3 starts; what doesn't exist yet is the Schema Registry, the compatibility-check tooling, and the consumers that would decode them.
 
 ## Why Protobuf + a committed codegen step, not JSON forever
 

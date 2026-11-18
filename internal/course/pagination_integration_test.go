@@ -16,7 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/course"
-	"github.com/AmeerHussainEmumba/SmartCourse/test/integration/testenv"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 func TestListCatalogue_SecondPage_ViaCursor(t *testing.T) {

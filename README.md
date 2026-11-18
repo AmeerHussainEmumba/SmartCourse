@@ -82,7 +82,7 @@ REST over JSON, versioned under `/api/v1`. Full contract: `api/openapi.yaml` (tr
 | `progress` | mark lesson complete, progress (certificates not yet built — see `docs/rfc/smartcourse-rfc.md` §21.0) |
 | `analytics` | platform-wide metrics (`GET /analytics/platform`) — populated asynchronously by the outbox relay, not written directly by any handler above |
 
-Errors are always `{ "code", "message", "details" }` with a stable, documented `code` — never a raw stack trace or database error (see `internal/platform/errors`).
+Errors are always `{ "code", "message", "details" }` with a stable, documented `code` — never a raw stack trace or database error (see `libs/errors`).
 
 ## Tech stack
 

@@ -13,7 +13,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/course"
-	"github.com/AmeerHussainEmumba/SmartCourse/test/integration/testenv"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 // TestUpsertInstructorMirror_IgnoresOutOfOrderDelivery is the same

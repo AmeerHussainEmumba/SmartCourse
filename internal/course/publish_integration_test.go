@@ -23,8 +23,8 @@ import (
 	temporalclient "go.temporal.io/sdk/client"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/internal/course"
-	apperrors "github.com/AmeerHussainEmumba/SmartCourse/internal/platform/errors"
-	"github.com/AmeerHussainEmumba/SmartCourse/test/integration/testenv"
+	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 // fakeTemporalClient implements client.Client by embedding the real

@@ -2,7 +2,7 @@
 
 Everything that isn't a thin `cmd/` entry point lives here — Go's `internal/` convention means nothing outside this module can import these packages, which is what makes "SmartCourse's internals" a meaningful boundary at the language level, not just a folder convention.
 
-Two kinds of things live here: the **shared kernel** (`platform/`) and eight **domain modules**, one per business capability (RFC §4.3). Every domain module follows the same internal shape — `handler.go` (HTTP), `service.go` (domain logic, transactions, authorisation), `repository.go` (the only file importing GORM/raw SQL for that module), `dto.go` (request/response types — never the domain types), `domain.go` (entities). Read `internal/platform/README.md` first; it explains the conventions every module below builds on.
+Two kinds of things live here: the **shared kernel** (`platform/`) and eight **domain modules**, one per business capability (RFC §4.3). Every domain module follows the same internal shape — `handler.go` (HTTP), `service.go` (domain logic, transactions, authorisation), `repository.go` (the only file importing GORM/raw SQL for that module), `dto.go` (request/response types — never the domain types), `domain.go` (entities). Read `libs/README.md` first; it explains the conventions every module below builds on.
 
 ## Domain modules
 
@@ -17,7 +17,7 @@ Two kinds of things live here: the **shared kernel** (`platform/`) and eight **d
 | `notification` | Notification preferences and delivery records | Not started — M3 (Asynq-backed delivery) |
 | `audit` | Event archive, audit log (MongoDB) | Not started — M3 |
 
-`notification` and `audit` are empty directories today, not abandoned work — see `docs/rfc/smartcourse-rfc.md` §21.0 for exactly what's deferred and why. `notification` is a straightforward addition when it lands: register a new handler with the relay (`internal/platform/relay`), same pattern as `analytics`, no new infrastructure required. `audit` still waits on MongoDB, which nothing in the codebase touches yet. If a standalone `search` module lands later with its own schema (the same path `internal/analytics` took relative to its original inline position), `internal/course`'s `IndexSearch` write is superseded by that module's own relay-driven handler, not duplicated alongside it — ADR-0025's reversal trigger.
+`notification` and `audit` are empty directories today, not abandoned work — see `docs/rfc/smartcourse-rfc.md` §21.0 for exactly what's deferred and why. `notification` is a straightforward addition when it lands: register a new handler with the relay (`libs/relay`), same pattern as `analytics`, no new infrastructure required. `audit` still waits on MongoDB, which nothing in the codebase touches yet. If a standalone `search` module lands later with its own schema (the same path `internal/analytics` took relative to its original inline position), `internal/course`'s `IndexSearch` write is superseded by that module's own relay-driven handler, not duplicated alongside it — ADR-0025's reversal trigger.
 
 ## Why cross-module imports are restricted
 
@@ -25,7 +25,7 @@ No module imports another module's `repository`, `domain`, or GORM models (RFC �
 
 ## `platform/`
 
-The shared kernel every module depends on: config, logging, database/cache clients, the error-response contract, auth (JWT, argon2id, the three-layer authorization model), and the outbox writer. See `internal/platform/README.md`.
+The shared kernel every module depends on: config, logging, database/cache clients, the error-response contract, auth (JWT, argon2id, the three-layer authorization model), and the outbox writer. See `libs/README.md`.
 
 ## `workflows/`
 

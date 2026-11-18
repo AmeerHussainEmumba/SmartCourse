@@ -4,18 +4,18 @@ go 1.26.5
 
 require (
 	github.com/gin-gonic/gin v1.12.0
-	github.com/go-redis/redis_rate/v10 v10.0.1
-	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/golang-migrate/migrate/v4 v4.20.1
+	github.com/go-redis/redis_rate/v10 v10.0.1 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+	github.com/golang-migrate/migrate/v4 v4.20.1 // indirect
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/lib/pq v1.10.9
 	github.com/redis/go-redis/v9 v9.22.0
-	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0
-	github.com/testcontainers/testcontainers-go/modules/redis v0.44.0
+	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0 // indirect
+	github.com/testcontainers/testcontainers-go/modules/redis v0.44.0 // indirect
 	go.temporal.io/sdk v1.50.0
-	golang.org/x/crypto v0.57.0
-	gorm.io/driver/postgres v1.6.3
+	golang.org/x/crypto v0.57.0 // indirect
+	gorm.io/driver/postgres v1.6.3 // indirect
 	gorm.io/gorm v1.31.2
 )
 
@@ -92,7 +92,6 @@ require (
 	github.com/shirou/gopsutil/v4 v4.26.6 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/testcontainers/testcontainers-go v0.44.0 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
@@ -118,4 +117,39 @@ require (
 	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+)
+
+require (
+	github.com/AmeerHussainEmumba/SmartCourse/libs/auth v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/cache v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/config v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/db v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/errors v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/httpx v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/infra v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/logging v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/ratelimit v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/relay v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/router v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/temporal v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/testenv v0.0.0
+	github.com/stretchr/testify v1.11.1
+)
+
+replace (
+	github.com/AmeerHussainEmumba/SmartCourse/libs/auth => ./libs/auth
+	github.com/AmeerHussainEmumba/SmartCourse/libs/cache => ./libs/cache
+	github.com/AmeerHussainEmumba/SmartCourse/libs/config => ./libs/config
+	github.com/AmeerHussainEmumba/SmartCourse/libs/db => ./libs/db
+	github.com/AmeerHussainEmumba/SmartCourse/libs/errors => ./libs/errors
+	github.com/AmeerHussainEmumba/SmartCourse/libs/httpx => ./libs/httpx
+	github.com/AmeerHussainEmumba/SmartCourse/libs/infra => ./libs/infra
+	github.com/AmeerHussainEmumba/SmartCourse/libs/logging => ./libs/logging
+	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox => ./libs/outbox
+	github.com/AmeerHussainEmumba/SmartCourse/libs/ratelimit => ./libs/ratelimit
+	github.com/AmeerHussainEmumba/SmartCourse/libs/relay => ./libs/relay
+	github.com/AmeerHussainEmumba/SmartCourse/libs/router => ./libs/router
+	github.com/AmeerHussainEmumba/SmartCourse/libs/temporal => ./libs/temporal
+	github.com/AmeerHussainEmumba/SmartCourse/libs/testenv => ./libs/testenv
 )
