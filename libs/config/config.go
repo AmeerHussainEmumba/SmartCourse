@@ -24,6 +24,7 @@ type Config struct {
 	Redis    RedisConfig
 	MinIO    MinIOConfig
 	Temporal TemporalConfig
+	Relay    RelayConfig
 
 	JWT   JWTConfig
 	Argon Argon2Config
@@ -265,6 +266,12 @@ func Load() (*Config, error) {
 		HTTPWriteTimeout:   optDuration("HTTP_WRITE_TIMEOUT", 30*time.Second),
 		HTTPIdleTimeout:    optDuration("HTTP_IDLE_TIMEOUT", 120*time.Second),
 		EnableHSTS:         optBool("HSTS_ENABLED", false),
+	}
+
+	cfg.Relay.Workers = optInt("RELAY_WORKERS", defaultRelayWorkers)
+	inRange("RELAY_WORKERS", cfg.Relay.Workers, 1, maxRelayWorkers)
+	if msg := relayPoolError(cfg.Postgres.MaxOpenConns, cfg.Relay.Workers); msg != "" {
+		errs = append(errs, msg)
 	}
 
 	if len(cfg.JWT.SigningKey) < 32 {
