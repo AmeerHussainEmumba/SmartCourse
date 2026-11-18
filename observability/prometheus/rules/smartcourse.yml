@@ -1,0 +1,70 @@
+# Alert rules (RFC §12.3, §6.9). Thresholds are local-dev starting points,
+# not tuned SLOs; review with the service owners before any real deployment.
+# No Alertmanager is wired: alerts are visible at http://localhost:9090/alerts.
+groups:
+  - name: smartcourse-async-health
+    rules:
+      # RFC §6.9: alert on the RATE of dead-lettering, not its existence.
+      - alert: DeadLetterRateHigh
+        expr: sum by (consumer) (rate(dead_letter_total[10m])) > 0.05
+        for: 10m
+        labels: {severity: page}
+        annotations:
+          summary: "Sustained dead-lettering by {{ $labels.consumer }}"
+          description: "More than 0.05 dead letters/s (~3/min) for 10m. An occasional poison message is expected; a sustained rate is an incident."
+
+      - alert: OutboxOldestUnpublishedTooOld
+        expr: max(outbox_oldest_unpublished_seconds) > 300
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "Outbox has an event unpublished for over 5 minutes"
+          description: "Relay failing or Kafka unreachable; backlog size can hide a single stuck row, age cannot."
+
+      - alert: OutboxBacklogGrowing
+        expr: outbox_backlog > 100 and deriv(outbox_backlog[10m]) > 0
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: "outbox_backlog is {{ $value }} and still rising"
+
+      - alert: KafkaConsumerLagGrowing
+        expr: max by (group, topic) (kafka_consumer_lag) > 1000 and deriv(kafka_consumer_lag[10m]) > 0
+        for: 10m
+        labels: {severity: warn}
+        annotations:
+          summary: "Consumer group {{ $labels.group }} is falling behind on {{ $labels.topic }}"
+
+      # asynq_retry_count is treated as a gauge (tasks currently awaiting
+      # retry); growth over 15m means jobs fail faster than they recover.
+      - alert: AsynqRetryGrowth
+        expr: sum by (queue) (delta(asynq_retry_count[15m])) > 10
+        for: 5m
+        labels: {severity: warn}
+        annotations:
+          summary: "Asynq retry set growing on queue {{ $labels.queue }}"
+          description: "Provider trouble surfaces here first (RFC §12.3)."
+
+      - alert: WorkflowFailures
+        expr: increase(workflow_failed_total[15m]) > 0
+        labels: {severity: warn}
+        annotations:
+          summary: "Publish workflow failures in the last 15m"
+
+  - name: smartcourse-http-and-db
+    rules:
+      - alert: High5xxRatio
+        expr: |
+          sum by (job) (rate(http_requests_total{status=~"5.."}[5m]))
+            / sum by (job) (rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "More than 5% of requests to {{ $labels.job }} return 5xx"
+
+      - alert: DBConnectionPoolNearlyExhausted
+        expr: db_connections_in_use / db_connections_max > 0.9
+        for: 5m
+        labels: {severity: warn}
+        annotations:
+          summary: "DB pool above 90% on {{ $labels.job }}"
