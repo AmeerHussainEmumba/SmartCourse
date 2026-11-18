@@ -22,7 +22,7 @@ func (e *Env) OpenWithSearchPath(t *testing.T, searchPath string) *gorm.DB {
 	if !ok {
 		t.Fatalf("unexpected dialector %T", e.DB.Dialector)
 	}
-	g, err := db.Open(config.PostgresConfig{DSN: d.Config.DSN, MaxOpenConns: 10, MaxIdleConns: 5, SearchPath: searchPath})
+	g, err := db.Open(config.PostgresConfig{DSN: d.DSN, MaxOpenConns: 10, MaxIdleConns: 5, SearchPath: searchPath})
 	if err != nil {
 		t.Fatalf("open connection with search_path %q: %v", searchPath, err)
 	}
