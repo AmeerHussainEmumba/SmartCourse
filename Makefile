@@ -29,7 +29,7 @@ MIGRATION_SERVICES_REVERSED := analytics course identity platform
         migrate-up migrate-down migrate-down-all migrate-create \
         run-identity-api run-course-api run-analytics-api run-worker \
         build build-identity-api build-course-api build-analytics-api build-worker \
-        lint check-link-graph check-module-graph check-dockerfile-modules check-module-hygiene check-dev-defaults check-http-hardening test-guards test test-race test-integration seed fmt
+        lint check-link-graph check-module-graph check-dockerfile-modules check-module-hygiene check-dev-defaults check-http-hardening test-guards verify-deliverables test test-race test-integration seed fmt
 
 ## --- Local environment (ADR-0018) ---------------------------------------
 
@@ -159,6 +159,11 @@ check-http-hardening:
 # the tree and checks the right guard fails (slow; copies the repo).
 test-guards:
 	scripts/test-guards.sh
+
+# Live checks against a running stack (docs/plans/week-3-acceptance-matrix.md);
+# rows for features not built yet print PENDING and do not fail the run.
+verify-deliverables:
+	scripts/verify-deliverables.sh
 
 test:
 	scripts/for-each-module.sh go test ./...

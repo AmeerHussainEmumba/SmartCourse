@@ -15,8 +15,8 @@ cd "$(dirname "$0")/.."
 mod=github.com/AmeerHussainEmumba/SmartCourse
 
 rules=(
-  "services/identity  identity-api  services/course,services/analytics,services/worker,libs/temporal  yes"
-  "services/analytics analytics-api services/identity,services/course,services/worker,libs/temporal   yes"
+  "services/identity  identity-api  services/course,services/analytics,services/worker,libs/temporal,libs/mongostore,libs/asynqx  yes"
+  "services/analytics analytics-api services/identity,services/course,services/worker,libs/temporal,libs/mongostore,libs/asynqx   yes"
   "services/course    course-api    services/identity,services/analytics,services/worker                no"
   "services/worker    worker        services/identity                                                   no"
 )

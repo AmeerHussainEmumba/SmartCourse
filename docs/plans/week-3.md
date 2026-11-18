@@ -220,3 +220,47 @@ Anything that does not make it is written down in the assessment as Not built wi
 3. Mailpit as the notification sink: **yes**; no real mail provider or SMTP integration. Document it as a deliberate limit.
 4. Supervisor review of PRs #12 to #18 before the review-exposed work starts: **yes**; start with what the review cannot affect (section 4a).
 5. Second adversarial pass: **open**; the owner asked for a refresher on how the first pass was set up (see the conversation); decision pending.
+
+## 10. Progress log
+
+### 2026-11-18: the "start now" tier (section 4a) is built and merged on `week3/start-now`
+
+Nine parallel agents, each in an isolated worktree with separate file ownership, then merged by the lead. Each agent's numbers below are its own report, re-checked at merge where noted.
+
+| Piece | Result |
+|---|---|
+| `libs/events` | Protobuf contracts for the 8 event types that exist, envelope, Confluent wire codec, registry client, `register-schemas` tool, golden compatibility guard, fuzzed decoder. Live registry run passed |
+| Outbox trace/actor | Migration `platform/000003`, `libs/outbox` and `libs/relay` carry `trace_id`, `span_id`, `actor_id`; nothing populates them yet |
+| `libs/mongostore` | Archive, audit log, failed-event parking and replay state, with concurrency tests; MongoDB test helper in `libs/testenv` |
+| `libs/asynqx` | Deduplicated enqueue, 6:3:1 weighted queues, bounded server, exhausted hook, inspector, replica-safe scheduler |
+| `libs/telemetry` | OpenTelemetry, trace propagation through the envelope, RED and async metrics with a cardinality guard; **not wired into any service** |
+| Provisioning | Compose: Mailpit, Kafka topic provisioner; `observability/` with Prometheus rules, Grafana dashboard; verified against the real containers |
+| Verification scaffolding | 122-row acceptance matrix, `scripts/verify-deliverables.sh` (12 live checks passed against the stack), E1 to E14 specs as skipped tests |
+| Course | Publish-lease reconciliation, `POST /assets/upload-url` with a real `VerifyAssets`, `instructor_id` on `course_published` |
+| Hygiene | Argon2 concurrency bound, Redis-flush token reseeder, `make seed` host fix, relay pool check, `govulncheck` in CI plus dependency bumps |
+
+**Merge results:** the lead resolved four conflicts (three CHANGELOGs and one `go.mod`), re-tidied all 24 modules, and aligned every skewed dependency to its highest version so the hygiene guard passes. Dockerfiles and the release workflow moved to Go 1.26.11 (the stdlib advisories `govulncheck` found are reachable on 1.26.5).
+
+### Deviations from the plan, and open items created by this tier
+
+- **The `token_stale` fix is a mitigation, not an elimination.** Identity re-seeds Redis from a background loop every 15 seconds, so the window shrinks from "until the next login" to about 15 seconds. A single evicted key while the loop's sentinel survives still waits for the next login or the sentinel's expiry. Chosen because the alternative (course-api asking identity at runtime) adds a cross-service dependency on every Redis miss.
+- **The relay pool check is a hard startup error for every binary** (`POSTGRES_MAX_OPEN_CONNS` must be at least 2 x `RELAY_WORKERS`), because a starved pool burns attempts and eventually gives events up. Defaults pass.
+- **`AddLesson` now rejects an `asset_key` not issued by `upload-url`,** and a lesson that references an asset fails closed when no store is attached. Both are API behaviour changes.
+- **Search and cache reconciliation (ADR-0025's open gap) is assigned to Phase 5**, alongside analytics reconciliation, as scheduled Asynq jobs.
+- **`sync.RWMutex`:** kept as decided in DR-016 and D9; the matrix row says so.
+- **`govulncheck` can fail an unrelated PR** when a new advisory is published. Accepted for now; move it to a scheduled job if it becomes noisy.
+
+### Wiring backlog (waits for the supervisor's review of the module layout, section 4a)
+
+1. `services/worker/cmd/worker/wire.go`: attach the asset store (`courseSvc.WithAssetStore(assets.New(cfg.MinIO))`) or `VerifyAssets` fails every publish whose lessons reference an asset; pass `RELAY_WORKERS` to the relay; schedule `ReconcileStalePublishes` (every 30 to 60 seconds).
+2. Compose and `env.example`: set `MINIO_PUBLIC_ENDPOINT` (a browser cannot reach `minio:9000`); the bucket needs CORS allowing `PUT`.
+3. Asynq pools per queue (RFC §10.2 sizes) need one `Server` per queue; not built.
+4. Wire `libs/telemetry` into every service, expose `/metrics`, decide the worker's metrics port (the 9100 in `prometheus.yml` is an assumption), and extend the link-graph budget for the gRPC and protobuf packages it brings.
+5. Phase 3: a real Confluent client must read `libs/events` bytes (interop is checked only against documentation and registry acceptance so far); the relay routes by `event_type` prefix; the Kafka client library is chosen in ADR-0030.
+6. CI: a parallel job for the Kafka e2e tier; a step that fails when a pending E2E spec is still skipped past its phase; `make verify-deliverables` against a stack.
+7. `scripts/verify-deliverables.sh` writes test users and courses into whatever database the stack uses. Run it against a disposable compose project name, not the developer database.
+8. The link-graph guard now forbids `libs/mongostore` and `libs/asynqx` in identity-api and analytics-api. When Kafka client code lands, add it to the same rule.
+
+### Known test flakiness to resolve before the defense
+
+Under heavy machine load (nine agents sharing Docker), single runs of the relay suite, `services/analytics` (`TestGetPlatformSnapshot_NoAuthHeader_Rejected`) and two `services/course` packages failed once and passed on rerun. The cause was not diagnosed. The full suite is re-run here on a quiet machine; any repeat is a defect to fix, not noise.
