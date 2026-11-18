@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Living document |
-| Last updated | 2026-11-17 |
+| Last updated | 2026-11-18 |
 | Related | `smartcourse-rfc.md` |
 
 ## Review status (2026-09-24)
@@ -60,6 +60,10 @@ The distinction matters when something changes. Six months from now, a contribut
 | [0026](#adr-0026--one-go-module-per-service-and-per-shared-library) | One Go module per service and per shared library | Accepted | §4.1, §4.2, §4.4 |
 | [0027](#adr-0027--the-relay-holds-each-rows-claim-through-handling) | The relay holds each row's claim through handling | Accepted | §6.3 |
 | [0028](#adr-0028--publish-claims-the-version-before-starting-the-workflow) | Publish claims the version before starting the workflow | Accepted | §7.5 |
+| [0029](#adr-0029--two-event-transports-behind-one-seam-in-process-and-kafka) | Two event transports behind one seam: in-process and Kafka | Proposed | §6.2, §6.3 |
+| [0030](#adr-0030--event-contracts-protobuf-generated-code-and-client-library-selection) | Event contracts: Protobuf, generated code, and client library selection | Proposed | §6.4, §6.8 |
+| [0031](#adr-0031--mongodb-archive-dead-letter-parking-and-replay) | MongoDB archive, dead-letter parking, and replay | Proposed | §5.4, §6.9 |
+| [0032](#adr-0032--observability-in-week-3-trace-context-through-the-event-envelope) | Observability in Week 3: trace context through the event envelope | Proposed | §12 |
 
 ---
 
@@ -1203,6 +1207,120 @@ To stop a crash between claiming and starting from wedging a course forever, a `
 ### Reversal trigger
 
 If publishes legitimately approach the lease (longer activities, queueing behind a busy worker pool) or the stuck-for-15-minutes window proves painful, replace the lease with a liveness check against Temporal (option C) used only when the claim is old, not on the hot path.
+
+---
+
+## ADR-0029 — Two event transports behind one seam: in-process and Kafka
+
+**Status:** Proposed · **Date:** 2026-11-18 · **RFC:** §6.2, §6.3 · **Would amend:** ADR-0021's reversal trigger, ADR-0027
+
+### Context
+
+ADR-0021 built the outbox relay with in-process handlers and said that when Kafka lands, "publish" becomes a Kafka producer and the handlers become consumer handlers. Two facts complicate a straight replacement. The `core` compose profile deliberately has no Kafka (ADR-0018), yet the worker and the relay run in it. And ~300 existing integration tests exercise the handlers through the in-process relay.
+
+### Options
+
+**A. Replace the in-process relay with Kafka outright.** One path, no drift. Every integration test and the `core` profile then need a broker, and there is no rollback if the Kafka path misbehaves.
+
+**B. Two transports behind one seam (proposed).** `EVENT_TRANSPORT=inprocess` keeps today's behaviour; `kafka` makes the relay produce to Kafka and runs consumer groups that call the same handlers. The outbox stays the only path to Kafka (RFC §6.2).
+
+**C. Keep in-process for domain handlers and use Kafka only for new consumers.** Smaller change, but the events the RFC says flow through Kafka would not, so FR-4's "Kafka event backbone" is only half true.
+
+### Decision
+
+**Option B.** The handler contract (`HandlerFunc`, idempotency through `processed_events` in the handler's own transaction) is the seam. In Kafka mode a consumer opens the transaction, checks and writes `processed_events` with the effect, commits, then commits the offset. A consumer that fails past its retry budget parks the event (ADR-0031) and advances, so a poison message cannot stop a partition. Handler suites run against both transports; end-to-end tests run on Kafka.
+
+### Consequences
+
+**Positive.** The fast dev loop and `core` profile survive; rollback is a config change; the same handlers are proven on both transports.
+
+**Negative.** Two code paths can drift; the mitigation is the shared handler suites and running E2E on Kafka. More configuration. The relay's per-row claim (ADR-0027) is held while producing, so a slow broker holds a connection per in-flight row.
+
+### Reversal trigger
+
+If the two transports diverge in behaviour more than once, or nobody uses `inprocess` outside tests, drop it and make Kafka the only transport (option A).
+
+---
+
+## ADR-0030 — Event contracts: Protobuf, generated code, and client library selection
+
+**Status:** Proposed · **Date:** 2026-11-18 · **RFC:** §6.4, §6.8 · **Builds on:** ADR-0008
+
+### Context
+
+ADR-0008 chose Protobuf with Schema Registry at BACKWARD compatibility but named no libraries and no module layout. Under ADR-0026 every shared package is its own Go module, and the images are built `CGO_ENABLED=0` as a non-root user with a per-module Docker closure check. Two later needs touch the contracts: the `outbox` table has no `trace_id`/`span_id` columns (ADR-0032), and `course_published` carries no instructor id, which is why per-course analytics cannot enforce instructor ownership (findings register, F-18).
+
+### Decision
+
+- A new module, `libs/events`, holds the `.proto` files, generated Go code (committed, so contributors can build without the toolchain), the envelope, and a codec for the registry's wire format. It depends on no service.
+- `course_published` gains `instructor_id`; the outbox gains trace and actor columns through a new platform migration with a verified down.
+- A bootstrap script registers every subject at BACKWARD compatibility, idempotently; CI fails on an incompatible change using golden files.
+- **Client libraries: not chosen here.** The candidates are a pure-Go Kafka client (franz-go is the leading candidate), the official MongoDB Go driver, Asynq (ADR-0013), and the OpenTelemetry and Prometheus Go libraries. Each is selected, with its version and the current-documentation check recorded in this ADR, before its first use. The selection criteria are fixed now: pure Go (no cgo), actively maintained, a context-aware shutdown, and a license compatible with the project.
+
+### Consequences
+
+**Positive.** One place defines the contract; breaking it fails CI; trace and actor data are available to every consumer.
+
+**Negative.** Generated code in the repository produces noisy diffs; every event change is a migration plus a schema change; the library choice stays open until the first phase that needs it, which is a deliberate delay.
+
+### Reversal trigger
+
+If registry compatibility checks block legitimate evolution more than they prevent breakage, or if generated-code churn dominates review, revisit the encoding (the RFC's Avro alternative was rejected for Go ergonomics, ADR-0008).
+
+---
+
+## ADR-0031 — MongoDB archive, dead-letter parking, and replay
+
+**Status:** Proposed · **Date:** 2026-11-18 · **RFC:** §5.4, §6.9 · **Builds on:** ADR-0004 · **Closes:** ADR-0021's "no dead-letter store"
+
+### Context
+
+ADR-0021 records that a poison event past max attempts is marked published and logged, so it is lost for recovery. The baseline requires failures to be diagnosable and lists "Failed Events / Workflow Issues" as a metric. ADR-0004 limits MongoDB to the archive and audit, not aggregates.
+
+### Decision
+
+- `events` and `audit_log` archive every event with its schema id; `failed_events` parks anything a consumer or the relay gives up on, with payload, consumer, attempts and error history.
+- A parked event is never dropped and never blocks the stream.
+- Replay is by `event_id` through an admin-only endpoint and re-enters the normal idempotent path, so replaying twice has the same effect as once.
+- Aggregates stay in PostgreSQL (ADR-0017). A MongoDB outage degrades the archiver and the failed-events view only; analytics and the API keep working.
+
+### Consequences
+
+**Positive.** Closes the relay's drop-on-poison hole and makes the ninth analytics metric real.
+
+**Negative.** A second store to run and secure; a replayed event can legitimately repeat an external effect such as an email (RFC §6.6 accepts this); an admin replay endpoint is a new privileged surface that needs its own tests.
+
+### Reversal trigger
+
+If the archive's only users are replay and the failed-events metric, and operating MongoDB costs more than a PostgreSQL table would, revisit ADR-0004.
+
+---
+
+## ADR-0032 — Observability in Week 3: trace context through the event envelope
+
+**Status:** Proposed · **Date:** 2026-11-18 · **RFC:** §12 · **Would supersede:** DR-019
+
+### Context
+
+DR-019 (2026-11-06) kept observability out of Week 3 on the grounds that the weekly plan is a cadence, not a gate, and said that if the reviewer meant the Execution Guidelines' "basic monitoring and tracing available" as a hard requirement, the entry would be superseded. The project owner has confirmed (2026-11-18) that it is required, and that Week 3 is the last stage before external review and defense, so nothing can be deferred past it.
+
+### Decision
+
+- OpenTelemetry in every service, exported to Jaeger; W3C trace context is written to the outbox row at the moment of the state change and continued by the relay, Kafka consumers and Asynq jobs, so one trace spans request to delivery (RFC §12.2).
+- Prometheus metrics at `/metrics` on every service: RED per route, plus outbox backlog and oldest-unpublished age, consumer lag, queue depth and retries, dead-letter totals, workflow outcomes and DB pool use (RFC §12.3). Labels use route templates, never raw identifiers; a test fails on unbounded cardinality.
+- Grafana dashboards and Prometheus alert rules are provisioned from the repository.
+- Alerting is on the rate of dead-lettering and on outbox age, not on a single event (RFC §6.9).
+- Scope is "basic": the full RFC list is the target, and what is not reached is recorded as not built rather than implied.
+
+### Consequences
+
+**Positive.** An asynchronous pipeline becomes diagnosable; the deliverable is met rather than argued.
+
+**Negative.** Instrumentation adds a dependency to every service (the link-graph budget must be extended deliberately, ADR-0026); sampling and exporter settings are new configuration; observability code touches hot paths.
+
+### Reversal trigger
+
+If instrumentation overhead shows up in the latency targets (RFC §13.1), lower the sampling rate before removing spans.
 
 ---
 
