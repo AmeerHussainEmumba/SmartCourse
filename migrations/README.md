@@ -8,7 +8,7 @@ Four independent migration sets, one per Postgres schema, matching ADR-0023's se
 
 | Directory | Schema | Owns |
 |---|---|---|
-| `platform/` | `platform` | `outbox`, `processed_events`, `idempotency_keys` — shared integration infrastructure every producer writes to, not any one service's domain data. Also installs the `citext`/`pg_trgm` extensions into `public`, since more than one schema needs them. |
+| `platform/` | `platform` | `outbox` (with nullable `trace_id`, `span_id`, `actor_id` from `000003`, RFC §6.4), `processed_events`, `idempotency_keys` — shared integration infrastructure every producer writes to, not any one service's domain data. Also installs the `citext`/`pg_trgm` extensions into `public`, since more than one schema needs them. |
 | `identity/` | `identity` | `users`, `refresh_tokens`, `password_reset_tokens`, `email_verification_tokens`. |
 | `course/` | `course` | `courses`, `course_versions`, `course_prerequisites`, `modules`, `lessons`, `enrollments`, `lesson_progress`, `certificates`, `course_search_index` — course, enrollment, and progress share one schema because enrollment locks the `courses` row in the same transaction it writes an enrollment row in (ADR-0012's seat-limit guarantee); `course_search_index` stays here until `services/worker/search` actually exists. |
 | `analytics/` | `analytics` | Three mirror tables (`user_role_mirror`, `course_mirror`, `enrollment_mirror`, fed from relay events) plus the aggregate read models (`platform_snapshot`, `course_stats`, `daily_enrollments`). |

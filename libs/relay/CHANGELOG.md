@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Added: `DecodedEvent.TraceID`, `SpanID` (empty when absent) and `ActorID` (`*uuid.UUID`, nil when absent), read from the outbox row so handlers and the future Kafka producer can see them. Requires migration `platform/000003`; the poll query selects the new columns.
+
 ## [0.1.0] - not yet tagged
 
 - Module created by the module split (ADR-0026, `docs/plans/module-split.md`). Nothing has been tagged; consumers reference it through a `replace` directive.
