@@ -283,6 +283,38 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     ports: ["127.0.0.1:29092:29092"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+
+  # Topic provisioning as code (RFC §6.5): one topic per aggregate. One-shot
+  # and idempotent (--if-not-exists), so `up` can be re-run safely. Uses the
+  # CLI already inside the pinned kafka image. Partitions/replication come
+  # from env with single-broker defaults; they only apply when a topic is
+  # first created (Kafka never shrinks partitions, and --if-not-exists will
+  # not change an existing topic) — use kafka-topics.sh --alter to grow one.
+  kafka-init:
+    image: apache/kafka:3.7.0
+    profiles: *profiles-events
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      KAFKA_TOPIC_PARTITIONS: ${KAFKA_TOPIC_PARTITIONS:-3}
+      KAFKA_TOPIC_REPLICATION_FACTOR: ${KAFKA_TOPIC_REPLICATION_FACTOR:-1}
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -euo pipefail
+        for t in identity.events course.events enrollment.events progress.events; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
+            --topic "$$t" --partitions "$$KAFKA_TOPIC_PARTITIONS" --replication-factor "$$KAFKA_TOPIC_REPLICATION_FACTOR"
+        done
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.6.0
@@ -299,23 +331,47 @@ services:
     profiles: *profiles-events
     ports: ["127.0.0.1:27017:27017"]
 
+  # Self-hosted SMTP sink with a web UI (Week 3 decision D6): the project
+  # deliberately uses NO real mail provider. Apps send to mailpit:1025
+  # in-network (SMTP_HOST/SMTP_PORT); read mail at http://localhost:8025.
+  mailpit:
+    image: axllent/mailpit:v1.34.0
+    profiles: *profiles-events
+    ports:
+      - "127.0.0.1:1025:1025" # SMTP
+      - "127.0.0.1:8025:8025" # web UI + HTTP API
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Config is repo-provisioned from ./observability (see observability/README.md).
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.16.0
     profiles: *profiles-observability
     volumes:
-      - ./deploy/prometheus:/etc/prometheus
+      - ./observability/prometheus:/etc/prometheus:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports: ["127.0.0.1:9090:9090"]
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.3.1
     profiles: *profiles-observability
+    environment:
+      GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
-      - ./deploy/grafana:/etc/grafana/provisioning
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports: ["127.0.0.1:3001:3000"]
+    depends_on: [prometheus]
 
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    image: jaegertracing/all-in-one:1.76.0
     profiles: *profiles-observability
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true" # OTLP gRPC :4317, HTTP :4318
     ports:
       - "127.0.0.1:16686:16686" # UI
       - "127.0.0.1:4317:4317"   # OTLP gRPC
