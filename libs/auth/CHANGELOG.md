@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Added `ArgonGate` (`NewArgonGate`, `Acquire`, `Hash`, `Verify`, `InFlight`) and `ErrArgonBusy`: a semaphore bounding concurrent argon2 computations, with waiters bounded by the request context and a queue timeout (F-26 residue). `HashPassword`/`VerifyPassword` are unchanged. Test-only dependency on `go.uber.org/goleak`.
+
 - Added `TokenVersionSource`, `ErrUserNotFound` and `RequireFreshPrivilegeWithSource`: on a Redis miss the token version is read from the durable source and written back (F-03). `RequireFreshPrivilege` is unchanged.
 - Added `NewDummyHash(cfg)`: dummy hash built from the configured Argon2 parameters (F-30). `DummyHash` is unchanged.
 
