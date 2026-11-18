@@ -89,6 +89,10 @@ func courseMatrix() []matrixCase {
 			fx := w.newDraft(instrA)
 			return "DELETE", "/api/v1/lessons/" + fx.LessonID.String(), nil, fx.Title
 		}, [6]string{"401", "403", "403", allow200, "D", "403"}},
+		{"POST /assets/upload-url", func(w *world) (string, string, any, string) {
+			fx := w.newDraft(instrA)
+			return "POST", "/api/v1/assets/upload-url", map[string]any{"course_id": fx.CourseID.String(), "content_type": "application/pdf", "size_bytes": 1024}, fx.Title
+		}, [6]string{"401", "403", "403", allow200, "D", "403"}},
 		// Enrollment / progress: "owner" is studentA (the enrolled student). instructors and admin have no override.
 		{"POST /enrollments (any authenticated user may enroll)", func(w *world) (string, string, any, string) {
 			fx := pub(w)

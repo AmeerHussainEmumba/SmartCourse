@@ -83,7 +83,7 @@ func newWorld(t *testing.T) *world {
 	t.Helper()
 	env := testenv.Setup(t)
 	w := &world{t: t, env: env}
-	w.svc = course.NewService(course.NewRepository(env.DB), env.RDB, fakeTemporal{}, "q")
+	w.svc = course.NewService(course.NewRepository(env.DB), env.RDB, fakeTemporal{}, "q").WithAssetStore(stubAssetStore{})
 	w.esvc = enrollment.NewService(enrollment.NewRepository(env.DB))
 	w.psvc = progress.NewService(progress.NewRepository(env.DB))
 	gin.SetMode(gin.TestMode)

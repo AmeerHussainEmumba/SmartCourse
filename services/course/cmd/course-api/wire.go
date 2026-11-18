@@ -1,11 +1,14 @@
 package main
 
 import (
+	"log/slog"
+
 	"github.com/gin-gonic/gin"
 	temporalclient "go.temporal.io/sdk/client"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
+	"github.com/AmeerHussainEmumba/SmartCourse/services/course/assets"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/enrollment"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/progress"
@@ -25,6 +28,13 @@ func registerRoutes(r *gin.Engine, deps *infra.Dependencies, cfg *config.Config,
 	api := r.Group("/api/v1")
 
 	courseSvc := course.NewService(course.NewRepository(deps.DB), deps.RDB, temporal, cfg.Temporal.TaskQueue)
+	// Object storage backs POST /assets/upload-url. If it cannot be built
+	// (bad MinIO settings), upload-url answers 503; nothing else is affected.
+	if store, err := assets.New(cfg.MinIO); err != nil {
+		slog.Error("asset storage unavailable; POST /assets/upload-url will return 503", slog.Any("error", err))
+	} else {
+		courseSvc.WithAssetStore(store)
+	}
 	course.RegisterRoutes(api, courseSvc, cfg.JWT)
 
 	enrollmentSvc := enrollment.NewService(enrollment.NewRepository(deps.DB))
