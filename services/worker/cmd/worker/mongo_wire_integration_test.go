@@ -66,7 +66,7 @@ func TestMongoWiring_NotConfigured_DegradesQuietly(t *testing.T) {
 	if err := h.Handle(context.Background(), nil, sampleEvent()); !errors.Is(err, errMongoNotReady) {
 		t.Errorf("archiver without MongoDB: want errMongoNotReady, got %v", err)
 	}
-	if err := mg.Sink().Park(context.Background(), deadletter.Parked{Event: sampleEvent(), Consumer: "c", Err: errors.New("x")}); !errors.Is(err, errMongoNotReady) {
+	if err := mg.Sink(nil).Park(context.Background(), deadletter.Parked{Event: sampleEvent(), Consumer: "c", Err: errors.New("x")}); !errors.Is(err, errMongoNotReady) {
 		t.Errorf("sink without MongoDB: want errMongoNotReady, got %v", err)
 	}
 }
@@ -121,7 +121,7 @@ func TestMongoWiring_Connects_ArchivesAndParks(t *testing.T) {
 	if err != nil || got {
 		t.Errorf("second archive of the same id: inserted=%v err=%v, want false and nil", got, err)
 	}
-	if err := mg.Sink().Park(ctx, deadletter.Parked{Event: evt, Consumer: "c", Err: errors.New("x"), Attempts: 5}); err != nil {
+	if err := mg.Sink(nil).Park(ctx, deadletter.Parked{Event: evt, Consumer: "c", Err: errors.New("x"), Attempts: 5}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
 	if _, err := mg.GetFailedEvent(ctx, evt.EventID.String(), "c"); err != nil {

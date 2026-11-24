@@ -13,6 +13,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/mongostore"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/router"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/analytics/analytics"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/certificate"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
@@ -120,9 +121,11 @@ func (m *mongoWiring) ArchiveHandlers(opts ...archive.Option) []relay.Handler {
 	return archive.Handlers(m, opts...)
 }
 
-// Sink is the dead-letter sink to hand to the transport.
-func (m *mongoWiring) Sink(opts ...deadletter.SinkOption) *deadletter.Sink {
-	return deadletter.NewSink(m, opts...)
+// Sink is the dead-letter sink to hand to the transport. Every event it parks
+// is counted in dead_letter_total{consumer} when metrics is non-nil (see
+// countParked).
+func (m *mongoWiring) Sink(metrics *telemetry.Metrics, opts ...deadletter.SinkOption) *deadletter.Sink {
+	return deadletter.NewSink(countParked(m, metrics), opts...)
 }
 
 func (m *mongoWiring) ArchiveEvent(ctx context.Context, e mongostore.Event) (bool, error) {

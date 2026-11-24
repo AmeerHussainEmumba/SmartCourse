@@ -22,8 +22,9 @@ import (
 const queueGaugeInterval = 15 * time.Second
 
 // startTelemetry wires tracing and metrics into the worker (ADR-0032) and
-// returns the function main defers to stop them and flush spans. It never
-// fails the process: a metrics port that cannot be bound, a collector that is
+// returns the Observability (the event transport and the dead-letter sink take
+// their tracing flag and Metrics from it; it is never nil) and the function
+// main defers to stop everything and flush spans. It never fails the process: a metrics port that cannot be bound, a collector that is
 // down or an invalid tracing setup are logged and the worker runs without.
 //
 //   - Tracing and the DB/Redis hooks: deps.Observe (OTEL_EXPORTER_OTLP_ENDPOINT).
@@ -33,8 +34,8 @@ const queueGaugeInterval = 15 * time.Second
 //   - Asynq: asynq_queue_depth and asynq_retry_count from the Inspector.
 //   - /metrics: its own listener on METRICS_HTTP_ADDR (default :9100), not the
 //     authenticated admin port; Prometheus scrapes it without credentials.
-func startTelemetry(ctx context.Context, logger *slog.Logger, deps *infra.Dependencies, cfg *config.Config) (shutdown func()) {
-	o := deps.Observe(ctx, cfg, infra.ObserveOptions{Service: "worker", Outbox: true, Workflows: true})
+func startTelemetry(ctx context.Context, logger *slog.Logger, deps *infra.Dependencies, cfg *config.Config) (o *infra.Observability, shutdown func()) {
+	o = deps.Observe(ctx, cfg, infra.ObserveOptions{Service: "worker", Outbox: true, Workflows: true})
 
 	temporal.Observe(temporal.Observability{Tracing: o.TracingEnabled(), Metrics: o.Metrics})
 
@@ -55,7 +56,7 @@ func startTelemetry(ctx context.Context, logger *slog.Logger, deps *infra.Depend
 		}()
 	}
 
-	return func() {
+	return o, func() {
 		wg.Wait() // serveMetrics returns once ctx is cancelled
 		stopGauges()
 		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -104,13 +105,14 @@ type parkStore interface {
 
 // countingParkStore counts dead_letter_total{consumer} for every event that was
 // really parked (a failed ParkFailedEvent is not a dead letter: the caller
-// keeps the event). Wrap the store the Sink is built over:
+// keeps the event). main wraps the store the Sink is built over, with the
+// Metrics startTelemetry returned (mongoWiring.Sink does it):
 //
 //	deadletter.NewSink(countParked(mg, o.Metrics))
 //
-// The relay/Kafka transport step that builds the Sink does that (it needs the
-// Metrics from startTelemetry's Observability); nothing builds one yet, which is
-// why dead_letter_total has no series until then.
+// Both dead-letter paths go through that one Sink: the relay giving up on a row
+// (in-process handlers, or a publish that kept failing) and a Kafka consumer
+// whose handler used its budget.
 type countingParkStore struct {
 	inner parkStore
 	m     *telemetry.Metrics

@@ -67,7 +67,7 @@ func (s *recordingSink) parked() []relay.DeadLetter {
 func runEvents(t *testing.T, ctx context.Context, cfg *config.Config, deps *infra.Dependencies) (rl *relay.Relay, sink *recordingSink, stop func()) {
 	t.Helper()
 	sink = &recordingSink{}
-	tr, err := newEventTransport(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), cfg, sink)
+	tr, err := newEventTransport(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), cfg, sink, nil)
 	if err != nil {
 		t.Fatalf("newEventTransport: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestNewEventTransport_KafkaStartup(t *testing.T) {
 	t.Run("healthy", func(t *testing.T) {
 		cfg.Kafka = base
 		cfg.Kafka.SchemaRegistryURL = transporttest.NewRegistry(t).URL
-		tr, err := newEventTransport(context.Background(), logger, cfg, nil)
+		tr, err := newEventTransport(context.Background(), logger, cfg, nil, nil)
 		if err != nil {
 			t.Fatalf("newEventTransport: %v", err)
 		}
@@ -149,7 +149,7 @@ func TestNewEventTransport_KafkaStartup(t *testing.T) {
 		reg.Remove("smartcourse.progress.v1.CourseCompleted")
 		cfg.Kafka = base
 		cfg.Kafka.SchemaRegistryURL = reg.URL
-		_, err := newEventTransport(context.Background(), logger, cfg, nil)
+		_, err := newEventTransport(context.Background(), logger, cfg, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "smartcourse.progress.v1.CourseCompleted") {
 			t.Fatalf("want an error naming the missing subject, got %v", err)
 		}
@@ -157,7 +157,7 @@ func TestNewEventTransport_KafkaStartup(t *testing.T) {
 	t.Run("registry unreachable", func(t *testing.T) {
 		cfg.Kafka = base
 		cfg.Kafka.SchemaRegistryURL = "http://127.0.0.1:1"
-		_, err := newEventTransport(context.Background(), logger, cfg, nil)
+		_, err := newEventTransport(context.Background(), logger, cfg, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "127.0.0.1:1") {
 			t.Fatalf("want an error naming the registry, got %v", err)
 		}

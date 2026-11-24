@@ -13,10 +13,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
 	"gorm.io/gorm"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/logging"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 )
 
 const (
@@ -47,6 +50,13 @@ type RunnerConfig struct {
 	// log-and-skip behaviour, which is the documented gap (relay.DeadLetterSink).
 	Sink   relay.DeadLetterSink
 	Logger *slog.Logger
+	// Tracing makes each record a CONSUMER span continuing the trace in its
+	// traceparent header (or, without one, the envelope's trace ids); the
+	// handler's DB and Redis spans nest under it. Off starts no span.
+	Tracing bool
+	// Metrics, when set, counts event_processed_total per group and outcome
+	// (processed, duplicate, failed, dead_lettered).
+	Metrics *telemetry.Metrics
 }
 
 // Runner runs one Kafka consumer group per consumer name: the group id is the
@@ -190,23 +200,74 @@ func (r *Runner) runGroup(ctx context.Context, g group) {
 // the group registered for is skipped, since the topic carries other types). One
 // handler's failure does not stop the others for this record; a retry re-runs
 // them all, and Deliver's processed_events check makes the finished ones no-ops.
-func (r *Runner) handle(ctx context.Context, g group, rec kafka.Record) error {
+func (r *Runner) handle(ctx context.Context, g group, rec kafka.Record) (err error) {
 	evt, err := Decode(rec)
 	if err != nil {
+		r.count(g.name, telemetry.OutcomeFailed)
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, handleTimeout)
 	defer cancel()
+	ctx = logging.WithContext(ctx, logging.WithEventID(logging.FromContext(ctx), evt.EventID.String()))
+	if r.cfg.Tracing {
+		var span trace.Span
+		ctx, span = telemetry.StartConsume(ctx, consumeTraceparent(rec, evt), g.name, rec.Topic, evt.EventType, evt.EventID.String())
+		defer func() { telemetry.EndSpan(span, err) }()
+	}
 	var errs []error
 	for _, h := range g.handlers {
 		if !h.Handles(evt.EventType) {
 			continue
 		}
-		if err := relay.Deliver(ctx, r.db, h, evt); err != nil {
+		duplicate, err := relay.DeliverEvent(ctx, r.db, h, evt)
+		r.count(g.name, outcomeOf(duplicate, err))
+		if err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// count records one handler run in event_processed_total, when metrics are on.
+func (r *Runner) count(consumer string, outcome telemetry.Outcome) {
+	if r.cfg.Metrics != nil {
+		r.cfg.Metrics.EventProcessed(consumer, outcome)
+	}
+}
+
+// Groups returns the consumer group ids, one per consumer name.
+func (r *Runner) Groups() []string {
+	out := make([]string, len(r.groups))
+	for i, g := range r.groups {
+		out[i] = g.name
+	}
+	return out
+}
+
+// LagGauges feeds kafka_consumer_lag{group,topic} for the runner's groups from
+// the brokers; run it with telemetry.StartPoller, and call the returned func
+// when done. Labels are the group (one per consumer name) and the topic (the
+// four provisioned ones): both fixed by code, so the series count is bounded
+// however many partitions the topics have. The partition is not a label (it
+// would depend on topic configuration and churn with rebalances) and neither
+// is an offset; the value is the total over the topic's partitions.
+func (r *Runner) LagGauges(m *telemetry.Metrics) (telemetry.GaugeCollector, func(), error) {
+	lr, err := kafka.NewLagReader(r.cfg.Brokers)
+	if err != nil {
+		return nil, nil, err
+	}
+	groups := r.Groups()
+	return telemetry.ConsumerLagGauges(m, func(ctx context.Context) ([]telemetry.ConsumerLag, error) {
+		lags, err := lr.Lag(ctx, groups...)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]telemetry.ConsumerLag, len(lags))
+		for i, l := range lags {
+			out[i] = telemetry.ConsumerLag{Group: l.Group, Topic: l.Topic, Lag: l.Lag}
+		}
+		return out, nil
+	}), lr.Close, nil
 }
 
 // exhausted parks a record whose handler used its budget. The offset advances
@@ -225,6 +286,7 @@ func (r *Runner) exhausted(ctx context.Context, g group, rec kafka.Record, cause
 	var err error
 	for i := 0; i < parkTries; i++ {
 		if err = parkSafely(ctx, r.cfg.Sink, d); err == nil {
+			r.count(g.name, telemetry.OutcomeDeadLetter)
 			r.log.Warn("kafka consumer parked a record in the dead-letter sink",
 				slog.String("consumer", g.name), slog.String("event_id", d.Event.EventID.String()),
 				slog.String("event_type", d.Event.EventType), slog.Any("error", cause))

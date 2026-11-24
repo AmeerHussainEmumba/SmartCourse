@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 )
 
 // Delivery statuses (migrations/notification/000001).
@@ -71,6 +73,11 @@ func UpsertEnrollmentCourse(ctx context.Context, tx *gorm.DB, enrollmentID, cour
 // concurrent handler inserts nothing: the UNIQUE constraint is the
 // arbiter, not a check-then-insert. The initial status reflects what is
 // known now: no usable email -> parked, non-active recipient -> suppressed.
+//
+// The row also stores the traceparent of the span active in ctx (the relay's or
+// the Kafka consumer's, itself a descendant of the originating request), so the
+// sweeper can enqueue the delivery task under that trace. No span in ctx
+// (tracing off) stores NULL.
 func InsertDelivery(ctx context.Context, tx *gorm.DB, eventID uuid.UUID, kind string, recipientID uuid.UUID, params map[string]string) (bool, error) {
 	var r struct {
 		Email  *string
@@ -95,11 +102,12 @@ func InsertDelivery(ctx context.Context, tx *gorm.DB, eventID uuid.UUID, kind st
 	if err != nil {
 		return false, err
 	}
+	_, _, traceparent := telemetry.InjectTraceContext(ctx)
 	ins := tx.WithContext(ctx).Exec(`
-		INSERT INTO notification.deliveries (id, event_id, kind, recipient_id, params, status)
-		VALUES (?, ?, ?, ?, ?::jsonb, ?)
+		INSERT INTO notification.deliveries (id, event_id, kind, recipient_id, params, status, traceparent)
+		VALUES (?, ?, ?, ?, ?::jsonb, ?, NULLIF(?, ''))
 		ON CONFLICT ON CONSTRAINT deliveries_event_kind_recipient_key DO NOTHING
-	`, id, eventID, kind, recipientID, string(raw), status)
+	`, id, eventID, kind, recipientID, string(raw), status, traceparent)
 	return ins.RowsAffected == 1, ins.Error
 }
 

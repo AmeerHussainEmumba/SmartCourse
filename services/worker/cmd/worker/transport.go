@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"gorm.io/gorm"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/transport"
 )
 
@@ -37,16 +40,27 @@ type eventTransport struct {
 	logger    *slog.Logger
 	sink      relay.DeadLetterSink
 	publisher *transport.Publisher
+	// obs carries the tracing flag and the metrics the relay observer, the
+	// publisher, the consumers and the lag gauges use; an inert value means none.
+	obs *infra.Observability
+	// lagInterval is how often kafka_consumer_lag asks the brokers.
+	lagInterval time.Duration
 }
+
+// lagGaugeInterval is how often the consumer lag gauges query the brokers, so
+// the broker load does not depend on how often Prometheus scrapes.
+const lagGaugeInterval = 15 * time.Second
 
 // newEventTransport prepares the transport. In kafka mode it provisions the
 // topics, checks the schema registry (fails when it is unreachable or a subject
 // is missing) and builds the producer, so a misconfigured worker stops at start
 // instead of failing row by row. sink is the optional dead-letter sink (nil
 // keeps log-and-drop, the documented gap); the MongoDB wiring passes its
-// failed_events sink here.
-func newEventTransport(ctx context.Context, logger *slog.Logger, cfg *config.Config, sink relay.DeadLetterSink) (*eventTransport, error) {
-	t := &eventTransport{cfg: cfg, logger: logger, sink: sink}
+// failed_events sink here. obs is startTelemetry's Observability (nil is the
+// same as an inert one): it switches on the relay and produce/consume spans and
+// the event_processed_total and kafka_consumer_lag series.
+func newEventTransport(ctx context.Context, logger *slog.Logger, cfg *config.Config, sink relay.DeadLetterSink, obs *infra.Observability) (*eventTransport, error) {
+	t := &eventTransport{cfg: cfg, logger: logger, sink: sink, obs: obs, lagInterval: lagGaugeInterval}
 	if transportMode(cfg) != config.TransportKafka {
 		return t, nil
 	}
@@ -56,7 +70,7 @@ func newEventTransport(ctx context.Context, logger *slog.Logger, cfg *config.Con
 		return nil, fmt.Errorf("kafka transport: %w", err)
 	}
 	t.publisher, err = transport.NewPublisher(transport.PublisherConfig{
-		Brokers: k.Brokers, ProduceTimeout: k.ProduceTimeout, Schemas: schemas,
+		Brokers: k.Brokers, ProduceTimeout: k.ProduceTimeout, Schemas: schemas, Tracing: obs.TracingEnabled(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("kafka transport: %w", err)
@@ -66,9 +80,17 @@ func newEventTransport(ctx context.Context, logger *slog.Logger, cfg *config.Con
 }
 
 // RelayOptions are the options the relay is built with: the publisher in kafka
-// mode, and the dead-letter sink when there is one.
+// mode, the dead-letter sink when there is one, the trace observer when tracing
+// is on and the event_processed_total hook when metrics are (the hook only fires
+// in-process; kafka consumers count their own).
 func (t *eventTransport) RelayOptions() []relay.Option {
 	var opts []relay.Option
+	if t.obs.TracingEnabled() {
+		opts = append(opts, relay.WithObserver(transport.RelayObserver()))
+	}
+	if m := t.metrics(); m != nil {
+		opts = append(opts, relay.WithHandlerHook(transport.HandlerCounter(m)))
+	}
 	if t.publisher != nil {
 		opts = append(opts, relay.WithPublisher(t.publisher))
 	}
@@ -95,13 +117,41 @@ func (t *eventTransport) Run(ctx context.Context, rl *relay.Relay, db *gorm.DB) 
 		ShutdownTimeout: k.ConsumerShutdownTimeout,
 		Sink:            t.sink,
 		Logger:          t.logger,
+		Tracing:         t.obs.TracingEnabled(),
+		Metrics:         t.metrics(),
 	}, db, rl.Handlers())
 	if err != nil {
 		t.logger.Error("kafka consumers not started", slog.Any("error", err))
 		return
 	}
+	if m := t.metrics(); m != nil {
+		defer t.startLagGauges(ctx, runner, m)()
+	}
 	runner.Run(ctx)
 	t.logger.Info("kafka consumers stopped")
+}
+
+func (t *eventTransport) metrics() *telemetry.Metrics {
+	if t.obs == nil {
+		return nil
+	}
+	return t.obs.Metrics
+}
+
+// startLagGauges runs the kafka_consumer_lag poller for runner's groups and
+// returns the function that stops it. A reader that cannot be built is logged:
+// the consumers run without the gauge.
+func (t *eventTransport) startLagGauges(ctx context.Context, runner *transport.Runner, m *telemetry.Metrics) (stop func()) {
+	collector, closeReader, err := runner.LagGauges(m)
+	if err != nil {
+		t.logger.Error("kafka_consumer_lag not exported", slog.Any("error", err))
+		return func() {}
+	}
+	stopPoll := telemetry.StartPoller(ctx, t.lagInterval, collector)
+	return func() {
+		stopPoll()
+		closeReader()
+	}
 }
 
 // HealthCheck is the non-fatal Kafka readiness check (RFC §6.2: the outbox

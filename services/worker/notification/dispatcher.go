@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 )
 
 // TaskTypeDeliver is the queue task type the Asynq side registers
@@ -99,18 +101,31 @@ func EnqueuePending(ctx context.Context, db *gorm.DB, enq Enqueuer, opts SweepOp
 	enqueued := 0
 	var firstErr error
 	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var ids []uuid.UUID
+		var due []struct {
+			ID          uuid.UUID
+			Traceparent *string
+		}
 		if err := tx.Raw(`
-			SELECT id FROM notification.deliveries
+			SELECT id, traceparent FROM notification.deliveries
 			WHERE (status = 'pending' AND (enqueued_at IS NULL OR enqueued_at < now() - make_interval(secs => ?)))
 			   OR (status = 'sending' AND claimed_at < now() - make_interval(secs => ?))
 			ORDER BY created_at
 			LIMIT ?
-			FOR UPDATE SKIP LOCKED`, opts.RequeueAfter.Seconds(), opts.Lease.Seconds(), opts.Batch).Scan(&ids).Error; err != nil {
+			FOR UPDATE SKIP LOCKED`, opts.RequeueAfter.Seconds(), opts.Lease.Seconds(), opts.Batch).Scan(&due).Error; err != nil {
 			return err
 		}
-		for _, id := range ids {
-			if err := enq.Enqueue(ctx, TaskTypeDeliver, DeliveryPayload(id)); err != nil {
+		for _, d := range due {
+			id := d.ID
+			// The enqueue runs under the trace the delivery row was written
+			// under (ContinueFromEvent with no stored traceparent starts none),
+			// so the Asynq client's producer span and the delivery job span are
+			// descendants of the originating request. The sweep itself is in no
+			// trace: it is a background loop.
+			tp := ""
+			if d.Traceparent != nil {
+				tp = *d.Traceparent
+			}
+			if err := enq.Enqueue(telemetry.ContinueFromEvent(ctx, tp), TaskTypeDeliver, DeliveryPayload(id)); err != nil {
 				// Leave the row as is: the next sweep retries it. Keep going,
 				// one bad enqueue must not block the rest of the batch.
 				if firstErr == nil {
