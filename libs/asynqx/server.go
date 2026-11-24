@@ -21,6 +21,12 @@ import (
 const (
 	DefaultConcurrency     = 10 // RFC §10.2: the critical pool size
 	DefaultShutdownTimeout = 30 * time.Second
+
+	// DefaultDelayedTaskCheckInterval matches the one-second resolution Asynq
+	// stores retry times at, so a retry runs within about a second of when the
+	// backoff schedules it. The cost is one small Redis check per second per
+	// server.
+	DefaultDelayedTaskCheckInterval = time.Second
 )
 
 // HandlerFunc processes one task. Returning an error schedules a retry (or, on
@@ -69,8 +75,10 @@ type ServerConfig struct {
 	OnExhausted func(ctx context.Context, f FailedTask)
 
 	// DelayedTaskCheckInterval is how often scheduled and retry-waiting tasks
-	// are moved to pending. Zero keeps Asynq's default (5s), which is also the
-	// granularity of retry timing.
+	// are moved to pending, and so the granularity of retry timing: a retry due
+	// after 2s still waits for the next check. Zero means
+	// DefaultDelayedTaskCheckInterval (1s). Asynq's own default of 5s made every
+	// retry gap about 5s whatever Backoff said, hiding the doubling.
 	DelayedTaskCheckInterval time.Duration
 
 	Logger *slog.Logger
@@ -122,6 +130,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, errors.New("asynqx: negative ShutdownTimeout")
 	case cfg.ShutdownTimeout == 0:
 		cfg.ShutdownTimeout = DefaultShutdownTimeout
+	}
+	switch {
+	case cfg.DelayedTaskCheckInterval < 0:
+		return nil, errors.New("asynqx: negative DelayedTaskCheckInterval")
+	case cfg.DelayedTaskCheckInterval == 0:
+		cfg.DelayedTaskCheckInterval = DefaultDelayedTaskCheckInterval
 	}
 	if cfg.RetryDelay == nil {
 		b := cfg.Backoff
