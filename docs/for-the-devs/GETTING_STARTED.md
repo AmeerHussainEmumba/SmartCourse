@@ -40,7 +40,7 @@ These five ideas explain *why* the code is shaped the way it is. Misunderstandin
 
 - **Go 1.26+** (the modules declare `go 1.26.5`; CI and the images use 1.26.11) — check with `go version`.
 - **Docker** (with Compose v2, i.e. `docker compose`, not the old standalone `docker-compose`) — check with `docker compose version`.
-- That's it to get the system running, including course publishing (M2 — Temporal's part of `make dev-workflow`, the profile tier these steps use, not `dev-core`). Kafka, MongoDB, and the observability stack (`make dev-events`, `make dev-observability`) exist as compose profiles but nothing in the services uses them yet — see §5.
+- That's it to get the system running, including course publishing (M2: Temporal is part of `make dev-workflow`, the profile tier these steps use, not `dev-core`) and email (Mailpit, a local mail sink that every profile starts). Kafka, MongoDB and the observability stack are optional tiers (`make dev-events`, `make dev-observability`): the services run fine without them, in the default `EVENT_TRANSPORT=inprocess` mode. See "Optional tiers" in §2 and what is wired in §5.
 
 ### Steps
 
@@ -95,6 +95,7 @@ Check it's alive (each HTTP service has its own `/health/ready`):
 curl localhost:8090/health/ready    # identity-api
 curl localhost:8091/health/ready    # course-api
 curl localhost:8092/health/ready    # analytics-api
+curl localhost:8093/health/ready    # worker admin surface
 ```
 
 Try the real thing — log in as one of the accounts `make seed` just created (every seeded account shares the password printed at the end of that command). Auth lives in `identity-api`, port **8090**:
@@ -120,6 +121,35 @@ curl localhost:8091/api/v1/courses
 ```
 
 From here, `api/openapi.yaml` documents every endpoint (across all three services — it's one spec, not three, since the route paths and request/response shapes didn't change, only which process answers them), and each module's README (for example `services/course/course/README.md`) explains the design behind it.
+
+### What is listening where
+
+Everything is published on `127.0.0.1` only.
+
+| Port | What | Started by |
+|---|---|---|
+| 8090 / 8091 / 8092 | identity-api / course-api / analytics-api | `dev-core` and up |
+| 8093 | worker admin surface: `/health/live`, `/health/ready`, failed-event listing and replay (admin token) | `dev-core` and up |
+| 8089 | Swagger UI over `api/openapi.yaml` | `dev-core` and up |
+| 8025 (web) / 1025 (SMTP) | Mailpit, the local mail sink: read the mail the system sends | `dev-core` and up |
+| 5433 / 6380 | Postgres / Redis | `dev-core` and up |
+| 9002 (S3) / 9003 (console) | MinIO | `dev-core` and up |
+| 7233 / 8088 | Temporal / Temporal UI | `dev-workflow` and up |
+| 29092 / 8081 / 27017 | Kafka (from the host) / Schema Registry / MongoDB | `dev-events` and up |
+| 9090 / 3001 / 16686 | Prometheus / Grafana / Jaeger UI (OTLP on 4317 and 4318) | `dev-observability` and up |
+
+### Optional tiers: Kafka, MongoDB, observability
+
+The default stack runs with `EVENT_TRANSPORT=inprocess`: the relay runs the handlers itself and nothing needs Kafka or MongoDB. To try the Kafka path:
+
+```bash
+make dev-events                                   # adds Kafka, Schema Registry, MongoDB
+(cd libs/events && go run ./cmd/register-schemas -registry http://localhost:8081)   # idempotent
+# then give the worker, in .env: EVENT_TRANSPORT=kafka, KAFKA_BROKERS=kafka:9092,
+# SCHEMA_REGISTRY_URL=http://schema-registry:8081, and MONGO_URI=mongodb://mongodb:27017
+```
+
+In kafka mode the worker refuses to start, with a clear error, if the registry is unreachable or a schema subject is missing. The audit archiver only runs in kafka mode and needs `MONGO_URI`. With `MONGO_URI` unset the worker still starts: archive and replay are simply unavailable. Switching a database that has already published events in-process to kafka mode does not replay them (see §5). The metrics and tracing wiring for `make dev-observability` is still being finished (§5).
 
 ### Running natively instead
 
@@ -164,6 +194,8 @@ make test-integration  # integration + concurrency tests — needs Docker, spins
 
 **Plain `go test ./...` at the repo root tests nothing.** The repo is a set of separate Go modules (§4), and Go does not cross module boundaries. These `make` targets run the command in every module for you (`scripts/for-each-module.sh`). To test one module while you work: `cd services/course && go test -race -tags=integration ./...`.
 
+`make verify-deliverables` runs live checks against a running stack (it creates test users and courses in whatever database the stack uses, so run it against a disposable compose project, for example `docker compose -p sc-verify --profile core --profile workflow up -d --build`, then migrate and seed that project, and remove it with `down -v`). Rows for features that are not built yet print PENDING and do not fail the run; only PASS rows count as proven (`docs/plans/week-3-acceptance-matrix.md`). Integration tests start several containers each: on a busy machine a test can fail with `context deadline exceeded` while Docker starts a container. Rerun that single test before suspecting your code.
+
 **Read `docs/guides/testing.md` before writing a new test.** It indexes every existing test — what it checks and why — and explains the two tiers in depth. The short version: this project doesn't mock the database. Integration tests run against real, disposable Postgres containers (`testcontainers-go`) because constraint violations, transaction behavior, and lock contention are precisely what needs verifying, and a mock only proves your code called the method you told it to call.
 
 If you want to see what a real concurrency bug looks like when it's *not* caught: read `services/course/enrollment/service_integration_test.go`'s `TestEnroll_SeatLimit_NeverExceededUnderConcurrency`. It's referenced constantly in this codebase's docs for a reason.
@@ -174,9 +206,9 @@ If you want to see what a real concurrency bug looks like when it's *not* caught
 
 **PostgreSQL is the single source of truth.** Redis and (eventually) MongoDB hold only derived, rebuildable data — never something a user's correctness depends on.
 
-**Four services, one repository and one database, each with its own schema (ADR-0022, ADR-0023, ADR-0024).** `services/identity/cmd/identity-api` serves auth/users, its own Postgres schema (`identity`). `services/course/cmd/course-api` serves courses, enrollments, and progress together, sharing one schema (`course`) — kept in one process and one schema because enrollment locks the `courses` row in the same transaction it writes an enrollment row in (ADR-0012's seat-limit guarantee). `services/analytics/cmd/analytics-api` serves the read-only analytics dashboard from its own schema (`analytics`), fed entirely by relay events — it never queries `course` or `identity` directly. `services/worker/cmd/worker` runs the outbox relay today (polling a fourth, shared `platform` schema every producer writes to), and will run Kafka consumers and background jobs once those exist (see §5 — they don't yet). All four are built and deployed independently, but all import `internal/platform/bootstrap`, so a shared code change can't drift between them the way it could if each maintained its own wiring. No foreign key or query crosses a schema boundary — a service that only needed another's data for display, not ownership, keeps its own small event-fed copy instead (e.g. `course.instructor_mirror`, so the course catalogue can show an instructor's name without reaching into `identity`). (This used to be one binary with a `--mode` flag, then two services, then four sharing one flat schema, then four each with their own — see ADR-0022 through ADR-0024 if you're curious why and when each change happened; it's a good example of a design decision getting revisited based on real feedback, which is worth seeing happen at least once.)
+**Four services, one repository and one database, each with its own schema (ADR-0022, ADR-0023, ADR-0024).** `services/identity/cmd/identity-api` serves auth/users from its own Postgres schema (`identity`). `services/course/cmd/course-api` serves courses, enrollments, progress and certificates together, sharing one schema (`course`) — kept in one process and one schema because enrollment locks the `courses` row in the same transaction it writes an enrollment row in (ADR-0012's seat-limit guarantee). `services/analytics/cmd/analytics-api` serves the read-only analytics dashboard from its own schema (`analytics`), fed entirely by events — it never queries `course` or `identity` directly. `services/worker/cmd/worker` runs everything asynchronous: the outbox relay (polling the shared `platform` schema every producer writes to), the Temporal worker for course publishing, the Asynq pools and scheduled jobs, the notification dispatcher (its own `notification` schema), and, when `EVENT_TRANSPORT=kafka`, one Kafka consumer group per handler. It also serves a small admin HTTP surface on port 8093 (health, and listing and replaying failed events). The four are built and deployed independently, and each binary wires only its own modules in its own `cmd/*/wire.go`. No foreign key or query crosses a schema boundary — a service that only needed another's data for display, not ownership, keeps its own small event-fed copy instead (e.g. `course.instructor_mirror`, so the course catalogue can show an instructor's name without reaching into `identity`). (This used to be one binary with a `--mode` flag, then two services, then four sharing one flat schema, then four each with their own — see ADR-0022 through ADR-0024 if you're curious why and when each change happened; it's a good example of a design decision getting revisited based on real feedback, which is worth seeing happen at least once.)
 
-**Eight domain modules, one shared kernel.** Each module (`services/identity/identity`, `services/course/course`, `services/course/enrollment`, `services/course/progress`, `services/analytics/analytics`, and three not yet built — search, notification, audit) owns one business capability and follows the same internal shape: `handler.go` (HTTP), `service.go` (business logic and transactions), `repository.go` (the only file touching the database directly), `dto.go` (API request/response types), `domain.go` (entities). None of them import each other's internals directly. Between services that is enforced by Go itself (each service is its own Go module, see below); inside the `course` service, where course, enrollment and progress share one module, by a lint rule rather than just convention. `services/README.md` has the full module map.
+**Domain modules, one shared kernel.** The HTTP modules are `services/identity/identity`, `services/course/course`, `services/course/enrollment`, `services/course/progress`, `services/course/certificate` and `services/analytics/analytics`. The worker hosts the asynchronous ones: `services/worker/notification` (dispatcher and mail provider), `services/worker/archive` (the audit archiver), `services/worker/deadletter` (parking and replaying failed events), `services/worker/admin` (the admin HTTP surface), `services/worker/jobs` (scheduled jobs) and `services/worker/transport` (the Kafka side of the event transport). `search` is not a module of its own: the index write and `GET /courses/search` live in `services/course` (ADR-0025). Each domain module owns one business capability and follows the same internal shape: `handler.go` (HTTP), `service.go` (business logic and transactions), `repository.go` (the only file touching the database directly), `dto.go` (API request/response types), `domain.go` (entities). None of them import each other's internals directly. Between services that is enforced by Go itself (each service is its own Go module, see below); inside the `course` service, where course, enrollment, progress and certificate share one module, by a lint rule rather than just convention. `services/README.md` has the module map.
 
 **One repository, 25 Go modules (ADR-0026).** Each service is its own Go module under `services/` (`identity`, `course`, `analytics`, `worker`), the shared kernel is split into one module per package under `libs/` (`auth`, `db`, `config`, `errors`, `idempotency`, ... 19 including `testenv`), and `tools/seed` and `test/e2e` are modules too. Three things follow that will surprise you if you come from a single-module project:
 
@@ -184,7 +216,7 @@ If you want to see what a real concurrency bug looks like when it's *not* caught
 - **Each binary links only what it uses.** `identity-api` has no Temporal SDK in it. `scripts/check-link-graph.sh` enforces that. This is what the Week 2 review asked for.
 - **`go.work` is for your laptop; CI and Docker use `GOWORK=off`.** If you add an import of a library to a module, add its `require` **and its `replace`** (plus the `replace` of anything that library depends on) to your module's `go.mod`, then `GOWORK=off go mod tidy`. Go does not inherit `replace` directives, so forgetting one works on your machine and fails in CI. `libs/README.md` has the dependency order, and `docs/guides/versioning.md` explains when modules get tagged versions (not yet).
 
-**State changes now, side effects later.** A request that changes something (enrolling, publishing a course) commits to Postgres and returns immediately. Anything that doesn't need to block the caller — updating a search index, sending a notification, recalculating analytics — happens asynchronously via the outbox pattern (§1.1 above). This is *why* enrollment feels instant even though "enrolling" conceptually triggers several downstream effects.
+**State changes now, side effects later.** A request that changes something (enrolling, publishing a course) commits to Postgres and returns immediately. Anything that doesn't need to block the caller — sending a notification, issuing a certificate, recalculating analytics, archiving the event — happens asynchronously via the outbox pattern (§1.1 above). The relay delivers outbox rows either in-process (`EVENT_TRANSPORT=inprocess`, the default: it runs the handlers itself) or through Kafka (`EVENT_TRANSPORT=kafka`: it produces to a topic after the broker acks, and a consumer group per handler runs them, ADR-0029). The handlers are the same under both. This is *why* enrollment feels instant even though "enrolling" conceptually triggers several downstream effects.
 
 **Full diagrams and the complete reasoning:** `docs/rfc/smartcourse-rfc.md`. Skim §3 (consistency model) and §4 (architecture overview) — those two sections are what everything else is derived from.
 
@@ -194,13 +226,25 @@ If you want to see what a real concurrency bug looks like when it's *not* caught
 
 Don't assume the RFC describes the current state of the code — it describes the target design, and marks what's implemented. As of now:
 
-**Built, tested, running:** the full database schema; the shared kernel (auth, config, error handling, rate limiting, the outbox writer); the `identity`, `course`, `enrollment`, and `progress` modules, each with a working HTTP API and integration tests against real infrastructure; **the outbox relay** (`libs/relay`) — a real bounded worker pool that drains events and dispatches them to handlers, proven by its own concurrency tests, not just written; and `services/analytics/analytics`, the relay's first handler, which is why `GET /analytics/platform` returns real numbers today instead of zeros. **Course publishing is a real Temporal workflow** (M2, ADR-0025) — `POST /courses/{id}/publish` starts `services/course/workflows.PublishCourseWorkflow`, `GET /courses/{id}/publish-status` polls it, and the workflow's own activities run concurrently where RFC §7.4's graph allows, with per-activity retry and crash-recoverable orchestration (the thing an in-process `errgroup` alone never provided). `GET /courses/search` (full-text) and a Redis-backed course-detail cache are both real too, pulled forward from M3 as part of the same workflow.
+**Built, tested, running** (see `docs/plans/week-3.md` §10 for the dated log):
+- **The core:** the full schema; the shared kernel (auth, config, errors, rate limiting, the outbox writer); `identity`, `course`, `enrollment` and `progress` with HTTP APIs and integration tests against real infrastructure; the outbox relay (`libs/relay`), a bounded worker pool proven by concurrency tests.
+- **Course publishing** is a real Temporal workflow (M2, ADR-0025): `POST /courses/{id}/publish` starts `PublishCourseWorkflow`, `GET /courses/{id}/publish-status` polls it. `GET /courses/search` and a Redis course-detail cache are real too.
+- **Assets:** `POST /assets/upload-url` issues pre-signed MinIO URLs; publishing checks every lesson asset against object storage.
+- **`Idempotency-Key`** on the course POST routes (`libs/idempotency`, DR-023).
+- **Certificates:** one per completed enrollment, owner-only list and get, public verification by code (`services/course/certificate`, DR-025).
+- **Analytics:** 8 of the 9 FR-5 metrics, including Most Popular Courses; per-course stats are owner-gated for instructors (DR-024); a reconciler recomputes everything from the mirrors every 60 s.
+- **Worker:** Asynq pools (one server per queue), scheduled jobs (stale-publish reconciliation, analytics and enrollment-counter reconciliation, idempotency-key and outbox pruning), and the notification dispatcher with an SMTP provider pointed at Mailpit (web UI on http://localhost:8025). No real mail provider is integrated, by decision.
+- **Kafka transport:** `EVENT_TRANSPORT=kafka` makes the relay produce to Kafka after the broker acks and runs a consumer group per handler (`libs/kafka`, `services/worker/transport`, ADR-0029). The default stays `inprocess`.
+- **MongoDB:** the audit archiver (Kafka mode only), the dead-letter store, and replay of failed events through the worker's admin surface on `127.0.0.1:8093` (admin role only). `analytics-api` serves the Failed Events counts from the same store, and answers 503 on that one route when MongoDB is unavailable.
 
-This matters for where you look for examples: if you want to see this codebase's concurrency patterns in production code (not just in a test file), read `libs/relay/` and `services/course/workflows/workflow.go`, not just the RFC's description of them. To run the publish workflow locally, use `make dev-workflow` (not `dev-core`) — that's the Compose profile tier that actually starts Temporal alongside the four services.
+**Where to look for patterns:** concurrency in production code is in `libs/relay/`, `libs/kafka/`, `libs/asynqx/` and `services/course/workflows/workflow.go`, not only in the RFC. To run the publish workflow locally use `make dev-workflow` (not `dev-core`).
 
-**Also built (Week 3 start-now tier, on branch `week3/start-now`, PR #20):** asset upload (`POST /assets/upload-url`, pre-signed MinIO URLs, and real asset checks in the publish workflow's `VerifyAssets`); `Idempotency-Key` on the course POST routes (`libs/idempotency`, DR-023); an Argon2 concurrency gate and relay pool validation; the Week 3 libraries `libs/events` (Protobuf contracts and Schema Registry codec), `libs/mongostore`, `libs/asynqx` and `libs/telemetry`; and compose services for Kafka, Schema Registry, MongoDB, Mailpit, Prometheus, Grafana and Jaeger. These libraries are tested on their own but **not wired into the services yet** — that wiring waits for the review of the module layout (`docs/plans/week-3.md` §4a and §10).
-
-**Not built yet, on purpose, not a gap:** Kafka in the relay (the relay is a deliberate in-process bridge ahead of it — see ADR-0021 and ADR-0029), the Kafka consumers, the MongoDB archive and dead-letter store, the Asynq worker pools and scheduled jobs, notifications (Mailpit is a local sink; no real mail provider is integrated, by decision), certificates, and instrumenting the services with metrics and traces. The `search` module name is partially real: the index write and `GET /courses/search` live in `services/course` (ADR-0025). Day-to-day status is the progress log in `docs/plans/week-3.md`.
+**In progress or not wired yet:**
+- **Observability.** The Prometheus, Grafana and Jaeger containers (`make dev-observability`) and `libs/telemetry` exist, and instrumenting the services with metrics and traces is being wired now; until it lands, treat the dashboards as empty. Alert thresholds are placeholders.
+- **Workflow Issues** (the other half of the ninth analytics metric): no source yet, so `workflow_issues` is `null` in `GET /analytics/issues`.
+- **Search-index and cache reconciliation** (ADR-0025's gap).
+- **Unverified:** a Confluent-format consumer reading our Kafka bytes, multi-broker or TLS Kafka, the full stack running in Kafka mode from built images, and the CI jobs for the Kafka tier.
+- **Switching an existing database to Kafka mode:** rows already published in-process never reach Kafka, and a new consumer group starts at the beginning of each topic.
 
 Full detail: `docs/rfc/smartcourse-rfc.md` §21.0.
 
@@ -217,6 +261,7 @@ Reading order, roughly in order of how much context each one assumes:
 5. `libs/README.md` — the conventions every module builds on.
 6. `docs/adr/smartcourse-adr.md` — *why* things are the way they are, including decisions that were reconsidered. Skim the index; read the ones relevant to whatever you're about to touch.
 7. `docs/guides/testing.md` — before you write your first test.
+8. `docs/plans/week-3.md` (the dated progress log in §10 is the current state of the work) and `docs/rfc/differences-from-requirements.md` — every place the design goes beyond or reinterprets the original brief, including the Week 3 decisions (DR-022 to DR-025).
 
 ## 7. Working agreements
 
