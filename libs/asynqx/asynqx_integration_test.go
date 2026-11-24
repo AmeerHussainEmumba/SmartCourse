@@ -619,9 +619,11 @@ func testSchedulerDuplicate(t *testing.T, redis asynqx.RedisOpt) {
 	mu.Lock()
 	distinct := len(attempts)
 	mu.Unlock()
-	if s := state(t, insp, asynqx.QueueLow, tickID); s != "pending" {
-		t.Fatalf("tick task state = %s, want pending", s)
-	}
+	// OnAttempt runs before the enqueue, so the task may not be in Redis yet
+	// at the moment both attempts are seen: wait for it rather than assume.
+	eventually(t, 10*time.Second, "tick task enqueued", func() bool {
+		return state(t, insp, asynqx.QueueLow, tickID) == "pending"
+	})
 	// One task per distinct tick seen, never one per replica.
 	if got := stats(t, insp, asynqx.QueueLow).Pending; got != distinct {
 		t.Fatalf("pending tasks = %d for %d distinct tick(s): replicas double-enqueued", got, distinct)
