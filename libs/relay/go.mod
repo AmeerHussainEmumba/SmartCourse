@@ -81,6 +81,7 @@ require (
 )
 
 require (
+	github.com/AmeerHussainEmumba/SmartCourse/libs/logging v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/testenv v0.0.0
 	go.uber.org/goleak v1.3.0
@@ -89,6 +90,7 @@ require (
 replace (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/config => ../config
 	github.com/AmeerHussainEmumba/SmartCourse/libs/db => ../db
+	github.com/AmeerHussainEmumba/SmartCourse/libs/logging => ../logging
 	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox => ../outbox
 	github.com/AmeerHussainEmumba/SmartCourse/libs/testenv => ../testenv
 )

@@ -29,6 +29,8 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/logging"
 )
 
 // DecodedEvent is an outbox row, decoded for handler consumption.
@@ -93,6 +95,10 @@ type Relay struct {
 	// sink receives events the relay gives up on, before they are dropped.
 	// Nil keeps the log-and-drop behaviour (see DeadLetterSink).
 	sink DeadLetterSink
+	// observer and handlerHook are the observability seams (see Observer);
+	// nil means none.
+	observer    Observer
+	handlerHook HandlerHook
 
 	// cooldown is process-local (RFC §10.3): rows THIS instance just failed
 	// to deliver and when it may retry them, so a failing row is not
@@ -126,6 +132,12 @@ func WithPublishBackoff(d time.Duration) Option { return func(r *Relay) { r.publ
 // WithDeadLetterSink sets where the relay parks an event it gives up on. See
 // DeadLetterSink for the contract. Without one the relay logs and drops.
 func WithDeadLetterSink(s DeadLetterSink) Option { return func(r *Relay) { r.sink = s } }
+
+// WithObserver installs the per-row delivery observer (see Observer).
+func WithObserver(o Observer) Option { return func(r *Relay) { r.observer = o } }
+
+// WithHandlerHook installs the per-handler outcome hook (see HandlerHook).
+func WithHandlerHook(h HandlerHook) Option { return func(r *Relay) { r.handlerHook = h } }
 
 // New builds a Relay. Defaults match RFC §6.3 (200ms poll interval) and
 // §10.2 (pool sizes bounded by the database connection budget, not CPU —
@@ -297,15 +309,29 @@ func (r *Relay) claimAndProcess(ctx context.Context) (claimed bool, err error) {
 		TraceID: deref(row.TraceID), SpanID: deref(row.SpanID), ActorID: row.ActorID,
 	}
 
+	// dctx is workCtx with whatever the observer attached (a span continuing
+	// the row's trace); everything that runs "for" the event uses it, while the
+	// claim transaction keeps workCtx.
+	mode := ModeProcess
+	if r.publisher != nil {
+		mode = ModePublish
+	}
+	dctx, finish := r.observe(workCtx, evt, mode)
 	var failures []consumerFailure
 	if r.publisher != nil {
-		failures = r.publish(workCtx, evt)
+		failures = r.publish(dctx, evt)
 	} else {
-		failures = r.process(workCtx, evt)
+		failures = r.process(dctx, evt)
 	}
 	if len(failures) > 0 {
-		err = r.recordFailure(workCtx, tx, evt, failures)
+		errs := make([]error, len(failures))
+		for i, f := range failures {
+			errs[i] = fmt.Errorf("%s: %w", f.consumer, f.err)
+		}
+		finish(errors.Join(errs...))
+		err = r.recordFailure(dctx, tx, evt, failures)
 	} else {
+		finish(nil)
 		err = tx.Exec(`UPDATE outbox SET published_at = ? WHERE id = ?`, time.Now().UTC(), evt.OutboxID).Error
 		if err == nil {
 			r.processed.Add(1)
@@ -344,14 +370,14 @@ func (r *Relay) activeCooldowns() []int64 {
 func (r *Relay) publish(ctx context.Context, evt DecodedEvent) (failures []consumerFailure) {
 	defer func() {
 		if p := recover(); p != nil {
-			slog.Error("relay publisher panicked", slog.Int64("outbox_id", evt.OutboxID),
+			eventLog(ctx, evt).Error("relay publisher panicked", slog.Int64("outbox_id", evt.OutboxID),
 				slog.Any("panic", p), slog.String("stack", string(debug.Stack())))
 			failures = []consumerFailure{{RelayConsumer, fmt.Errorf("publisher panic: %v", p)}}
 		}
 	}()
 	if err := r.publisher.Publish(ctx, evt); err != nil {
 		r.failed.Add(1)
-		slog.Error("relay publish failed",
+		eventLog(ctx, evt).Error("relay publish failed",
 			slog.String("event_type", evt.EventType), slog.Int64("outbox_id", evt.OutboxID),
 			slog.Bool("transient", IsTransient(err)), slog.Any("error", err))
 		return []consumerFailure{{RelayConsumer, err}}
@@ -368,10 +394,12 @@ func (r *Relay) process(ctx context.Context, evt DecodedEvent) []consumerFailure
 		if !h.EventTypes[evt.EventType] {
 			continue
 		}
-		if err := Deliver(ctx, r.db, h, evt); err != nil {
+		duplicate, err := DeliverEvent(ctx, r.db, h, evt)
+		r.hook(h.ConsumerName, duplicate, err)
+		if err != nil {
 			failures = append(failures, consumerFailure{h.ConsumerName, err})
 			r.failed.Add(1)
-			slog.Error("relay handler failed",
+			eventLog(ctx, evt).Error("relay handler failed",
 				slog.String("consumer", h.ConsumerName), slog.String("event_type", evt.EventType),
 				slog.Int64("outbox_id", evt.OutboxID), slog.Any("error", err))
 		}
@@ -422,7 +450,7 @@ func (r *Relay) recordFailure(ctx context.Context, tx *gorm.DB, evt DecodedEvent
 				if err := park(ctx, r.sink, DeadLetter{Event: evt, Consumer: f.consumer, Err: f.err, Attempts: attempts}); err != nil {
 					parked = false
 					r.parkFailures.Add(1)
-					slog.Error("relay: dead-letter sink refused the event; leaving the row unpublished",
+					eventLog(ctx, evt).Error("relay: dead-letter sink refused the event; leaving the row unpublished",
 						slog.String("consumer", f.consumer), slog.String("event_type", evt.EventType),
 						slog.Int64("outbox_id", evt.OutboxID), slog.Any("error", err))
 				}
@@ -433,7 +461,7 @@ func (r *Relay) recordFailure(ctx context.Context, tx *gorm.DB, evt DecodedEvent
 			}
 		}
 		r.givenUp.Add(1)
-		slog.Error("relay: giving up on event after max attempts",
+		eventLog(ctx, evt).Error("relay: giving up on event after max attempts",
 			slog.String("event_type", evt.EventType), slog.Int64("outbox_id", evt.OutboxID), slog.Int("attempts", attempts),
 			slog.Bool("parked", r.sink != nil))
 		return tx.Exec(`UPDATE outbox SET attempts = ?, last_error = ?, published_at = ? WHERE id = ?`,
@@ -447,6 +475,57 @@ func (r *Relay) setCooldown(id int64, d time.Duration) {
 	r.cooldownMu.Lock()
 	r.cooldown[id] = time.Now().Add(d)
 	r.cooldownMu.Unlock()
+}
+
+// eventLog is the logger for a line about one event: event_id (RFC §12.4) plus
+// the trace_id and span_id of the active span when the observer started one.
+func eventLog(ctx context.Context, evt DecodedEvent) *slog.Logger {
+	return logging.WithEventID(logging.Correlated(ctx), evt.EventID.String())
+}
+
+// observe starts the observer's span for evt, or returns ctx and a no-op. A
+// panicking observer is logged and ignored: observability must never fail a
+// delivery.
+func (r *Relay) observe(ctx context.Context, evt DecodedEvent, mode string) (octx context.Context, finish func(error)) {
+	noop := func(error) {}
+	if r.observer == nil {
+		return ctx, noop
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			slog.Error("relay observer panicked; delivering without it", slog.Any("panic", p))
+			octx, finish = ctx, noop
+		}
+	}()
+	octx, fin := r.observer(ctx, evt, mode)
+	if octx == nil {
+		octx = ctx
+	}
+	if fin == nil {
+		return octx, noop
+	}
+	return octx, func(err error) {
+		defer func() {
+			if p := recover(); p != nil {
+				slog.Error("relay observer finish panicked", slog.Any("panic", p))
+			}
+		}()
+		fin(err)
+	}
+}
+
+// hook reports one handler's outcome to the HandlerHook, shielding the relay
+// from a panic in it.
+func (r *Relay) hook(consumer string, duplicate bool, err error) {
+	if r.handlerHook == nil {
+		return
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			slog.Error("relay handler hook panicked", slog.Any("panic", p))
+		}
+	}()
+	r.handlerHook(consumer, duplicate, err)
 }
 
 func deref(s *string) string {
