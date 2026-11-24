@@ -80,7 +80,7 @@ REST over JSON, versioned under `/api/v1`. Full contract: `api/openapi.yaml` (tr
 | `identity` | register, login, refresh, logout, profile, password reset, email verification |
 | `course` | course/module/lesson CRUD, catalogue (keyset-paginated), publish, asset upload URLs (`POST /assets/upload-url`) |
 | `enrollment` | enroll, withdraw, my-courses, roster (`POST /enrollments` honours `Idempotency-Key`, as do the other course POST routes; DR-023) |
-| `progress` | mark lesson complete, progress (certificates not yet built — see `docs/rfc/smartcourse-rfc.md` §21.0) |
+| `progress` | mark lesson complete, progress, certificates (`GET /certificates`, `GET /certificates/{id}`, public `GET /certificates/verify/{code}`); issued by a `progress.course_completed` relay consumer in `services/course/certificate`, which the worker must register |
 | `analytics` | platform-wide metrics (`GET /analytics/platform`) — populated asynchronously by the outbox relay, not written directly by any handler above |
 
 Errors are always `{ "code", "message", "details" }` with a stable, documented `code` — never a raw stack trace or database error (see `libs/errors`).

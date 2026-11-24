@@ -483,6 +483,40 @@ paths:
         '204': { description: No Content }
         '404': { description: "Enrollment not found or not yours, or lessonKey is not a lesson of the published version (lesson_not_found). Previously 204 for an unknown key.", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
+  /certificates:
+    get:
+      summary: List the current student's certificates, newest first (RFC §8.4)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Certificate' } } } } } } }
+        '401': { description: Missing or invalid token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /certificates/{id}:
+    get:
+      summary: Get one certificate (owner only). Another student's certificate answers exactly like an unknown id (DR-022).
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Certificate' } } } }
+        '400': { description: Malformed id (validation_failed), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: Missing or invalid token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: Unknown id or not yours (not_found), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /certificates/verify/{code}:
+    get:
+      summary: Verify a certificate by its verification code (public, no token; rate limited to 30 per minute per IP, RFC §8.4)
+      description: >-
+        Returns only the course title, the student name on the certificate and the issue date.
+        Certificates are never revoked (RFC §8.4), so a 200 means the certificate was issued, not
+        that the holder's enrollment is still complete.
+      security: []
+      parameters: [{ name: code, in: path, required: true, schema: { type: string, pattern: '^[A-Z2-7]{26}$' } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CertificateVerification' } } } }
+        '400': { description: Malformed code (validation_failed), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: Unknown code (not_found), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '429': { description: Rate limited (rate_limited), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
 components:
   parameters:
     IdempotencyKey:
@@ -707,3 +741,22 @@ components:
         status: { type: string, enum: [active, completed, withdrawn] }
         enrolled_at: { type: string, format: date-time }
         withdrawn_at: { type: string, format: date-time, nullable: true }
+
+    Certificate:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        enrollment_id: { type: string, format: uuid }
+        course_id: { type: string, format: uuid }
+        course_version_id: { type: string, format: uuid, nullable: true }
+        course_title: { type: string, description: "Snapshot at issue time (RFC §8.4)" }
+        student_name: { type: string, description: "Snapshot at issue time (RFC §8.4)" }
+        verification_code: { type: string, pattern: '^[A-Z2-7]{26}$' }
+        issued_at: { type: string, format: date-time }
+
+    CertificateVerification:
+      type: object
+      properties:
+        course_title: { type: string }
+        student_name: { type: string }
+        issued_at: { type: string, format: date-time }

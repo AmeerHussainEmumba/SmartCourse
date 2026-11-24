@@ -11,7 +11,9 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/idempotency"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/ratelimit"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/assets"
+	"github.com/AmeerHussainEmumba/SmartCourse/services/course/certificate"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/enrollment"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/progress"
@@ -53,4 +55,11 @@ func registerRoutes(r *gin.Engine, deps *infra.Dependencies, cfg *config.Config,
 
 	progressSvc := progress.NewService(progress.NewRepository(deps.DB))
 	progress.RegisterRoutes(api, progressSvc, cfg.JWT)
+
+	// The public verification route (RFC §8.4) takes a per-IP limit, 30 a
+	// minute like the identity module's other token-guessing surfaces.
+	certificateSvc := certificate.NewService(certificate.NewRepository(deps.DB))
+	limiter := ratelimit.New(deps.RDB)
+	certificate.RegisterRoutes(api, certificateSvc, cfg.JWT,
+		limiter.Middleware("certificate-verify", ratelimit.PerMinute(30)))
 }

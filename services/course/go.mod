@@ -58,6 +58,7 @@ require (
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.30.1 // indirect
+	github.com/go-redis/redis_rate/v10 v10.0.1 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
@@ -136,6 +137,7 @@ require (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/infra v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/logging v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/ratelimit v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/relay v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/router v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/temporal v0.0.0
@@ -162,6 +164,7 @@ replace (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/infra => ../../libs/infra
 	github.com/AmeerHussainEmumba/SmartCourse/libs/logging => ../../libs/logging
 	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox => ../../libs/outbox
+	github.com/AmeerHussainEmumba/SmartCourse/libs/ratelimit => ../../libs/ratelimit
 	github.com/AmeerHussainEmumba/SmartCourse/libs/relay => ../../libs/relay
 	github.com/AmeerHussainEmumba/SmartCourse/libs/router => ../../libs/router
 	github.com/AmeerHussainEmumba/SmartCourse/libs/temporal => ../../libs/temporal
