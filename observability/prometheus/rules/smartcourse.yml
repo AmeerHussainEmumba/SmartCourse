@@ -1,10 +1,24 @@
-# Alert rules (RFC §12.3, §6.9). Thresholds are local-dev starting points,
-# not tuned SLOs; review with the service owners before any real deployment.
+# Alert rules (RFC §12.3, §6.9). EVERY threshold below is a PLACEHOLDER
+# (a local-dev starting point, not a tuned SLO): no traffic data exists to tune
+# them against, and the RFC §13.1 latency targets are not wired to a rule.
+# Each rule says why its number is a placeholder. Review with the service
+# owners before any real deployment.
 # No Alertmanager is wired: alerts are visible at http://localhost:9090/alerts.
+#
+# Which series exist today (what has been verified is in observability/README.md):
+#   outbox_*, db_connections_*, http_*           identity-api, course-api, worker (outbox) / all four
+#   asynq_*, workflow_*                          worker
+#   dead_letter_total, event_processed_total,    defined and exported, but nothing increments them
+#   kafka_consumer_lag                           until the Kafka transport lands (rules stay silent)
+#
+# The outbox is one table read by three binaries, so its rules aggregate with
+# max() instead of alerting once per job.
 groups:
   - name: smartcourse-async-health
     rules:
       # RFC §6.9: alert on the RATE of dead-lettering, not its existence.
+      # PLACEHOLDER 0.05/s: no real dead-letter rate has been observed, and the
+      # series stays empty until the Kafka transport parks events.
       - alert: DeadLetterRateHigh
         expr: sum by (consumer) (rate(dead_letter_total[10m])) > 0.05
         for: 10m
@@ -13,6 +27,10 @@ groups:
           summary: "Sustained dead-lettering by {{ $labels.consumer }}"
           description: "More than 0.05 dead letters/s (~3/min) for 10m. An occasional poison message is expected; a sustained rate is an incident."
 
+      # PLACEHOLDER 300s: the relay polls about once a second, so a real
+      # healthy age is seconds; 5 minutes is a guess at "clearly stuck". A row
+      # the relay gave up on (last_error set) stays unpublished and keeps this
+      # firing until it is dealt with, by design.
       - alert: OutboxOldestUnpublishedTooOld
         expr: max(outbox_oldest_unpublished_seconds) > 300
         for: 2m
@@ -22,12 +40,14 @@ groups:
           description: "Relay failing or Kafka unreachable; backlog size can hide a single stuck row, age cannot."
 
       - alert: OutboxBacklogGrowing
-        expr: outbox_backlog > 100 and deriv(outbox_backlog[10m]) > 0
+        # PLACEHOLDER 100 rows: no sizing data; depends on write rate.
+        expr: max(outbox_backlog) > 100 and deriv(max(outbox_backlog)[10m:1m]) > 0
         for: 10m
         labels: {severity: warn}
         annotations:
           summary: "outbox_backlog is {{ $value }} and still rising"
 
+      # PLACEHOLDER 1000 messages. Silent until the Kafka side fills the metric.
       - alert: KafkaConsumerLagGrowing
         expr: max by (group, topic) (kafka_consumer_lag) > 1000 and deriv(kafka_consumer_lag[10m]) > 0
         for: 10m
@@ -37,6 +57,8 @@ groups:
 
       # asynq_retry_count is treated as a gauge (tasks currently awaiting
       # retry); growth over 15m means jobs fail faster than they recover.
+      # PLACEHOLDER +10 in 15m: jobs are few (maintenance schedules, mail), so
+      # any sustained retry growth is notable, but 10 is a guess.
       - alert: AsynqRetryGrowth
         expr: sum by (queue) (delta(asynq_retry_count[15m])) > 10
         for: 5m
@@ -45,6 +67,8 @@ groups:
           summary: "Asynq retry set growing on queue {{ $labels.queue }}"
           description: "Provider trouble surfaces here first (RFC §12.3)."
 
+      # Not a tuned number: any failure is reported. workflow_* counts runs
+      # first executed live on a worker process (replays are not counted).
       - alert: WorkflowFailures
         expr: increase(workflow_failed_total[15m]) > 0
         labels: {severity: warn}
@@ -53,6 +77,7 @@ groups:
 
   - name: smartcourse-http-and-db
     rules:
+      # PLACEHOLDER 5%: no error budget has been agreed.
       - alert: High5xxRatio
         expr: |
           sum by (job) (rate(http_requests_total{status=~"5.."}[5m]))
@@ -62,9 +87,24 @@ groups:
         annotations:
           summary: "More than 5% of requests to {{ $labels.job }} return 5xx"
 
+      # PLACEHOLDER 90%: pool sizes come from POSTGRES_MAX_OPEN_CONNS (RFC 13.2).
+      # db_connections_max is 0 for an unlimited pool, which divides to +Inf, so
+      # that case is excluded.
       - alert: DBConnectionPoolNearlyExhausted
-        expr: db_connections_in_use / db_connections_max > 0.9
+        expr: db_connections_in_use / (db_connections_max > 0) > 0.9
         for: 5m
         labels: {severity: warn}
         annotations:
           summary: "DB pool above 90% on {{ $labels.job }}"
+
+  - name: smartcourse-scrape-health
+    rules:
+      # Not a tuned number. If the worker is down its outbox gauges vanish, but
+      # identity-api and course-api still report the backlog; this rule covers
+      # the case where a target itself cannot be scraped.
+      - alert: ScrapeTargetDown
+        expr: up{job=~"identity-api|course-api|analytics-api|worker"} == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "Prometheus cannot scrape {{ $labels.job }}"
