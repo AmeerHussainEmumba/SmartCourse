@@ -22,8 +22,9 @@ Provisioning as code for the compose `events` and `observability` profiles
 | `outbox_backlog`, `outbox_oldest_unpublished_seconds` | identity-api, course-api, worker (one shared table: aggregate with `max()`) | live, refreshed every 15 s |
 | `asynq_queue_depth`, `asynq_retry_count` | worker | live (depth = pending + scheduled) |
 | `workflow_started/completed/failed_total` | worker | wired; verified with the Temporal test environment only, not against a real Temporal server |
-| `dead_letter_total` | counted by `countParked` in the worker | **no series yet**: nothing builds the dead-letter sink until the Kafka transport step |
-| `kafka_consumer_lag`, `event_processed_total` | the Kafka consumers | **defined, never fed yet** |
+| `dead_letter_total{consumer}` | worker: `countParked` around the dead-letter sink | live once an event is parked (no series before); the relay's own give-up has `consumer="relay"` |
+| `event_processed_total{consumer,outcome}` | worker: the Kafka runner (kafka transport) or a relay hook (in-process) | live per consumer once it handles an event |
+| `kafka_consumer_lag{group,topic}` | worker: consumer-group lag from the brokers, total per topic, every 15 s | live in kafka mode only; stale (not zero) while the broker is unreachable |
 
 ## Exposure of `/metrics`
 
@@ -37,7 +38,7 @@ The services export OTLP/HTTP to `jaeger:4318` (`OTEL_EXPORTER_OTLP_ENDPOINT` in
 
 Verified on 2026-11-24 (disposable project `sc-obs`, removed afterwards; images built from the working tree): Prometheus showed `identity-api`, `course-api`, `analytics-api` and `worker` UP (plus itself); `promtool check config` passed for the config and 9 rules; Grafana provisioned the 13-panel dashboard and every panel expression runs against Prometheus (panels for the unfed series return no data, as documented); two requests to course-api each produced a Jaeger trace with the HTTP span and Redis and Postgres spans, one including `INSERT outbox`, and the outbox row carried the same trace id and the actor; with Jaeger down the services started and answered normally.
 
-Not verified: panels rendered in a browser; any alert firing (none was triggered); Alertmanager (not wired); a trace through the relay, a Kafka consumer or an Asynq task enqueued by an event (later step); tail sampling; behaviour under load; a real Temporal workflow run.
+Not verified: panels rendered in a browser; any alert firing (none was triggered); Alertmanager (not wired); a live trace through Jaeger across the relay, a Kafka consumer and the delivery job on a built image (see ADR-0032's 2026-11-24 Phase 7 events note for what was run); tail sampling; behaviour under load; a real Temporal workflow run.
 
 ## Starting
 

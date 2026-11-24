@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Added `TraceparentFromIDs(traceID, spanID)` (builds a traceparent from an outbox row's two id columns, sampled flag set, empty for invalid ids), `StartRelay` (INTERNAL span for the outbox relay delivering a row) and the `TraceparentHeader` constant shared by the Kafka record header and the Asynq task header.
+
 - Wired into identity-api, course-api, analytics-api and the worker through `libs/infra` (`Dependencies.Observe`), Phase 7.
 - Added `CheckLabels`: the cardinality guard. It fails when any non-runtime metric has a label outside `route, method, status, queue, group, topic, consumer, outcome` (tests prove it rejects `user_id`, `course_id`, `path`, `url`, `request_id`, `trace_id`, `event_id`, `job_id`, `email`).
 - `HTTPTracing` records `smartcourse.request_id` on the server span and does not trace `/metrics`, `/health/live` and `/health/ready`.

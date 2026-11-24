@@ -49,7 +49,8 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	defer startTelemetry(ctx, logger, deps, cfg)() // tracing, /metrics, Temporal interceptors; see telemetry_wire.go
+	obs, shutdownTelemetry := startTelemetry(ctx, logger, deps, cfg) // tracing, /metrics, Temporal interceptors; see telemetry_wire.go
+	defer shutdownTelemetry()
 
 	// MongoDB (archive, dead letters) and the admin surface run beside the
 	// relay and never stop it: see mongo_wire.go.
@@ -59,9 +60,9 @@ func main() {
 	// none, the relay logs and drops it as it did before Week 3.
 	var sink relay.DeadLetterSink
 	if cfg.Mongo.URI != "" {
-		sink = deadLetterAdapter{mg.Sink()}
+		sink = deadLetterAdapter{mg.Sink(obs.Metrics)} // counts dead_letter_total
 	}
-	events, err := newEventTransport(ctx, logger, cfg, sink)
+	events, err := newEventTransport(ctx, logger, cfg, sink, obs)
 	if err != nil {
 		logger.Error("event transport not ready", slog.Any("error", err))
 		os.Exit(1)

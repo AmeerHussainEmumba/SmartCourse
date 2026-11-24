@@ -38,6 +38,20 @@ Multiple handlers can register for the same event type — that's the fan-out RF
 
 `DecodedEvent` carries `TraceID`, `SpanID` (strings, empty when the writer supplied none) and `ActorID` (`*uuid.UUID`, nil when absent), read from the outbox row (RFC §6.4). Rows written before migration `platform/000003` have all three NULL. The relay only passes them through; propagating them into spans or Kafka headers is the handler's and the producer's job.
 
+## Observability seams (ADR-0032)
+
+```go
+rl := relay.New(db,
+    relay.WithObserver(func(ctx context.Context, evt relay.DecodedEvent, mode string) (context.Context, func(error)) {
+        ctx, span := start(ctx, evt, mode) // mode is relay.ModePublish or relay.ModeProcess
+        return ctx, func(err error) { end(span, err) }
+    }),
+    relay.WithHandlerHook(func(consumer string, duplicate bool, err error) { /* count */ }),
+)
+```
+
+The observer runs once per delivery attempt, after the row is claimed, and the context it returns is the one the `Publisher` (publish mode) or the handlers (in-process mode) run under, so a span started there is their parent. `finish` gets the attempt's error (the joined per-consumer failures) or nil. `DecodedEvent.TraceID`/`SpanID` are what an implementation continues from: the row stores the two ids, not a `traceparent`, and the span id is the writer's HTTP server span, so the relay's span is that span's child (`libs/telemetry.TraceparentFromIDs`, `StartRelay`). `services/worker/transport.RelayObserver` is the implementation. This is a hook, not an import of `libs/telemetry`, so identity-api and analytics-api, which link the relay, do not link tracing for it. The hook is for the in-process transport only (the handlers run in the relay); in publish mode the Kafka consumers count their own outcomes. Relay log lines about a row carry `event_id` (RFC §12.4).
+
 ## Publish mode: the Kafka transport (ADR-0029)
 
 `relay.WithPublisher(p)` switches the per-row step from "run the handlers" to "hand the row to `p`":

@@ -25,12 +25,13 @@ import (
 var transportModes = []string{config.TransportInProcess, config.TransportKafka}
 
 // useTransport sets cfg.Kafka for mode. For kafka it starts a real broker and
-// the registry stand-in (not the real Schema Registry, see transporttest).
-func useTransport(t *testing.T, cfg *config.Config, mode string) {
+// the registry stand-in (not the real Schema Registry, see transporttest), and
+// returns the broker so a test can stop and restart it; it is nil in-process.
+func useTransport(t *testing.T, cfg *config.Config, mode string) *testenv.KafkaEnv {
 	t.Helper()
 	if mode != config.TransportKafka {
 		cfg.Kafka = config.KafkaConfig{Transport: config.TransportInProcess}
-		return
+		return nil
 	}
 	kb := testenv.SetupKafka(t)
 	reg := transporttest.NewRegistry(t)
@@ -40,6 +41,7 @@ func useTransport(t *testing.T, cfg *config.Config, mode string) {
 		ConsumerBackoffBase: 50 * time.Millisecond, ConsumerBackoffMax: time.Second,
 		ConsumerShutdownTimeout: 5 * time.Second, ProduceTimeout: 10 * time.Second,
 	}
+	return kb
 }
 
 // recordingSink counts what the transport parked.
@@ -66,12 +68,33 @@ func (s *recordingSink) parked() []relay.DeadLetter {
 // stops all of it and waits.
 func runEvents(t *testing.T, ctx context.Context, cfg *config.Config, deps *infra.Dependencies) (rl *relay.Relay, sink *recordingSink, stop func()) {
 	t.Helper()
+	return runEventsObserved(t, ctx, cfg, deps, nil)
+}
+
+// runEventsObserved is runEvents with startTelemetry's Observability (nil is
+// none), which switches on the spans and the event and lag metrics.
+func runEventsObserved(t *testing.T, ctx context.Context, cfg *config.Config, deps *infra.Dependencies, obs *infra.Observability) (rl *relay.Relay, sink *recordingSink, stop func()) {
+	t.Helper()
 	sink = &recordingSink{}
-	tr, err := newEventTransport(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), cfg, sink)
+	rl, stop = runEventsWith(t, ctx, cfg, deps, obs, sink)
+	return rl, sink, stop
+}
+
+// runEventsWith runs the event side with sink as the dead-letter sink and the
+// extra handlers registered on the relay (and so given consumer groups in kafka
+// mode) before anything starts. The gauge intervals are short, for the tests
+// that watch them.
+func runEventsWith(t *testing.T, ctx context.Context, cfg *config.Config, deps *infra.Dependencies, obs *infra.Observability, sink relay.DeadLetterSink, extra ...relay.Handler) (rl *relay.Relay, stop func()) {
+	t.Helper()
+	tr, err := newEventTransport(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), cfg, sink, obs)
 	if err != nil {
 		t.Fatalf("newEventTransport: %v", err)
 	}
+	tr.lagInterval = 200 * time.Millisecond
 	rl = buildRelay(deps, cfg, tr.RelayOptions()...)
+	for _, h := range extra {
+		rl.Register(h)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -86,7 +109,7 @@ func runEvents(t *testing.T, ctx context.Context, cfg *config.Config, deps *infr
 		})
 	}
 	t.Cleanup(stop)
-	return rl, sink, stop
+	return rl, stop
 }
 
 // pollUntil polls problems until it reports none or the deadline passes, and
@@ -128,7 +151,7 @@ func TestNewEventTransport_KafkaStartup(t *testing.T) {
 	t.Run("healthy", func(t *testing.T) {
 		cfg.Kafka = base
 		cfg.Kafka.SchemaRegistryURL = transporttest.NewRegistry(t).URL
-		tr, err := newEventTransport(context.Background(), logger, cfg, nil)
+		tr, err := newEventTransport(context.Background(), logger, cfg, nil, nil)
 		if err != nil {
 			t.Fatalf("newEventTransport: %v", err)
 		}
@@ -149,7 +172,7 @@ func TestNewEventTransport_KafkaStartup(t *testing.T) {
 		reg.Remove("smartcourse.progress.v1.CourseCompleted")
 		cfg.Kafka = base
 		cfg.Kafka.SchemaRegistryURL = reg.URL
-		_, err := newEventTransport(context.Background(), logger, cfg, nil)
+		_, err := newEventTransport(context.Background(), logger, cfg, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "smartcourse.progress.v1.CourseCompleted") {
 			t.Fatalf("want an error naming the missing subject, got %v", err)
 		}
@@ -157,7 +180,7 @@ func TestNewEventTransport_KafkaStartup(t *testing.T) {
 	t.Run("registry unreachable", func(t *testing.T) {
 		cfg.Kafka = base
 		cfg.Kafka.SchemaRegistryURL = "http://127.0.0.1:1"
-		_, err := newEventTransport(context.Background(), logger, cfg, nil)
+		_, err := newEventTransport(context.Background(), logger, cfg, nil, nil)
 		if err == nil || !strings.Contains(err.Error(), "127.0.0.1:1") {
 			t.Fatalf("want an error naming the registry, got %v", err)
 		}

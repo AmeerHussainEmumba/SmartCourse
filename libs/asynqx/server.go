@@ -156,12 +156,13 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 // Each attempt also runs inside a CONSUMER span (libs/telemetry StartJob; a
 // no-op unless tracing was set up) and gets a logger carrying job_id in its
 // context: use logging.Correlated(ctx) in a handler to log with job_id,
-// trace_id and span_id (RFC §12.4). The span starts a fresh trace; continuing
-// the trace of the event or request that enqueued the task needs the
-// traceparent in the payload, which is a later step.
+// trace_id and span_id (RFC §12.4). The span is a child of the enqueuing span
+// when the task carries a traceparent header (Client.Enqueue sets it from the
+// enqueuer's context), and starts a fresh trace otherwise (scheduler-driven
+// jobs, tasks enqueued before the header existed).
 func (s *Server) Handle(typ string, h HandlerFunc) {
 	s.mux.HandleFunc(typ, func(ctx context.Context, t *asynq.Task) (err error) {
-		ctx, span := s.startJob(ctx, typ)
+		ctx, span := s.startJob(ctx, typ, t.Headers()[telemetry.TraceparentHeader])
 		defer func() {
 			if r := recover(); r != nil {
 				s.panics.Add(1)
@@ -175,10 +176,10 @@ func (s *Server) Handle(typ string, h HandlerFunc) {
 }
 
 // startJob opens the attempt's span and attaches the job_id logger.
-func (s *Server) startJob(ctx context.Context, typ string) (context.Context, trace.Span) {
+func (s *Server) startJob(ctx context.Context, typ, traceparent string) (context.Context, trace.Span) {
 	meta, _ := MetaFrom(ctx) // zero value outside Asynq: empty id and queue
 	ctx = logging.WithContext(ctx, logging.WithJobID(s.log, meta.ID))
-	return telemetry.StartJob(ctx, "", meta.Queue, typ, meta.ID)
+	return telemetry.StartJob(ctx, traceparent, meta.Queue, typ, meta.ID)
 }
 
 // Start begins processing in the background. Pair it with Shutdown; most

@@ -51,6 +51,8 @@ _, _, payloadTP := telemetry.InjectTraceContext(ctx)
 ctx, span := telemetry.StartJob(ctx, payloadTP, queue, jobType, jobID)
 ```
 
+Where only the two id columns of an outbox row exist (no stored header), `TraceparentFromIDs(row.TraceID, row.SpanID)` builds the traceparent (flags `01`: the ids alone do not say whether the head sampler kept the trace, so continuing spans are exported even for a trace the HTTP side sampled out, a fragment without its root). The stored span id is the writer's HTTP server span, so `StartRelay` makes the relay span its child. The carrier names are `TraceparentHeader` (`traceparent`) for a Kafka record header and an Asynq task header.
+
 `traceparent` is the authoritative carrier; `traceID`/`spanID` are for the envelope columns of RFC §6.4. A missing or malformed `traceparent` is not an error: the next span starts a fresh trace (even when `ctx` holds an unrelated active span). `TraceIDsFromContext` returns the ids for log lines (RFC §12.4).
 
 ## HTTP metrics and the metric catalogue
@@ -142,4 +144,4 @@ The OTLP/HTTP exporter links `google.golang.org/grpc` and protobuf (for status c
 
 `/metrics` is unauthenticated by design (Prometheus scrapes it). It exposes route templates, counters and process statistics, never request data, but it is not for the internet: compose publishes it on `127.0.0.1` only, the worker serves it on its own `METRICS_HTTP_ADDR` listener (not the authenticated admin port), and a real deployment must keep it on the internal network or filter it at the ingress.
 
-Not verified: tail sampling (not built), the relay and Kafka consumer spans (a later step), and any load or overhead measurement. Verified live on 2026-11-24 in a disposable compose project: a `POST /api/v1/courses` and an archive request through course-api each produced a Jaeger trace with the HTTP server span and Redis and Postgres child spans (the archive trace includes `INSERT outbox`), and the outbox row carried that trace id and the actor.
+Since the events step the relay, Kafka produce/consume and Asynq enqueue/job spans continue the same trace (`services/worker`, `libs/relay` observer, `libs/asynqx`); the test is `TestWorker_OneTraceAcrossPipeline`. Not verified: tail sampling (not built) and any load or overhead measurement. Verified live on 2026-11-24 in a disposable compose project: a `POST /api/v1/courses` and an archive request through course-api each produced a Jaeger trace with the HTTP server span and Redis and Postgres child spans (the archive trace includes `INSERT outbox`), and the outbox row carried that trace id and the actor.

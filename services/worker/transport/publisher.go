@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 )
 
 // Publisher is the relay's Kafka publish step (relay.Publisher). Publish
@@ -18,6 +20,7 @@ import (
 type Publisher struct {
 	codec    *Codec
 	producer *kafka.Producer
+	tracing  bool
 }
 
 // PublisherConfig configures NewPublisher.
@@ -27,6 +30,10 @@ type PublisherConfig struct {
 	// relay's 30 s claim timeout so a failed publish can still be recorded.
 	ProduceTimeout time.Duration
 	Schemas        Schemas
+	// Tracing makes every publish a PRODUCER span (a child of the relay's span
+	// in ctx) and puts its traceparent in the record's traceparent header, which
+	// the consumer continues from. Off, no span is started and no header added.
+	Tracing bool
 }
 
 // NewPublisher builds the producer. It does not contact the brokers.
@@ -39,7 +46,7 @@ func NewPublisher(cfg PublisherConfig) (*Publisher, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Publisher{codec: NewCodec(cfg.Schemas), producer: p}, nil
+	return &Publisher{codec: NewCodec(cfg.Schemas), producer: p, tracing: cfg.Tracing}, nil
 }
 
 // Publish encodes evt and produces it, keyed by aggregate id.
@@ -49,10 +56,18 @@ func NewPublisher(cfg PublisherConfig) (*Publisher, error) {
 // relay.Transient: an outage must not use up the budget of good events. The
 // exceptions are the broker rejecting the record itself (too large, corrupt),
 // which no retry can fix.
-func (p *Publisher) Publish(ctx context.Context, evt relay.DecodedEvent) error {
+func (p *Publisher) Publish(ctx context.Context, evt relay.DecodedEvent) (err error) {
 	msg, err := p.codec.Encode(evt)
 	if err != nil {
 		return err
+	}
+	if p.tracing {
+		var span trace.Span
+		ctx, span = telemetry.StartProduce(ctx, msg.Topic, evt.EventType, evt.EventID.String())
+		defer func() { telemetry.EndSpan(span, err) }()
+		if _, _, tp := telemetry.InjectTraceContext(ctx); tp != "" {
+			msg.Headers = append(msg.Headers, kafka.Header{Key: HeaderTraceparent, Value: []byte(tp)})
+		}
 	}
 	if _, err := p.producer.Produce(ctx, msg); err != nil {
 		return classifyProduceError(err)

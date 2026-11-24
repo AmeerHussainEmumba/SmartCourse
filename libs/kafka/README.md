@@ -54,6 +54,10 @@ err := c.Run(ctx) // blocks; cancel ctx to drain
 - A new group starts at the beginning of each partition (`StartAtEnd` flips that).
 - `Stats()` returns handled, failed, exhausted and panic counters and the in-flight count, for metrics. Consumer lag is not exported here; it needs the group's committed offsets against the log end, which the telemetry phase will derive (via `kadm`).
 
+## Lag
+
+`kafka.NewLagReader(brokers)` then `Lag(ctx, groups...)` returns `[]TopicLag{Group, Topic, Lag}`: how many records a group is behind the log end of each topic, summed over the topic's partitions (records fetched but not yet committed by the handler count as lag). Partition and offset are deliberately not in the result, so a metrics label built from it stays bounded. It errors rather than returning zero when the brokers cannot be asked (a fresh broker answers COORDINATOR_NOT_AVAILABLE until its offsets topic exists). Tested against a real broker (`TestLagReader`).
+
 ## Health
 
 ```go

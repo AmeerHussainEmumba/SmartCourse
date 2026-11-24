@@ -43,4 +43,16 @@ See `services/identity/cmd/identity-api/README.md`, `services/course/cmd/course-
 
 ## Observability (`telemetry_wire.go`)
 
-`startTelemetry` (one deferred line in `main.go`) wires tracing, the DB and Redis hooks, the Temporal interceptors and `workflow_*` counters, the Asynq queue gauges, the outbox gauges and a `/metrics` listener on `METRICS_HTTP_ADDR` (default `:9100`, published on `127.0.0.1` only by compose). That listener serves only `GET /metrics` and has no authentication: it is deliberately not the admin port (8093, admin JWT). A port that cannot be bound is logged and the worker runs without `/metrics`. `countParked` wraps the dead-letter store to count `dead_letter_total{consumer}`; nothing builds a `deadletter.Sink` yet, so wiring it is part of the Kafka transport step.
+`startTelemetry` (one deferred line in `main.go`) wires tracing, the DB and Redis hooks, the Temporal interceptors and `workflow_*` counters, the Asynq queue gauges, the outbox gauges and a `/metrics` listener on `METRICS_HTTP_ADDR` (default `:9100`, published on `127.0.0.1` only by compose). That listener serves only `GET /metrics` and has no authentication: it is deliberately not the admin port (8093, admin JWT). A port that cannot be bound is logged and the worker runs without `/metrics`. `startTelemetry` returns the `*infra.Observability`; `main` hands it to `newEventTransport` and builds the dead-letter sink over `countParked(mg, obs.Metrics)` (`mongoWiring.Sink`), so every parked event, from the relay's give-up or a Kafka consumer, counts in `dead_letter_total{consumer}`.
+
+### Trace and metrics through the events (`transport.go`, `services/worker/transport`)
+
+With tracing on (`OTEL_EXPORTER_OTLP_ENDPOINT`), one request is one trace through the pipeline: HTTP server span, the outbox insert, the relay span (`outbox relay publish|process`, child of the HTTP span: the row stores trace and span id), in kafka mode a produce span whose `traceparent` is a Kafka record header and a consume span per consumer group, handler DB spans under the consume span (or relay span in-process), then the notification delivery: the handler stores the traceparent on the delivery row, the sweeper enqueues under it and the Asynq job span is a descendant. Tracing off adds nothing (no header, no stored value, no span).
+
+| Series | Fed by |
+|---|---|
+| `event_processed_total{consumer,outcome}` | Kafka runner per handler run (`processed`, `duplicate`, `failed`, `dead_lettered`); in-process, a relay hook (no `dead_lettered`: the relay's give-up is counted by `dead_letter_total`) |
+| `kafka_consumer_lag{group,topic}` | `Runner.LagGauges` polls the brokers every 15 s; value is the total over the topic's partitions. Labels are the consumer name and the four provisioned topics, never a partition or an offset (that would depend on topic configuration and churn on rebalance). While the broker is unreachable the last value stays (stale, not zero) |
+| `dead_letter_total{consumer}` | `countParked` around the Mongo park store |
+
+kafka_consumer_lag exists only in kafka mode; `event_processed_total` for a group appears with its first event.

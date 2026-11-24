@@ -12,6 +12,37 @@ import (
 
 const traceparentHeader = "traceparent"
 
+// TraceparentHeader is the name under which every carrier (a Kafka record
+// header, an Asynq task header) holds the W3C traceparent.
+const TraceparentHeader = traceparentHeader
+
+// TraceparentFromIDs builds a W3C traceparent from the trace_id and span_id
+// columns of an outbox row (32 and 16 lowercase hex characters, RFC §6.4), for
+// a writer that stored the two ids and not the header. The sampled flag is set:
+// a row only has ids because a recording span existed when it was written, and
+// the ids alone do not say whether the head sampler kept it, so a relay or
+// consumer continuing the trace exports its spans even for a trace the HTTP
+// side dropped (a fragment with no root, never a lost error). It returns "" for
+// ids that are empty, mis-sized, not hex or all zero.
+func TraceparentFromIDs(traceID, spanID string) string {
+	if len(traceID) != 32 || len(spanID) != 16 {
+		return ""
+	}
+	tid, err := trace.TraceIDFromHex(traceID)
+	if err != nil {
+		return ""
+	}
+	sid, err := trace.SpanIDFromHex(spanID)
+	if err != nil {
+		return ""
+	}
+	sc := trace.NewSpanContext(trace.SpanContextConfig{TraceID: tid, SpanID: sid, TraceFlags: trace.FlagsSampled})
+	if !sc.IsValid() {
+		return ""
+	}
+	return "00-" + sc.TraceID().String() + "-" + sc.SpanID().String() + "-01"
+}
+
 // InjectTraceContext captures the trace context of the active span in ctx at
 // the moment of a state change, so it can be stored on the outbox row and the
 // event envelope (RFC §6.4: trace_id, span_id) and continued later.
@@ -71,6 +102,22 @@ func StartProduce(ctx context.Context, topic, eventType, eventID string) (contex
 			attribute.String("messaging.system", "kafka"),
 			attribute.String("messaging.operation.type", "publish"),
 			attribute.String("messaging.destination.name", topic),
+			attribute.String("smartcourse.event.type", eventType),
+			attribute.String("smartcourse.event.id", eventID),
+		))
+}
+
+// StartRelay continues the trace carried by traceparent (see TraceparentFromIDs)
+// and starts the span of the outbox relay delivering one row. mode is
+// "publish" (kafka transport) or "process" (in-process handlers). The span is
+// INTERNAL: the produce span (StartProduce) or the handlers' spans are its
+// children.
+func StartRelay(ctx context.Context, traceparent, mode, eventType, eventID string) (context.Context, trace.Span) {
+	ctx = ContinueFromEvent(ctx, traceparent)
+	return tracer().Start(ctx, "outbox relay "+mode,
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(
+			attribute.String("smartcourse.relay.mode", mode),
 			attribute.String("smartcourse.event.type", eventType),
 			attribute.String("smartcourse.event.id", eventID),
 		))

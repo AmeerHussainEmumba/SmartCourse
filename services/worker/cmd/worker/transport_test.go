@@ -30,7 +30,7 @@ func TestEventTransport_InProcessIsInert(t *testing.T) {
 	cfg.Kafka = config.KafkaConfig{Transport: config.TransportInProcess}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	tr, err := newEventTransport(context.Background(), logger, cfg, nil)
+	tr, err := newEventTransport(context.Background(), logger, cfg, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestEventTransport_InProcessIsInert(t *testing.T) {
 	tr.Run(context.Background(), nil, nil) // must not touch the relay or the database
 	tr.Close()
 
-	withSink, err := newEventTransport(context.Background(), logger, cfg, nopSink{})
+	withSink, err := newEventTransport(context.Background(), logger, cfg, nopSink{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

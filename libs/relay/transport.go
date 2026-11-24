@@ -74,6 +74,35 @@ func IsTransient(err error) bool {
 	return errors.As(err, &t)
 }
 
+// The two delivery modes an Observer is told about.
+const (
+	// ModePublish: the relay hands the row to the Publisher (kafka transport).
+	ModePublish = "publish"
+	// ModeProcess: the relay runs the registered handlers itself (in-process).
+	ModeProcess = "process"
+)
+
+// Observer is the observability seam of the relay: it is called once per
+// delivery attempt of an outbox row, after the row is claimed and before the
+// Publisher or the handlers run, and returns the context they run under plus a
+// finish function called with the attempt's outcome (nil on success). The
+// worker implements it with libs/telemetry (a span continuing the trace stored
+// on the row, which the Publisher then injects into the Kafka record); this
+// package imports no tracing library, so identity-api and analytics-api, which
+// link the relay, do not pay for it.
+//
+// The returned context must derive from ctx. An observer that returns a nil
+// context or finish function is treated as having none; a panic in either is
+// logged and ignored.
+type Observer func(ctx context.Context, evt DecodedEvent, mode string) (context.Context, func(err error))
+
+// HandlerHook is called after each handler the in-process relay runs for a row:
+// duplicate is true when the consumer had already processed the event (the
+// handler did not run), err is the handler's error. The worker counts
+// event_processed_total from it. It is not called in publish mode, where the
+// Kafka consumers run the handlers.
+type HandlerHook func(consumer string, duplicate bool, err error)
+
 // Handles reports whether h is registered for eventType.
 func (h Handler) Handles(eventType string) bool { return h.EventTypes[eventType] }
 
@@ -83,22 +112,31 @@ func (h Handler) Handles(eventType string) bool { return h.EventTypes[eventType]
 // marker, so a replay cannot apply twice. A handler panic is recovered and
 // returned as an error (the transaction rolls back). The Kafka consumers call
 // this, which is what makes the same handlers run under both transports.
-func Deliver(ctx context.Context, db *gorm.DB, h Handler, evt DecodedEvent) (err error) {
+func Deliver(ctx context.Context, db *gorm.DB, h Handler, evt DecodedEvent) error {
+	_, err := DeliverEvent(ctx, db, h, evt)
+	return err
+}
+
+// DeliverEvent is Deliver that also reports whether the consumer had already
+// processed the event (duplicate), in which case the handler did not run. The
+// Kafka consumers count that as the "duplicate" outcome of event_processed_total.
+func DeliverEvent(ctx context.Context, db *gorm.DB, h Handler, evt DecodedEvent) (duplicate bool, err error) {
 	defer func() {
 		if p := recover(); p != nil {
-			slog.Error("relay handler panicked",
+			eventLog(ctx, evt).Error("relay handler panicked",
 				slog.String("consumer", h.ConsumerName), slog.Int64("outbox_id", evt.OutboxID),
 				slog.Any("panic", p), slog.String("stack", string(debug.Stack())))
-			err = fmt.Errorf("handler panic: %v", p)
+			duplicate, err = false, fmt.Errorf("handler panic: %v", p)
 		}
 	}()
-	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var already int64
 		if err := tx.Raw(`SELECT count(*) FROM processed_events WHERE consumer_name = ? AND event_id = ?`,
 			h.ConsumerName, evt.EventID).Scan(&already).Error; err != nil {
 			return err
 		}
 		if already > 0 {
+			duplicate = true
 			return nil // this consumer has already handled this event — no-op
 		}
 		if err := h.Handle(ctx, tx, evt); err != nil {
@@ -107,6 +145,10 @@ func Deliver(ctx context.Context, db *gorm.DB, h Handler, evt DecodedEvent) (err
 		return tx.Exec(`INSERT INTO processed_events (consumer_name, event_id) VALUES (?, ?)`,
 			h.ConsumerName, evt.EventID).Error
 	})
+	if err != nil {
+		duplicate = false
+	}
+	return duplicate, err
 }
 
 // consumerFailure is one consumer's (or the publisher's) failed attempt on a row.

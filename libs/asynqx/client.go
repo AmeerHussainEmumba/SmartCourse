@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 )
 
 // Defaults applied by Client when a Job leaves a field zero.
@@ -72,12 +75,28 @@ func NewClient(redis RedisOpt) *Client {
 func (c *Client) Close() error { return c.c.Close() }
 
 // Enqueue adds the job unless one with the same ID already exists.
-func (c *Client) Enqueue(ctx context.Context, j Job) (Result, error) {
+//
+// When ctx carries a trace (a valid span context, remote or local) the enqueue
+// is a PRODUCER span and its traceparent travels in the task's headers, not its
+// payload (the payload feeds the deterministic task ID, and old payloads must
+// keep working); the server then starts the job span as its child. With no
+// trace in ctx nothing is added and no span is started, so scheduler-driven and
+// untraced enqueues are unchanged.
+func (c *Client) Enqueue(ctx context.Context, j Job) (res Result, err error) {
 	opts, queue, err := j.options()
 	if err != nil {
 		return Result{}, err
 	}
-	info, err := c.c.EnqueueContext(ctx, asynq.NewTask(j.Type, j.Payload), opts...)
+	task := asynq.NewTask(j.Type, j.Payload)
+	if trace.SpanContextFromContext(ctx).IsValid() {
+		var span trace.Span
+		ctx, span = telemetry.StartEnqueue(ctx, queue, j.Type)
+		defer func() { telemetry.EndSpan(span, err) }()
+		if _, _, tp := telemetry.InjectTraceContext(ctx); tp != "" {
+			task = asynq.NewTaskWithHeaders(j.Type, j.Payload, map[string]string{telemetry.TraceparentHeader: tp})
+		}
+	}
+	info, err := c.c.EnqueueContext(ctx, task, opts...)
 	switch {
 	case errors.Is(err, asynq.ErrTaskIDConflict):
 		return Result{ID: j.ID, Queue: queue, Duplicate: true}, nil
