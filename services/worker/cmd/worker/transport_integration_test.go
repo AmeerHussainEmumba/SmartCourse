@@ -66,8 +66,15 @@ func (s *recordingSink) parked() []relay.DeadLetter {
 // stops all of it and waits.
 func runEvents(t *testing.T, ctx context.Context, cfg *config.Config, deps *infra.Dependencies) (rl *relay.Relay, sink *recordingSink, stop func()) {
 	t.Helper()
+	return runEventsObserved(t, ctx, cfg, deps, nil)
+}
+
+// runEventsObserved is runEvents with startTelemetry's Observability (nil is
+// none), which switches on the spans and the event and lag metrics.
+func runEventsObserved(t *testing.T, ctx context.Context, cfg *config.Config, deps *infra.Dependencies, obs *infra.Observability) (rl *relay.Relay, sink *recordingSink, stop func()) {
+	t.Helper()
 	sink = &recordingSink{}
-	tr, err := newEventTransport(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), cfg, sink, nil)
+	tr, err := newEventTransport(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), cfg, sink, obs)
 	if err != nil {
 		t.Fatalf("newEventTransport: %v", err)
 	}
