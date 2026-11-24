@@ -94,7 +94,7 @@ func Setup(t *testing.T) *Env {
 // ADR-0024): platform first (citext/pg_trgm live in `public`, needed
 // before identity/course's tables that use them), analytics last (nothing
 // else depends on it) — matches Makefile's MIGRATION_SERVICES.
-var migrationServices = []string{"platform", "identity", "course", "analytics"}
+var migrationServices = []string{"platform", "identity", "course", "analytics", "notification"}
 
 // applyMigrations runs all four services' migrations against one database,
 // each tracked by its own x-migrations-table so they don't collide on a

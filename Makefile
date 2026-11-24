@@ -22,8 +22,8 @@ DSN ?= $(POSTGRES_DSN)
 # needed before identity/course's tables that use them), analytics last
 # (nothing else depends on it) — not for individual-service migrate-down,
 # where cross-schema ordering doesn't apply (ADR-0024: no cross-schema FKs).
-MIGRATION_SERVICES := platform identity course analytics
-MIGRATION_SERVICES_REVERSED := analytics course identity platform
+MIGRATION_SERVICES := platform identity course analytics notification
+MIGRATION_SERVICES_REVERSED := notification analytics course identity platform
 
 .PHONY: dev-core dev-workflow dev-events dev-observability dev-full dev-down \
         migrate-up migrate-down migrate-down-all migrate-create \
