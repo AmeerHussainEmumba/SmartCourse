@@ -28,6 +28,7 @@ type Config struct {
 	SMTP     SMTPConfig
 	Asynq    AsynqConfig
 	Jobs     JobsConfig
+	Kafka    KafkaConfig
 
 	JWT   JWTConfig
 	Argon Argon2Config
@@ -288,6 +289,7 @@ func Load() (*Config, error) {
 	cfg.SMTP, smtpErrs = loadSMTP()
 	errs = append(errs, smtpErrs...)
 	cfg.Asynq, cfg.Jobs = loadAsynq(optInt, optDuration, &errs)
+	cfg.Kafka = loadKafka(os.Getenv, optInt, optDuration, &errs)
 
 	if len(cfg.JWT.SigningKey) < 32 {
 		// Only enforced once the key is present; the presence check above
