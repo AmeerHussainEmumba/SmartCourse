@@ -511,8 +511,10 @@ paths:
   /analytics/issues:
     get:
       summary: >
-        Failed Events / Workflow Issues (FR-5), admin only. Dead-letter backlog and failed-workflow counts.
-        Answers 503 until a dead-letter source is attached to analytics-api (not wired yet).
+        Failed Events / Workflow Issues (FR-5), admin only. Dead-letter backlog from the MongoDB
+        failed_events store. Answers 503 while the store is not configured (MONGO_URI unset) or not
+        reachable; no other analytics route is affected. workflow_issues is null (unavailable, not
+        zero) because failed-workflow counts have no source yet.
       security: [{ bearerAuth: [] }]
       responses:
         '200':
@@ -526,15 +528,19 @@ paths:
                     type: object
                     properties:
                       total: { type: integer, format: int64 }
-                      unresolved: { type: integer, format: int64 }
+                      unresolved: { type: integer, format: int64, description: "Parked and not yet replayed" }
+                      replayed: { type: integer, format: int64 }
                       by_event_type: { type: object, additionalProperties: { type: integer, format: int64 } }
+                      by_consumer: { type: object, additionalProperties: { type: integer, format: int64 }, description: "Unresolved events per consumer" }
+                      oldest_unresolved_age_seconds: { type: integer, format: int64, nullable: true, description: "Null when nothing is unresolved" }
                   workflow_issues:
                     type: object
+                    nullable: true
                     properties:
                       failed: { type: integer, format: int64 }
                       by_workflow: { type: object, additionalProperties: { type: integer, format: int64 } }
         '403': { description: "Caller is not an admin", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '503': { description: "No failed-events or workflow source is attached", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: "The failed-events store is not configured or not reachable", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /analytics/courses/{id}:
     get:
