@@ -50,7 +50,7 @@ services/              One Go module per deployable service, each with its own g
   course/              course/ enrollment/ progress/ workflows/ + cmd/course-api — one module, because the seat limit needs one transaction (ADR-0012)
   analytics/           analytics/ + cmd/analytics-api — outbox relay's first handler (ADR-0021)
   worker/              cmd/worker (outbox relay + Temporal worker); audit/ notification/ search/ are README-only plans (M3)
-libs/                  Shared kernel, one Go module per package: auth cache config db errors httpx infra logging outbox ratelimit relay router temporal, plus testenv
+libs/                  Shared kernel, one Go module per package: auth cache config db errors httpx idempotency infra logging outbox ratelimit relay router temporal, plus testenv and the Week 3 libraries (events, mongostore, asynqx, telemetry — built and tested, not yet wired into the services; see docs/plans/week-3.md)
 tools/seed/            `make seed` — populates a local database through the real service layer
 migrations/          Versioned SQL schema (golang-migrate) — see migrations/README.md
 docs/
@@ -60,10 +60,10 @@ docs/
   plans/             Working plans for multi-step changes, with progress logs
   guides/            How-to docs, including testing.md
 api/                 openapi.yaml — the API contract
-proto/               Event schemas (M3 — empty today, see proto/README.md)
-scripts/             Guards and helpers: check-link-graph.sh, check-module-graph.sh, for-each-module.sh
+proto/               Pointer only; the Protobuf event contracts live in libs/events (see proto/README.md)
+observability/       Prometheus config and rules, Grafana provisioning and dashboard (`make dev-observability`; placeholder alert thresholds)
+scripts/             Guards and helpers: check-link-graph.sh, check-module-graph.sh, check-module-hygiene.sh, check-dockerfile-modules.sh, check-dev-defaults.sh, check-http-hardening.sh, test-guards.sh, verify-deliverables.sh, for-each-module.sh
 test/e2e/            Tests that run services side by side (its own Go module; see test/README.md)
-deploy/              Compose service config (Grafana dashboards, Prometheus scrape config)
 go.work              Lists every Go module for local development; CI and Docker build with GOWORK=off
 ```
 
@@ -78,8 +78,8 @@ REST over JSON, versioned under `/api/v1`. Full contract: `api/openapi.yaml` (tr
 | Module | Surface |
 |---|---|
 | `identity` | register, login, refresh, logout, profile, password reset, email verification |
-| `course` | course/module/lesson CRUD, catalogue (keyset-paginated), publish |
-| `enrollment` | enroll, withdraw, my-courses, roster |
+| `course` | course/module/lesson CRUD, catalogue (keyset-paginated), publish, asset upload URLs (`POST /assets/upload-url`) |
+| `enrollment` | enroll, withdraw, my-courses, roster (`POST /enrollments` honours `Idempotency-Key`, as do the other course POST routes; DR-023) |
 | `progress` | mark lesson complete, progress (certificates not yet built — see `docs/rfc/smartcourse-rfc.md` §21.0) |
 | `analytics` | platform-wide metrics (`GET /analytics/platform`) — populated asynchronously by the outbox relay, not written directly by any handler above |
 
@@ -87,9 +87,9 @@ Errors are always `{ "code", "message", "details" }` with a stable, documented `
 
 ## Tech stack
 
-Go 1.25+, Gin, GORM (bounded to simple CRUD — see [DR-004](docs/rfc/differences-from-requirements.md#dr-004--gorm-is-bounded-to-simple-crud-raw-sql-elsewhere)) + raw SQL for complex queries, PostgreSQL, Redis, MongoDB, Apache Kafka + Confluent Schema Registry, Temporal, Asynq, MinIO (S3-compatible — [ADR-0019](docs/adr/smartcourse-adr.md#adr-0019--minio-for-learning-asset-object-storage)), OpenTelemetry + Prometheus + Grafana + Jaeger, Docker Compose.
+Go 1.26+ (toolchain 1.26.11 in CI and the images), Gin, GORM (bounded to simple CRUD — see [DR-004](docs/rfc/differences-from-requirements.md#dr-004--gorm-is-bounded-to-simple-crud-raw-sql-elsewhere)) + raw SQL for complex queries, PostgreSQL, Redis, MongoDB, Apache Kafka + Confluent Schema Registry, Temporal, Asynq, MinIO (S3-compatible — [ADR-0019](docs/adr/smartcourse-adr.md#adr-0019--minio-for-learning-asset-object-storage)), OpenTelemetry + Prometheus + Grafana + Jaeger, Docker Compose.
 
-**Currently running, not just specified:** Go, Gin, GORM, PostgreSQL, Redis (cache, rate limiting), Docker Compose, and — as of M2 — Temporal, backing the course publishing workflow only (ADR-0009/0025). MongoDB, Kafka, Schema Registry, and Asynq are still M3 — see `docs/rfc/smartcourse-rfc.md` §21.0 for exactly what's built versus designed.
+**Currently running, not just specified:** Go, Gin, GORM, PostgreSQL, Redis (cache, rate limiting), Docker Compose, and — as of M2 — Temporal, backing the course publishing workflow only (ADR-0009/0025). MongoDB, Kafka, Schema Registry, and Asynq are Week 3 work: their libraries (`libs/events`, `libs/mongostore`, `libs/asynqx`) and compose services exist and are tested, but the services do not use them yet. The Prometheus/Grafana/Jaeger/Mailpit containers exist in compose profiles; no service exports metrics or traces yet (`libs/telemetry` is unwired). Mailpit is a local SMTP sink, not a mail provider. See `docs/plans/week-3.md` (§10 progress log) and `docs/rfc/smartcourse-rfc.md` §21.0 for exactly what is built versus designed.
 
 ## Testing
 
@@ -117,3 +117,6 @@ make test-integration # integration + concurrency suite against real Postgres
 | [`docs/rfc/differences-from-requirements.md`](docs/rfc/differences-from-requirements.md) | Every place the design adds to or reinterprets the frozen brief, and why. |
 | [`docs/adr/smartcourse-adr.md`](docs/adr/smartcourse-adr.md) | Every individual architecture decision as a point-in-time record. |
 | [`docs/guides/testing.md`](docs/guides/testing.md) | Test categories: what each checks, how to run it. |
+| [`docs/plans/week-3.md`](docs/plans/week-3.md) | The Week 3 plan, decisions, and a dated progress log of what is done and what is not. |
+| [`docs/plans/week-3-acceptance-matrix.md`](docs/plans/week-3-acceptance-matrix.md) | Every deliverable and how it will be proven; `make verify-deliverables` runs the live checks. |
+| [`docs/plans/module-split-findings.md`](docs/plans/module-split-findings.md) | The 38 defects found by adversarial testing and how each was fixed. |

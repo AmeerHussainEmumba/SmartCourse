@@ -1,6 +1,6 @@
 # Versioning and releasing modules
 
-Applies from ADR-0026: SmartCourse is a monorepo of 20 Go modules (13 libraries under `libs/`, `libs/testenv`, four services under `services/`, `tools/seed`, and the cross-service tests in `test/e2e`). This guide says how they depend on each other today, when that changes, and how a module is released.
+Applies from ADR-0026: SmartCourse is a monorepo of 25 Go modules (18 libraries under `libs/`, `libs/testenv`, four services under `services/`, `tools/seed`, and the cross-service tests in `test/e2e`). This guide says how they depend on each other today, when that changes, and how a module is released.
 
 ## Today: one team, `replace` directives, no tags
 

@@ -278,3 +278,27 @@ Not verified: CI on a GitHub runner for this branch; the built images running as
 ### Known test flakiness to resolve before the defense
 
 Under heavy machine load (nine agents sharing Docker), single runs of the relay suite, `services/analytics` (`TestGetPlatformSnapshot_NoAuthHeader_Rejected`) and two `services/course` packages failed once and passed on rerun. The cause was not diagnosed. The full suite was re-run on a quiet machine and passed in one run (above); that is one run, not proof the tests are stable, so repeat runs are still wanted before the defense, and any repeat failure is a defect to fix, not noise.
+
+### 2026-11-18: `Idempotency-Key` and the rough-edge checks (second wave, local, not yet committed)
+
+**`Idempotency-Key` (Phase 1, acceptance rows AD-14 and P1-3).** New module `libs/idempotency`; wired into the course-api `POST` routes (create course, add module, add lesson, publish, archive, `POST /assets/upload-url`, `POST /enrollments`) through an optional argument to `RegisterRoutes`, so callers and tests that pass nothing behave as before. The scope and replay rules are DR-023 (Proposed); the OpenAPI documents the header on the seven operations.
+
+| Evidence | Result |
+|---|---|
+| `libs/idempotency` integration tests (11), `-race` | Pass: replay, mismatch 422, per-user scoping, anonymous passthrough, 10 concurrent requests run the handler once, release on 4xx/5xx/panic, invalid keys, takeover of an abandoned key, expiry and pruning |
+| `services/course/enrollment` HTTP tests (2), `-race` | Pass: same key twice returns the stored 201 and one row; 10 concurrent requests leave one row |
+| `check_P1_3` in `verify-deliverables.sh`, live | Pass against the built images in a disposable compose project |
+| Module, link, Dockerfile, hygiene and HTTP-hardening guards | Pass (25 modules) |
+
+Not done: the scheduled job that calls `PruneExpired` (Phase 5, worker wiring); identity routes are not covered (DR-023); 4xx responses are not stored (DR-023).
+
+**Rough-edge checks.**
+
+| Check | Result |
+|---|---|
+| Built images as a full stack | `core` and `workflow` profiles brought up from the working tree in a disposable project (`sc-verify`, own volumes, removed afterwards); migrations and seed applied; `verify-deliverables.sh`: 13 passed, 0 failed, 29 pending, 0 skipped. The dev `smartcourse` project and its volumes were not touched |
+| Flaky tests, repeated | `TestGetPlatformSnapshot_NoAuthHeader_Rejected` 15 runs and the full `libs/relay` integration suite 3 runs, all with `-race`: no failure. This lowers the concern; it does not prove stability |
+| `services/course` full integration run | One run failed two tests and a rerun failed a different one, each with `start postgres container ... context deadline exceeded` (Docker did not answer in 60 s while many containers started). Each test passes alone (about 5 s) and both packages pass on a quiet rerun. This is container start-up under load, not an assertion failure; the test setup has no retry or longer timeout, which is a known weakness of the harness |
+| Telemetry licences | Re-checked against the LICENSE files of the resolved module versions: OpenTelemetry modules, `prometheus/client_golang` and `grpc` are Apache-2.0; `protobuf` and `grpc-gateway` are BSD. The ADR's earlier statement held |
+| Prometheus client version | ADR-0032 notes and the telemetry README said v1.25.0; the module uses v1.24.1. v1.25.0 needs protobuf v1.36.12, which would break the single-version rule, so the documents were corrected, not the module |
+| Hygiene drift found | `go mod tidy` drift in `libs/asynqx`, `libs/cache`, `libs/relay`, `libs/telemetry`, `libs/testenv` (`testenv` gained the Mongo driver) was present on the merged branch and went unreported by my earlier "guards pass" statement; fixed by tidying |

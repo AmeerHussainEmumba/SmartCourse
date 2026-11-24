@@ -38,9 +38,9 @@ These five ideas explain *why* the code is shaped the way it is. Misunderstandin
 
 ### Prerequisites
 
-- **Go 1.25+** — check with `go version`.
+- **Go 1.26+** (the modules declare `go 1.26.5`; CI and the images use 1.26.11) — check with `go version`.
 - **Docker** (with Compose v2, i.e. `docker compose`, not the old standalone `docker-compose`) — check with `docker compose version`.
-- That's it to get the system running, including course publishing (M2 — Temporal's part of `make dev-workflow`, the profile tier these steps use, not `dev-core`). Kafka, MongoDB, and the observability stack come later and aren't needed yet — see §5.
+- That's it to get the system running, including course publishing (M2 — Temporal's part of `make dev-workflow`, the profile tier these steps use, not `dev-core`). Kafka, MongoDB, and the observability stack (`make dev-events`, `make dev-observability`) exist as compose profiles but nothing in the services uses them yet — see §5.
 
 ### Steps
 
@@ -119,7 +119,7 @@ Register answers `202` with no tokens (the same answer whether or not the email 
 curl localhost:8091/api/v1/courses
 ```
 
-From here, `api/openapi.yaml` documents every endpoint (across all three services — it's one spec, not three, since the route paths and request/response shapes didn't change, only which process answers them), and each module's README (`internal/<module>/README.md`) explains the design behind it.
+From here, `api/openapi.yaml` documents every endpoint (across all three services — it's one spec, not three, since the route paths and request/response shapes didn't change, only which process answers them), and each module's README (for example `services/course/course/README.md`) explains the design behind it.
 
 ### Running natively instead
 
@@ -178,7 +178,7 @@ If you want to see what a real concurrency bug looks like when it's *not* caught
 
 **Eight domain modules, one shared kernel.** Each module (`services/identity/identity`, `services/course/course`, `services/course/enrollment`, `services/course/progress`, `services/analytics/analytics`, and three not yet built — search, notification, audit) owns one business capability and follows the same internal shape: `handler.go` (HTTP), `service.go` (business logic and transactions), `repository.go` (the only file touching the database directly), `dto.go` (API request/response types), `domain.go` (entities). None of them import each other's internals directly. Between services that is enforced by Go itself (each service is its own Go module, see below); inside the `course` service, where course, enrollment and progress share one module, by a lint rule rather than just convention. `services/README.md` has the full module map.
 
-**One repository, 20 Go modules (ADR-0026).** Each service is its own Go module under `services/` (`identity`, `course`, `analytics`, `worker`), the shared kernel is split into one module per package under `libs/` (`auth`, `db`, `config`, `errors`, ...), and `tools/seed` is a module too. Three things follow that will surprise you if you come from a single-module project:
+**One repository, 25 Go modules (ADR-0026).** Each service is its own Go module under `services/` (`identity`, `course`, `analytics`, `worker`), the shared kernel is split into one module per package under `libs/` (`auth`, `db`, `config`, `errors`, `idempotency`, ... 19 including `testenv`), and `tools/seed` and `test/e2e` are modules too. Three things follow that will surprise you if you come from a single-module project:
 
 - **A service can only import what its `go.mod` lists.** `identity` cannot import `course` — not because a linter says so, but because it doesn't depend on it. `scripts/check-module-graph.sh` fails CI if that changes. The `worker` is the one service allowed to depend on others (it runs `course` and `analytics` event handlers and the publish workflow).
 - **Each binary links only what it uses.** `identity-api` has no Temporal SDK in it. `scripts/check-link-graph.sh` enforces that. This is what the Week 2 review asked for.
@@ -198,7 +198,9 @@ Don't assume the RFC describes the current state of the code — it describes th
 
 This matters for where you look for examples: if you want to see this codebase's concurrency patterns in production code (not just in a test file), read `libs/relay/` and `services/course/workflows/workflow.go`, not just the RFC's description of them. To run the publish workflow locally, use `make dev-workflow` (not `dev-core`) — that's the Compose profile tier that actually starts Temporal alongside the four services.
 
-**Not built yet, on purpose, not a gap:** Kafka and Schema Registry (the relay is a deliberate in-process bridge ahead of them — see ADR-0021), `notification`/`audit` modules (same relay-handler pattern as `analytics`, just not built yet — `search` is the one module name on this list that's partially real: see `internal/README.md`), asset upload, and the observability stack (Prometheus/Grafana/Jaeger).
+**Also built (Week 3 start-now tier, on branch `week3/start-now`, PR #20):** asset upload (`POST /assets/upload-url`, pre-signed MinIO URLs, and real asset checks in the publish workflow's `VerifyAssets`); `Idempotency-Key` on the course POST routes (`libs/idempotency`, DR-023); an Argon2 concurrency gate and relay pool validation; the Week 3 libraries `libs/events` (Protobuf contracts and Schema Registry codec), `libs/mongostore`, `libs/asynqx` and `libs/telemetry`; and compose services for Kafka, Schema Registry, MongoDB, Mailpit, Prometheus, Grafana and Jaeger. These libraries are tested on their own but **not wired into the services yet** — that wiring waits for the review of the module layout (`docs/plans/week-3.md` §4a and §10).
+
+**Not built yet, on purpose, not a gap:** Kafka in the relay (the relay is a deliberate in-process bridge ahead of it — see ADR-0021 and ADR-0029), the Kafka consumers, the MongoDB archive and dead-letter store, the Asynq worker pools and scheduled jobs, notifications (Mailpit is a local sink; no real mail provider is integrated, by decision), certificates, and instrumenting the services with metrics and traces. The `search` module name is partially real: the index write and `GET /courses/search` live in `services/course` (ADR-0025). Day-to-day status is the progress log in `docs/plans/week-3.md`.
 
 Full detail: `docs/rfc/smartcourse-rfc.md` §21.0.
 

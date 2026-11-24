@@ -106,7 +106,7 @@ Verified against the module proxy on 2026-11-18. Versions are aligned with what 
 | Module | Version | Licence |
 |---|---|---|
 | `go.opentelemetry.io/otel`, `/sdk`, `/trace`, `/exporters/otlp/otlptrace/otlptracehttp` | v1.44.0 (v1.47.0 is current) | Apache-2.0 |
-| `github.com/prometheus/client_golang` | v1.25.0 | Apache-2.0 |
+| `github.com/prometheus/client_golang` | v1.24.1 | Apache-2.0 |
 | `github.com/gin-gonic/gin` | v1.12.0 | MIT |
 | `go.uber.org/goleak` (tests) | v1.3.0 | MIT |
 
