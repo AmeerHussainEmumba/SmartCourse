@@ -21,6 +21,7 @@ require (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/db v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/errors v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/httpx v0.0.0 // indirect
+	github.com/AmeerHussainEmumba/SmartCourse/libs/logging v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/ratelimit v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/relay v0.0.0 // indirect
