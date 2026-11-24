@@ -122,6 +122,9 @@ services:
       ASYNQ_BACKOFF_BASE: 2s
       ASYNQ_BACKOFF_MAX: 10m
       ASYNQ_SHUTDOWN_TIMEOUT: 30s
+      # Mail goes to the Mailpit sink in the same profile; no real provider.
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
       OUTBOX_RETENTION: 168h
       JOBS_RECONCILE_PUBLISHES_INTERVAL: 1m
       JOBS_ANALYTICS_RECONCILE_INTERVAL: 1m
@@ -353,7 +356,7 @@ services:
   # in-network (SMTP_HOST/SMTP_PORT); read mail at http://localhost:8025.
   mailpit:
     image: axllent/mailpit:v1.34.0
-    profiles: *profiles-events
+    profiles: *profiles-core
     ports:
       - "127.0.0.1:1025:1025" # SMTP
       - "127.0.0.1:8025:8025" # web UI + HTTP API

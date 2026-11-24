@@ -105,6 +105,8 @@ func startAsynq(ctx context.Context, logger *slog.Logger, deps *infra.Dependenci
 		logger.Error("asynq not started", slog.Any("error", err))
 		return
 	}
+	closeNotify := wireNotifications(ctx, logger, servers, deps, cfg, newProvider(logger, cfg))
+	defer closeNotify()
 	if err := servers.Start(); err != nil {
 		scheduler.Shutdown()
 		logger.Error("asynq servers failed to start", slog.Any("error", err))

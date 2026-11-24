@@ -167,6 +167,7 @@ replace (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/infra => ../../libs/infra
 	github.com/AmeerHussainEmumba/SmartCourse/libs/logging => ../../libs/logging
 	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox => ../../libs/outbox
+	github.com/AmeerHussainEmumba/SmartCourse/libs/ratelimit => ../../libs/ratelimit
 	github.com/AmeerHussainEmumba/SmartCourse/libs/relay => ../../libs/relay
 	github.com/AmeerHussainEmumba/SmartCourse/libs/router => ../../libs/router
 	github.com/AmeerHussainEmumba/SmartCourse/libs/temporal => ../../libs/temporal

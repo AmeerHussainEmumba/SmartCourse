@@ -16,20 +16,21 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/analytics/analytics"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/assets"
+	"github.com/AmeerHussainEmumba/SmartCourse/services/course/certificate"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/enrollment"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/workflows"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/jobs"
+	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/notification"
 )
 
 // buildRelay wires every module's relay handlers into one Relay instance.
-// services/analytics/analytics, services/course/course, and services/course/enrollment register
-// handlers today (enrollment withdraws active enrollments when a course is
-// archived — see enrollment.handleCourseArchived; course keeps
-// instructor_mirror current from identity's events — see
-// course.handleUserRegistered, ADR-0024); services/worker/search's search-indexer
-// and services/worker/notification's dispatcher are the natural next additions —
-// the relay itself doesn't change when they land, only this list grows.
+// analytics (recomputes aggregates), course (keeps instructor_mirror current
+// from identity's events, ADR-0024), enrollment (withdraws active enrollments
+// when a course is archived), certificate (issues one certificate per
+// completed enrollment, RFC §8.4) and notification (writes delivery rows for
+// the dispatcher, ADR-0014) register handlers. The relay itself doesn't change
+// when a module lands, only this list grows.
 // cfg.Relay.Workers (RELAY_WORKERS) sizes the relay's pool; Load has already
 // checked the Postgres pool can hold it (ADR-0027).
 func buildRelay(deps *infra.Dependencies, cfg *config.Config) *relay.Relay {
@@ -41,6 +42,12 @@ func buildRelay(deps *infra.Dependencies, cfg *config.Config) *relay.Relay {
 		rl.Register(h)
 	}
 	for _, h := range enrollment.Handlers() {
+		rl.Register(h)
+	}
+	for _, h := range certificate.Handlers() {
+		rl.Register(h)
+	}
+	for _, h := range notification.Handlers() {
 		rl.Register(h)
 	}
 	return rl
@@ -83,12 +90,10 @@ func newCourseService(deps *infra.Dependencies, cfg *config.Config, temporal tem
 }
 
 // analyticsReconciler returns the analytics reconciliation (RFC §9.1) the
-// scheduled job runs, or nil while none is wired (the job is then not
-// scheduled). This is the one place to plug it in:
-//
-//	return analytics.NewReconciler(deps.DB, deps.RDB)
+// scheduled job runs: it recomputes every aggregate from the mirrors and
+// rebuilds the Most Popular Courses sorted set.
 func analyticsReconciler(deps *infra.Dependencies) jobs.Runner {
-	return nil
+	return analytics.NewReconciler(deps.DB, deps.RDB)
 }
 
 // buildJobs assembles the scheduled jobs from cfg. A job whose dependency is

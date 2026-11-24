@@ -53,7 +53,7 @@ type ReconcileResult struct {
 // two replicas is harmless. A Temporal error other than not-found leaves the
 // version untouched (Temporal being down must not fail healthy publishes).
 //
-// Not wired to a schedule here: the worker or an Asynq job calls it.
+// Scheduled by the worker (services/worker/jobs, every 60 s by default).
 func (s *Service) ReconcileStalePublishes(ctx context.Context) (ReconcileResult, error) {
 	var res ReconcileResult
 	stale, err := s.repo.ListStalePublishes(ctx, publishReconcileGrace, reconcileBatch)

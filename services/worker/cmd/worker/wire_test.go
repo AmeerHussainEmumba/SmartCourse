@@ -28,9 +28,11 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/analytics/analytics"
+	"github.com/AmeerHussainEmumba/SmartCourse/services/course/certificate"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/enrollment"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/workflows"
+	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/notification"
 )
 
 // registeredPairs reads relay.Relay's unexported handler list via reflection
@@ -80,9 +82,11 @@ func TestBuildRelay_RegistersExactlyTheModulesHandlers(t *testing.T) {
 	want = append(want, pairsOf(analytics.Handlers())...)
 	want = append(want, pairsOf(course.Handlers())...)
 	want = append(want, pairsOf(enrollment.Handlers())...)
+	want = append(want, pairsOf(certificate.Handlers())...)
+	want = append(want, pairsOf(notification.Handlers())...)
 	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("buildRelay does not register exactly analytics+course+enrollment handlers\n got: %v\nwant: %v", got, want)
+		t.Fatalf("buildRelay does not register exactly analytics+course+enrollment+certificate+notification handlers\n got: %v\nwant: %v", got, want)
 	}
 
 	// Literal expectation, so deleting a handler from a module (and so from
@@ -94,9 +98,15 @@ func TestBuildRelay_RegistersExactlyTheModulesHandlers(t *testing.T) {
 		"analytics-aggregator|identity.user_registered",
 		"analytics-aggregator|identity.user_role_changed",
 		"analytics-aggregator|progress.course_completed",
+		"certificate-issuer|progress.course_completed",
 		"course-instructor-mirror|identity.user_profile_updated",
 		"course-instructor-mirror|identity.user_registered",
 		"enrollment-course-archival|course.course_archived",
+		"notification-dispatcher|course.course_published",
+		"notification-dispatcher|enrollment.student_enrolled",
+		"notification-dispatcher|identity.user_profile_updated",
+		"notification-dispatcher|identity.user_registered",
+		"notification-dispatcher|progress.course_completed",
 	}
 	if !reflect.DeepEqual(got, literal) {
 		t.Fatalf("registered consumers/event types changed.\n got: %v\nwant: %v\nIf this is intentional, update this guard and the docs.", got, literal)
