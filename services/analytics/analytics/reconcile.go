@@ -95,6 +95,9 @@ func (r *Reconciler) Run(ctx context.Context) error {
 		}); err != nil {
 			errs = append(errs, fmt.Errorf("reconcile platform snapshot: %w", err))
 		}
+		if err := ReconcileWorkflowIssueStats(ctx, r.db); err != nil {
+			errs = append(errs, err)
+		}
 		if err := r.refreshPopular(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("refresh popular courses: %w", err))
 		}

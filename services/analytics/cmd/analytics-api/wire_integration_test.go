@@ -105,7 +105,7 @@ func TestAnalyticsAPI_Issues_ServedFromRealFailedEvents(t *testing.T) {
 	}
 
 	b := read()
-	if b.FailedEvents.Total != 0 || b.FailedEvents.OldestAge != nil || string(b.WorkflowIssues) != "null" {
+	if b.FailedEvents.Total != 0 || b.FailedEvents.OldestAge != nil || string(b.WorkflowIssues) != `{"by_workflow":{},"failed":0}` {
 		t.Errorf("empty store: %+v workflow=%s", b.FailedEvents, b.WorkflowIssues)
 	}
 

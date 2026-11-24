@@ -35,6 +35,7 @@ func Handlers() []relay.Handler {
 		relay.NewHandler(consumerName, []string{"enrollment.student_enrolled"}, handleStudentEnrolled),
 		relay.NewHandler(consumerName, []string{"enrollment.student_withdrawn"}, handleStudentWithdrawn),
 		relay.NewHandler(consumerName, []string{"progress.course_completed"}, handleCourseCompleted),
+		relay.NewHandler(consumerName, []string{"course.publish_failed"}, handlePublishFailed),
 	}
 }
 

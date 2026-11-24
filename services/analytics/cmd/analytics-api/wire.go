@@ -30,15 +30,18 @@ func registerRoutes(r *gin.Engine, deps *infra.Dependencies, cfg *config.Config)
 	// HTTP service allowed to link libs/mongostore). The connection is made on
 	// first use, so a MongoDB outage never delays startup or touches another
 	// route; the issues route answers 503 while it is unreachable, and so it
-	// does when MONGO_URI is unset. No workflow-failure source is attached: those
-	// counts live in the course schema, which analytics cannot read (see
-	// analytics/issues.go), so the report's workflow section is null.
+	// does when MONGO_URI is unset. The workflow section comes from
+	// analytics' own workflow_issue_stats, fed by course.publish_failed events
+	// (analytics/workflow_issues.go, DR-026), so it needs no MongoDB and no
+	// read of the course schema.
+	workflowIssues := analytics.NewWorkflowIssuesSource(deps.DB)
+	analyticsSvc = analyticsSvc.WithIssueSources(nil, workflowIssues)
 	if cfg.Mongo.Configured() {
 		lazy := failedevents.NewLazyStore(mongostore.Config{
 			URI: cfg.Mongo.URI, Database: cfg.Mongo.Database, ConnectTimeout: cfg.Mongo.ConnectTimeout,
 			ServerSelectionTimeout: cfg.Mongo.ServerSelectionTimeout, OpTimeout: cfg.Mongo.OpTimeout,
 		})
-		analyticsSvc = analyticsSvc.WithIssueSources(failedevents.NewSource(lazy), nil)
+		analyticsSvc = analyticsSvc.WithIssueSources(failedevents.NewSource(lazy), workflowIssues)
 		closeFn = func(ctx context.Context) { _ = lazy.Close(ctx) }
 	}
 	analytics.RegisterRoutes(api, analyticsSvc, cfg.JWT)
