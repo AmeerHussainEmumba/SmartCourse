@@ -1,6 +1,8 @@
 package asynqx
 
 import (
+	"errors"
+	"fmt"
 	"math/rand/v2"
 	"time"
 
@@ -19,6 +21,22 @@ type BackoffConfig struct {
 
 // DefaultBackoff is 2s doubling to a 10 minute cap with 20% jitter.
 var DefaultBackoff = BackoffConfig{Base: 2 * time.Second, Max: 10 * time.Minute, Jitter: 0.2}
+
+// Validate rejects values Delay would otherwise silently correct. The zero
+// value is valid (it means DefaultBackoff); Jitter must be in [0,1).
+func (b BackoffConfig) Validate() error {
+	switch {
+	case b.Base < 0:
+		return errors.New("asynqx: negative Backoff.Base")
+	case b.Max < 0:
+		return errors.New("asynqx: negative Backoff.Max")
+	case b.Base > 0 && b.Max > 0 && b.Max < b.Base:
+		return fmt.Errorf("asynqx: Backoff.Max (%v) below Backoff.Base (%v)", b.Max, b.Base)
+	case b.Jitter < 0 || b.Jitter >= 1:
+		return fmt.Errorf("asynqx: Backoff.Jitter %v outside [0,1)", b.Jitter)
+	}
+	return nil
+}
 
 // Delay returns the delay before retry n (n = 0 for the first retry). The
 // loop stops at the cap, so large n never overflows.

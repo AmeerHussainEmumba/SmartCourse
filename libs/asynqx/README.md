@@ -44,11 +44,29 @@ err := srv.Run(ctx) // blocks; cancel ctx to drain
 ```
 
 - **Queues** `critical:default:low` at 6:3:1, weighted (not strict priority), so `low` is never starved. Override with `Queues`.
-- **Bounded concurrency**: `Concurrency` is the cap on simultaneously running handlers for the server. Asynq has one pool per server, so RFC §10.2's per-queue sizes (10/5/3) need one `Server` per queue (a single-entry `Queues` map each). The sum of all pools must stay below the database `MaxOpenConns`.
+- **Bounded concurrency**: `Concurrency` is the cap on simultaneously running handlers for the server. Asynq has one pool per server, so RFC §10.2's per-queue sizes (10/5/3) need one `Server` per queue: use `Servers` (below). The sum of all pools must stay below the database `MaxOpenConns`.
 - **Retry delay**: `Base * 2^n` capped at `Max`, with jitter that only shortens (default 2s, 10m cap, 20%). Asynq stores the retry time with one-second resolution, so a retry can run up to a second earlier than the exact delay.
 - **Graceful shutdown**: cancelling the context to `Run` stops pulling new tasks and waits up to `ShutdownTimeout` for in-flight handlers. At the deadline their contexts are cancelled and the tasks return to the queue to be retried (at-least-once, so handlers must be idempotent).
 - **OnExhausted** is called once, on the final failed attempt (retries used up, or the handler returned `asynqx.SkipRetry`), before Asynq archives the task. A task whose handler returns `asynq.RevokeTask` is a deliberate discard and does not call it. If the process dies between the final attempt and the hook, the hook is not replayed.
 - **Panics** in a handler are recovered and returned as an error wrapping `asynqx.ErrPanic`: an ordinary failure (retry, then `OnExhausted`), never a crash. `Server.PanicCount()` counts them.
+
+## Servers: one pool per queue
+
+```go
+ss, _ := asynqx.NewServers(asynqx.ServersConfig{
+    Redis: redis,
+    Pools: map[string]int{asynqx.QueueCritical: 10, asynqx.QueueDefault: 5, asynqx.QueueLow: 3}, // nil means these (RFC §10.2)
+    Backoff: asynqx.BackoffConfig{Base: 2 * time.Second, Max: 10 * time.Minute, Jitter: 0.2},
+})
+_ = ss.Register("notification:deliver", asynqx.QueueCritical, func(ctx context.Context, payload []byte) error { ... })
+_ = ss.Run(ctx) // starts one server per queue; cancel ctx to drain them all
+```
+
+Asynq's concurrency is per server and the weights only split one shared pool, so a server per queue is what gives critical, default and low their own bounded pools: a slow `low` job cannot occupy a `critical` slot. The 6:3:1 weights therefore do not apply inside `Servers` (each server serves one queue); they remain the default for a single multi-queue `Server`. A queue left out of `Pools` is not consumed at all.
+
+`Register` takes the payload bytes, not an `*asynq.Task`, so a package (the notification dispatcher, the scheduled jobs) can export `TaskType...` and a `func(ctx, payload []byte) error` without importing Asynq. A task type belongs to one queue, registering it twice is an error, and `Register` must precede `Start`. Retry and backoff policy (`Backoff`, or `RetryDelay`) and `OnExhausted` are shared by all pools; the retry budget itself is per job (`Job.MaxRetry`, `Entry.MaxRetry`). `Shutdown` drains the pools in parallel, so the wait is one `ShutdownTimeout`, not three. `Start` does not fail when Redis is unreachable (Asynq retries its connection and logs); it fails only on local misconfiguration.
+
+Pool sizes must be chosen against the database pool: the pools whose handlers use Postgres, plus the relay's workers, must fit in `MaxOpenConns` (RFC §10.2). This package cannot see which handlers do.
 
 ## Inspector (feeding metrics)
 
