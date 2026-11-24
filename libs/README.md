@@ -26,6 +26,7 @@ This used to be one package tree, `internal/platform/`. Each directory here is n
 | `ratelimit` | GCRA rate limiting (ADR-0020) via `go-redis/redis_rate` — per-IP middleware and a per-identity `Allow` call for checks middleware can't express (e.g. per-account login limits). |
 | `outbox` | The only path from a state change to a published event (ADR-0006). See its own README. |
 | `relay` | The bounded worker pool that drains `outbox` and dispatches to registered handlers (ADR-0021) — goroutines, a channel, `sync.WaitGroup`-drained shutdown, `sync.Mutex`-guarded claim tracking, `sync/atomic` counters, all against real work. See its own README. |
+| `kafka` | The pure-Go Kafka transport (franz-go, ADR-0030): a synchronous idempotent producer, a consumer-group runner with bounded in-flight work, manual commit after the handler, a retry budget and an `OnExhausted` dead-letter hook, a broker `Ping` for non-fatal readiness, and `kafka/topics` (the RFC §6.5 topics as code, idempotent `Ensure`). Not wired into any service yet; test-only dependency on `testenv`. See its own README. |
 | `router` | Assembles the Gin engine: middleware chain, health endpoints. |
 | `infra` | Opens the shared Postgres and Redis clients (`Connect`) and builds the `/health/ready` checks. Imports no domain module. |
 | `temporal` | Builds the lazy Temporal client. Separate from `infra` so identity-api and analytics-api never link the Temporal SDK. |
