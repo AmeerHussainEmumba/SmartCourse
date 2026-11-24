@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Trace propagation through the queue (ADR-0032): `Client.Enqueue` under a context that carries a trace starts an enqueue span and sets the task header `traceparent`; `Server.Handle` continues from that header (the job span is the enqueue span's child). The payload and the task id are untouched, so tasks already queued and untraced enqueues behave as before. New direct dependency in the client: `go.opentelemetry.io/otel/trace`.
+
 - `Server.Handle` runs each attempt in a CONSUMER span (`libs/telemetry.StartJob`) and puts a logger carrying `job_id` in the handler context (`logging.Correlated(ctx)`); the panic log line carries job_id and trace ids. Additive: handlers that ignore the context behave as before.
 - Added `Inspector.Gauges(*telemetry.Metrics)` for `asynq_queue_depth` (pending + scheduled) and `asynq_retry_count`.
 - Fixed `Inspector.Stats` failing on a queue that never held a task: asynq v0.26.0's `GetQueueInfo` returns an internal NOT_FOUND error that `errors.Is(err, asynq.ErrQueueNotFound)` misses, so the documented zero-values answer never happened.

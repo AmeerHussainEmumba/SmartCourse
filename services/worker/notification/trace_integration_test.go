@@ -62,8 +62,8 @@ func TestDelivery_StoresTheTraceparentOfTheWritingSpan(t *testing.T) {
 	var withTrace, without int
 	for _, d := range deliveries(t, env.DB) {
 		got := storedTraceparent(t, env, d.ID)
-		switch {
-		case d.Kind == KindCourseCompleted:
+		switch d.Kind {
+		case KindCourseCompleted:
 			withTrace++
 			if got == nil || *got != want {
 				t.Errorf("delivery %s stored traceparent %v, want %s", d.Kind, got, want)

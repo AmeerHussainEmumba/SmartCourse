@@ -189,7 +189,7 @@ func (p *pipeline) waitSent() {
 func attr(s tracetest.SpanStub, key string) string {
 	for _, a := range s.Attributes {
 		if string(a.Key) == key {
-			return a.Value.Emit()
+			return a.Value.String()
 		}
 	}
 	return ""
@@ -416,7 +416,9 @@ func TestWorker_KafkaRecordCarriesTheProduceSpansTraceparent(t *testing.T) {
 	p.enroll("00-" + tid + "-" + parent + "-01")
 	p.waitSent()
 	spans := p.spans(tid)
-	produce, ok := first(spans, func(s tracetest.SpanStub) bool { return s.SpanKind == trace.SpanKindProducer && attr(s, "messaging.system") == "kafka" })
+	produce, ok := first(spans, func(s tracetest.SpanStub) bool {
+		return s.SpanKind == trace.SpanKindProducer && attr(s, "messaging.system") == "kafka"
+	})
 	if !ok {
 		t.Fatalf("no produce span; spans: %v", spanNames(spans))
 	}

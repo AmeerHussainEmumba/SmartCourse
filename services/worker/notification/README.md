@@ -56,6 +56,10 @@ Exactly-once delivery to an external system is impossible and is not claimed (RF
 
 The accepted trade-off is a rare duplicate rather than a lost mail. `Message-ID` is the delivery id (`<delivery-id@from-domain>`), so a duplicate is recognisable in the mailbox. After a successful send the handler retries the `sent` mark three times before giving up.
 
+## Trace continuation (ADR-0032)
+
+The sweeper enqueues a delivery seconds after the handler wrote its row, from a loop that is in no trace, so the trace has to travel on the row. `InsertDelivery` stores the traceparent of the span the handler runs under (the Kafka consume span, or the relay span in-process, both descendants of the originating request) in `deliveries.traceparent` (migration `000002`, nullable: NULL for older rows and when tracing is off). `EnqueuePending` enqueues each task under `telemetry.ContinueFromEvent(ctx, row.traceparent)`; `libs/asynqx`'s client then starts the enqueue span and puts the traceparent in the task headers, and the delivery job span is its child. Without the column the job would be the root of a new trace and "one trace across the pipeline" would stop at the sweeper. The queue payload (`DeliveryPayload(id)`) is unchanged, so `NewDeliveryHandler`, tasks already in Redis and the deterministic task id are unaffected.
+
 ## Safety of the rendered message
 
 - HTML parts use `html/template` (every value escaped); text and subject values have control characters (CR, LF, NUL, U+2028/2029) turned into spaces and are length-capped.

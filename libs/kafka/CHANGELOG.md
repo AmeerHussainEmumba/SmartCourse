@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Added `LagReader` (`NewLagReader`, `Lag`, `Close`): consumer-group lag per (group, topic), summed over partitions, from the brokers through franz-go's admin client (already a dependency of `topics`). A group the broker does not know yields nothing; an unreachable broker or an uncomputable partition is an error, so a metrics caller keeps its last value instead of a false zero. The worker feeds `kafka_consumer_lag` with it.
+
 - Fix: `Producer.Produce` no longer relies on franz-go alone to report a record. A test (the worker's broker stop/start with a relay backlog, short delivery timeout, callers retrying) left a record neither delivered nor failed and `ProduceSync` waited for ever (about 1 run in 3 without the fix). `Produce` now returns within `DeliveryTimeout` plus 3s (`ErrDeliveryStuck`) and replaces the client, whose Close fails anything it still buffered. `Close` is idempotent as before. The libs/kafka-level test does not reproduce the wedge (it passes without the fix); the regression test is the worker's `TestTransport_BrokerStoppedThenStarted_BacklogDrains`.
 
 - Module created (Week 3 plan, Phase 3, ADR-0030). Imported by `services/worker/transport` since the transport landed (ADR-0029); no change to this module was needed.
