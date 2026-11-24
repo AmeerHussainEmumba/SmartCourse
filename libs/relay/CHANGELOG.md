@@ -4,6 +4,7 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- `DeadLetter` gains an optional `History []error` (the error of every attempt, in order). Additive; the Kafka consumer fills it.
 - Added the observability seams (ADR-0032): `WithObserver(Observer)` (called per delivery attempt of a claimed row, `ModePublish` or `ModeProcess`; returns the context the Publisher or handlers run under and a finish callback with the outcome) and `WithHandlerHook(HandlerHook)` (per in-process handler: processed, duplicate or failed). The package imports no tracing library; the worker implements the observer with `libs/telemetry` (`services/worker/transport.RelayObserver`). A nil, or panicking, observer or hook never fails a delivery.
 - Added `DeliverEvent`, `Deliver` that also reports whether the consumer had already processed the event (the `duplicate` outcome of `event_processed_total`); `Deliver` is unchanged for callers.
 - The relay's log lines about a row carry `event_id` (and `trace_id`/`span_id` when the observer started a span), through `libs/logging`. New dependency: `libs/logging` (which imports only the OpenTelemetry trace API, already linked by every binary that links this module).

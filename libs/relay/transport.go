@@ -23,6 +23,9 @@ type DeadLetter struct {
 	Consumer string
 	// Err is the last error.
 	Err error
+	// History is the error of every attempt, in order, when the caller kept
+	// them (the Kafka consumer does). Empty means only Err is known.
+	History []error
 	// Attempts is how many tries were made.
 	Attempts int
 }

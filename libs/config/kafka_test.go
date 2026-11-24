@@ -18,8 +18,8 @@ func TestLoad_EventTransport_DefaultsToInProcess(t *testing.T) {
 		t.Errorf("Transport = %q, want %q", k.Transport, TransportInProcess)
 	}
 	// Tuning has defaults even in in-process mode, so a flip needs only the brokers.
-	if k.ConsumerMaxInFlight != 4 || k.ConsumerMaxAttempts != 5 ||
-		k.ConsumerBackoffBase != 200*time.Millisecond || k.ConsumerBackoffMax != 10*time.Second ||
+	if k.ConsumerMaxInFlight != 4 || k.ConsumerMaxAttempts != 8 ||
+		k.ConsumerBackoffBase != 500*time.Millisecond || k.ConsumerBackoffMax != 30*time.Second ||
 		k.ConsumerShutdownTimeout != 30*time.Second || k.ProduceTimeout != 20*time.Second {
 		t.Errorf("defaults = %+v", k)
 	}

@@ -4,6 +4,7 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- `ParkInput.History []string`: one message per attempt; when set, each becomes its own error-history entry (numbered 1..n within the parking) instead of a single entry for `Err`. Additive.
 - Module created (Week 3 plan, ADR-0026).
 - Added `Open`/`Ping`/`Close` with context-bounded timeouts and idempotent index creation (no TTL).
 - Added the `events` archive (`ArchiveEvent`, `GetEvent`; idempotent, stores the schema id), `audit_log` (`AppendAudit`) and `failed_events` (`ParkFailedEvent`, `GetFailedEvent`, `ListFailedEvents` with keyset pagination, `MarkReplayed`, `CountFailedSince`).

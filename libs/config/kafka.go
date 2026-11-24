@@ -57,7 +57,7 @@ func (k KafkaConfig) KafkaEnabled() bool { return k.Transport == TransportKafka 
 const (
 	defaultKafkaMaxInFlight = 4
 	maxKafkaMaxInFlight     = 256
-	defaultKafkaMaxAttempts = 5
+	defaultKafkaMaxAttempts = 8
 	maxKafkaMaxAttempts     = 100
 	maxKafkaProduceTimeout  = 25 * time.Second
 )
@@ -81,8 +81,8 @@ func loadKafka(
 		Transport:               TransportInProcess,
 		ConsumerMaxInFlight:     optInt("KAFKA_CONSUMER_MAX_IN_FLIGHT", defaultKafkaMaxInFlight),
 		ConsumerMaxAttempts:     optInt("KAFKA_CONSUMER_MAX_ATTEMPTS", defaultKafkaMaxAttempts),
-		ConsumerBackoffBase:     optDuration("KAFKA_CONSUMER_BACKOFF_BASE", 200*time.Millisecond),
-		ConsumerBackoffMax:      optDuration("KAFKA_CONSUMER_BACKOFF_MAX", 10*time.Second),
+		ConsumerBackoffBase:     optDuration("KAFKA_CONSUMER_BACKOFF_BASE", 500*time.Millisecond),
+		ConsumerBackoffMax:      optDuration("KAFKA_CONSUMER_BACKOFF_MAX", 30*time.Second),
 		ConsumerShutdownTimeout: optDuration("KAFKA_CONSUMER_SHUTDOWN_TIMEOUT", 30*time.Second),
 		ProduceTimeout:          optDuration("KAFKA_PRODUCE_TIMEOUT", 20*time.Second),
 	}

@@ -48,6 +48,9 @@ type Parked struct {
 	// Err is why the last attempt failed. Each Park call adds one entry to
 	// the record's error history (capped by mongostore).
 	Err error
+	// History is the error of every attempt, in order, when known; the record
+	// then gets one history entry per attempt instead of one for Err.
+	History []error
 	// Attempts is how many delivery attempts this parking represents.
 	Attempts int
 }
@@ -121,6 +124,9 @@ func (s *Sink) Park(ctx context.Context, p Parked) (err error) {
 		SpanID:        e.SpanID,
 		Attempts:      p.Attempts,
 		Err:           errMessage(p.Err),
+	}
+	for _, h := range p.History {
+		in.History = append(in.History, errMessage(h))
 	}
 	if e.ActorID != nil {
 		in.ActorID = e.ActorID.String()

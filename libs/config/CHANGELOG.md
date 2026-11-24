@@ -4,6 +4,7 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Kafka consumer retry defaults lengthened to 8 attempts, 500 ms base, 30 s cap (about a minute in all), because a handler that depends on another consumer group's mirror (the certificate issuer needs the student name) must outlast that group lagging or starting; with the old 5 x 200 ms it could exhaust in about 3 seconds and park the event. Found by E2E scenario E01.
 - Added `Config.Telemetry` (`TelemetryConfig`, new file `telemetry.go`): `OTEL_EXPORTER_OTLP_ENDPOINT` (host:port or http(s) URL; empty means tracing off), `OTEL_SDK_DISABLED`, `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER_ARG` (0 to 1, default 1), `METRICS_ENABLED` (default true), `METRICS_HTTP_ADDR` (default `:9100`, the worker). All optional; shape-validated at `Load`, never dialled; a URL's credentials are refused and never echoed.
 
 - Added `Config.Mongo` (new file `mongo.go`): `MONGO_URI` (optional; `mongodb://` or `mongodb+srv://`, never echoed in errors), `MONGO_DATABASE` (default `smartcourse`), `MONGO_CONNECT_TIMEOUT` (5s), `MONGO_SERVER_SELECTION_TIMEOUT` (3s), `MONGO_OP_TIMEOUT` (5s); timeouts must be above zero and at most 2m. And `Config.Admin` (new file `admin.go`): `ADMIN_HTTP_ADDR`, a `host:port`, default `:8093`. `Load` fails for a bad value in every binary; defaults are unaffected. Additive.

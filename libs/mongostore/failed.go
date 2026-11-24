@@ -93,7 +93,11 @@ type ParkInput struct {
 	ActorID       string
 	Attempts      int
 	Err           string
-	FailedAt      time.Time
+	// History is one message per attempt, in order. When set it replaces Err:
+	// each message becomes its own entry in the error history (numbered 1..n
+	// within this parking). When empty, Err is recorded as a single entry.
+	History  []string
+	FailedAt time.Time
 }
 
 // ParkFailedEvent records that consumer gave up on an event. It is idempotent
@@ -136,7 +140,7 @@ func (s *Store) ParkFailedEvent(ctx context.Context, in ParkInput) (*FailedEvent
 		{Key: "$min", Value: bson.D{{Key: "first_failed_at", Value: at}}},
 		{Key: "$max", Value: bson.D{{Key: "last_failed_at", Value: at}}},
 		{Key: "$push", Value: bson.D{{Key: "errors", Value: bson.D{
-			{Key: "$each", Value: bson.A{ErrorEntry{At: at, Attempt: attempts, Message: in.Err}}},
+			{Key: "$each", Value: errorEntries(in, at, attempts)},
 			{Key: "$slice", Value: -MaxErrorHistory},
 		}}}},
 	}
@@ -372,4 +376,17 @@ func (s *Store) CountFailedSince(ctx context.Context, since time.Time, status St
 		return 0, fmt.Errorf("mongostore: count failed events: %w", err)
 	}
 	return n, nil
+}
+
+// errorEntries builds the history entries for one parking: one per attempt
+// when the caller supplied them, otherwise a single entry for Err.
+func errorEntries(in ParkInput, at time.Time, attempts int) bson.A {
+	if len(in.History) == 0 {
+		return bson.A{ErrorEntry{At: at, Attempt: attempts, Message: in.Err}}
+	}
+	out := make(bson.A, 0, len(in.History))
+	for i, m := range in.History {
+		out = append(out, ErrorEntry{At: at, Attempt: i + 1, Message: m})
+	}
+	return out
 }

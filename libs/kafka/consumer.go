@@ -514,6 +514,7 @@ func (w *worker) commit(rec *kgo.Record) {
 func (w *worker) handle(rec *kgo.Record) bool {
 	c := w.s.c
 	r := toRecord(rec)
+	var attemptErrs []error // every failed attempt, handed to OnExhausted
 	for attempt := 0; ; attempt++ {
 		if !w.acquire() {
 			return false
@@ -529,10 +530,11 @@ func (w *worker) handle(rec *kgo.Record) bool {
 			return false
 		}
 		c.failed.Add(1)
+		attemptErrs = append(attemptErrs, err)
 		c.log.Warn("handler failed", "topic", r.Topic, "partition", r.Partition, "offset", r.Offset,
 			"attempt", attempt+1, "max_attempts", c.cfg.MaxAttempts, "error", err)
 		if attempt+1 >= c.cfg.MaxAttempts {
-			return w.exhaust(r, err)
+			return w.exhaust(r, &ExhaustedError{Attempts: attemptErrs})
 		}
 		if !w.sleep(c.cfg.Backoff.Delay(attempt)) {
 			return false

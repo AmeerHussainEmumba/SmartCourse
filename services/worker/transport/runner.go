@@ -276,7 +276,7 @@ func (r *Runner) LagGauges(m *telemetry.Metrics) (telemetry.GaugeCollector, func
 // failure: that is the one remaining way an event leaves the stream unparked,
 // and it is loud.
 func (r *Runner) exhausted(ctx context.Context, g group, rec kafka.Record, cause error) {
-	d := relay.DeadLetter{Event: stubEvent(rec), Consumer: g.name, Err: cause, Attempts: r.attempts()}
+	d := relay.DeadLetter{Event: stubEvent(rec), Consumer: g.name, Err: cause, History: kafka.AttemptErrors(cause), Attempts: r.attempts()}
 	if r.cfg.Sink == nil {
 		r.log.Error("kafka consumer gave up on a record; no dead-letter sink is configured, the record is dropped",
 			slog.String("consumer", g.name), slog.String("topic", rec.Topic), slog.Int("partition", int(rec.Partition)),

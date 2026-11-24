@@ -17,7 +17,7 @@ type deadLetterAdapter struct{ s *deadletter.Sink }
 
 func (a deadLetterAdapter) Park(ctx context.Context, d relay.DeadLetter) error {
 	return a.s.Park(ctx, deadletter.Parked{
-		Event: d.Event, Consumer: d.Consumer, Err: d.Err, Attempts: d.Attempts,
+		Event: d.Event, Consumer: d.Consumer, Err: d.Err, History: d.History, Attempts: d.Attempts,
 	})
 }
 

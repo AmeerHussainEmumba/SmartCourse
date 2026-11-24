@@ -262,6 +262,31 @@ func TestParkFailedEventCapsHistoryButKeepsAttempts(t *testing.T) {
 	}
 }
 
+func TestParkFailedEventKeepsOneEntryPerAttempt(t *testing.T) {
+	env := testenv.SetupMongo(t)
+	s := openStore(t, env.URI)
+	ctx := context.Background()
+	if _, err := s.ParkFailedEvent(ctx, mongostore.ParkInput{
+		EventID: "evt-h", Consumer: "c", EventType: "LessonCompleted", Topic: "course.events",
+		AggregateType: "course", AggregateID: "c1", Payload: []byte("p"),
+		Attempts: 3, Err: "third", History: []string{"first", "second", "third"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetFailedEvent(ctx, "evt-h", "c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Errors) != 3 || got.Attempts != 3 {
+		t.Fatalf("errors=%d attempts=%d, want 3 and 3: %+v", len(got.Errors), got.Attempts, got.Errors)
+	}
+	for i, want := range []string{"first", "second", "third"} {
+		if got.Errors[i].Message != want || got.Errors[i].Attempt != i+1 {
+			t.Errorf("entry %d = %+v, want attempt %d %q", i, got.Errors[i], i+1, want)
+		}
+	}
+}
+
 func TestMarkReplayedTransitionsExactlyOnceUnderConcurrency(t *testing.T) {
 	env := testenv.SetupMongo(t)
 	s := openStore(t, env.URI)

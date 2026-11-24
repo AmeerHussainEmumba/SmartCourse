@@ -172,3 +172,22 @@ func TestRecord_Header(t *testing.T) {
 		t.Error("Header(b) found a header that is not there")
 	}
 }
+
+func TestExhaustedError_ReadsAsLastAndCarriesEveryAttempt(t *testing.T) {
+	first, last := errors.New("first"), errors.New("last")
+	err := error(&ExhaustedError{Attempts: []error{first, last}})
+	if err.Error() != "last" || !errors.Is(err, last) || errors.Is(err, first) {
+		t.Fatalf("must read and unwrap as the last attempt: %v", err)
+	}
+	if got := AttemptErrors(err); len(got) != 2 || got[0] != first || got[1] != last {
+		t.Fatalf("AttemptErrors = %v", got)
+	}
+	// An error that carries no history is its own one-entry history.
+	plain := errors.New("plain")
+	if got := AttemptErrors(plain); len(got) != 1 || got[0] != plain {
+		t.Fatalf("AttemptErrors(plain) = %v", got)
+	}
+	if got := AttemptErrors(nil); got != nil {
+		t.Fatalf("AttemptErrors(nil) = %v", got)
+	}
+}

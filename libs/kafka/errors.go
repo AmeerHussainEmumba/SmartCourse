@@ -25,6 +25,40 @@ var (
 	ErrPanic = errors.New("kafka: handler panicked")
 )
 
+// ExhaustedError is what OnExhausted receives when a handler used its whole
+// retry budget: it reads and unwraps as the last attempt's error and carries
+// every attempt's error, in order, so a dead-letter store can keep one history
+// entry per attempt instead of only the last.
+type ExhaustedError struct{ Attempts []error }
+
+func (e *ExhaustedError) Error() string {
+	if len(e.Attempts) == 0 {
+		return "kafka: handler failed"
+	}
+	return e.Attempts[len(e.Attempts)-1].Error()
+}
+
+// Unwrap returns the last attempt's error.
+func (e *ExhaustedError) Unwrap() error {
+	if len(e.Attempts) == 0 {
+		return nil
+	}
+	return e.Attempts[len(e.Attempts)-1]
+}
+
+// AttemptErrors returns every attempt's error carried by an OnExhausted error,
+// or just err itself when it carries none.
+func AttemptErrors(err error) []error {
+	var ex *ExhaustedError
+	if errors.As(err, &ex) && len(ex.Attempts) > 0 {
+		return ex.Attempts
+	}
+	if err == nil {
+		return nil
+	}
+	return []error{err}
+}
+
 func errInvalid(msg string) error { return fmt.Errorf("%w: %s", ErrInvalidConfig, msg) }
 
 func errNegative(what string) error { return errInvalid(what + " must not be negative") }
