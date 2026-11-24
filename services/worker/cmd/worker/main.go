@@ -46,6 +46,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	defer startTelemetry(ctx, logger, deps, cfg)() // tracing, /metrics, Temporal interceptors; see telemetry_wire.go
 
 	rl := buildRelay(deps, cfg)
 
