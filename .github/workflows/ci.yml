@@ -64,6 +64,9 @@ jobs:
       - name: HTTP hardening (server timeouts, body cap, trusted proxies)
         run: make check-http-hardening
 
+      - name: Pending E2E specs (no spec E1 to E14 is skipped past its phase)
+        run: make check-pending-e2e
+
       - name: Guards fail on injected violations
         run: make test-guards
 
@@ -110,3 +113,25 @@ jobs:
         env:
           POSTGRES_DSN: postgres://smartcourse:smartcourse@localhost:5432/smartcourse?sslmode=disable
           REDIS_ADDR: localhost:6379
+
+  # The container tier of the Week 3 end-to-end scenarios (test/e2e/harness,
+  # build tag `e2e`): real Postgres, Redis, Kafka, Schema Registry, MongoDB,
+  # Mailpit and Temporal in Docker, and the real worker and API binaries run as
+  # subprocesses. Separate from build-lint-test on purpose: it takes many
+  # minutes and a dozen containers, and runs in parallel with it. Only tests
+  # carrying the `e2e` tag run here (the main job's -tags=integration never
+  # selects them).
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.11"
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - name: End-to-end scenarios (make test-e2e)
+        run: make test-e2e

@@ -29,7 +29,7 @@ MIGRATION_SERVICES_REVERSED := notification analytics course identity platform
         migrate-up migrate-down migrate-down-all migrate-create \
         run-identity-api run-course-api run-analytics-api run-worker \
         build build-identity-api build-course-api build-analytics-api build-worker \
-        lint check-link-graph check-module-graph check-dockerfile-modules check-module-hygiene check-dev-defaults check-http-hardening test-guards verify-deliverables test test-race test-integration seed fmt
+        lint check-link-graph check-module-graph check-dockerfile-modules check-module-hygiene check-dev-defaults check-http-hardening check-pending-e2e test-guards verify-deliverables test test-race test-integration test-e2e seed fmt
 
 ## --- Local environment (ADR-0018) ---------------------------------------
 
@@ -155,6 +155,11 @@ check-dev-defaults:
 check-http-hardening:
 	scripts/check-http-hardening.sh
 
+# Fails when an end-to-end spec (E1 to E14, test/e2e) is still a skipped
+# placeholder past the phase that owns it: scripts/check-pending-e2e.sh.
+check-pending-e2e:
+	scripts/check-pending-e2e.sh
+
 # Mutation test of the guards themselves: injects violations into a copy of
 # the tree and checks the right guard fails (slow; copies the repo).
 test-guards:
@@ -173,6 +178,14 @@ test-race:
 
 test-integration:
 	scripts/for-each-module.sh go test -race -tags=integration ./...
+
+# The container-tier end-to-end scenarios (test/e2e/harness, build tag `e2e`):
+# a dozen containers and the real service binaries as subprocesses, so it needs
+# Docker and several minutes and is not part of test-integration. One scenario:
+# `make test-e2e E2E_RUN=TestE2E_E01`.
+E2E_RUN ?= TestE2E_
+test-e2e:
+	cd test/e2e && GOWORK=off go test -tags=e2e -count=1 -timeout 40m -v -run '$(E2E_RUN)' ./...
 
 # `make seed` runs on the HOST, not in a container, so it must dial the host-
 # published ports (docker-compose.yml publishes them on 127.0.0.1), never the
