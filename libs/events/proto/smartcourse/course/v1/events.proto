@@ -4,6 +4,8 @@ syntax = "proto3";
 
 package smartcourse.course.v1;
 
+import "google/protobuf/timestamp.proto";
+
 option go_package = "github.com/AmeerHussainEmumba/SmartCourse/libs/events/gen/smartcourse/course/v1;coursev1";
 
 // course.course_published
@@ -18,4 +20,24 @@ message CoursePublished {
 // course.course_archived
 message CourseArchived {
   string course_id = 1;
+}
+
+// course.publish_failed: written when a version ends in publish_failed, by the
+// workflow's failure step or by the stale-publish reconciler. Added in Week 3
+// (RFC §6.5 CoursePublishFailed).
+message CoursePublishFailed {
+  string course_id = 1;
+  string version_id = 2;
+  int32 version_number = 3;
+  // Title of the failed version and its owner, so a consumer can word a mail
+  // and address it without reading the course schema (ADR-0024).
+  string title = 4;
+  string instructor_id = 5;
+  // The workflow activity whose final failure ended the publish (for example
+  // "ValidateMetadata"), or "reconciler" when the stale-publish reconciler
+  // released the version.
+  string failed_activity = 6;
+  // Bounded (at most 500 characters) human-readable cause.
+  string reason = 7;
+  google.protobuf.Timestamp failed_at = 8;
 }

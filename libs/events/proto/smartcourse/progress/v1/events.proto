@@ -14,3 +14,26 @@ message CourseCompleted {
   string student_id = 2;
   google.protobuf.Timestamp completed_at = 3;
 }
+
+// progress.lesson_completed: written once per lesson completion (never on an
+// idempotent repeat), in the same transaction as the lesson_progress update.
+// Added in Week 3 (RFC §6.5 LessonCompleted).
+message LessonCompleted {
+  string enrollment_id = 1;
+  string student_id = 2;
+  string lesson_key = 3;
+  google.protobuf.Timestamp completed_at = 4;
+}
+
+// progress.certificate_issued: written in the transaction that inserts the
+// certificate row. The verification code is deliberately NOT carried: it is a
+// bearer token for the public verification endpoint and must not be copied
+// into Kafka and the permanent archive.
+message CertificateIssued {
+  string certificate_id = 1;
+  string enrollment_id = 2;
+  string student_id = 3;
+  string course_id = 4;
+  string course_title = 5;
+  google.protobuf.Timestamp issued_at = 6;
+}

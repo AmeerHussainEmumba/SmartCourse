@@ -44,8 +44,9 @@ func (t Type) Subject() string { return string(t.Message().FullName()) }
 func (t Type) ProtoFile() string { return t.Message().ParentFile().Path() }
 
 // Types lists every event the services emit today. Events RFC §6.5 names but
-// no service emits yet (CourseCreated, CertificateIssued, ...) are not here;
-// they get a message when a service starts writing them.
+// no service emits yet (CourseCreated, CourseVersionCreated,
+// CoursePublishRequested) are not here; they get a message when a service
+// starts writing them.
 func Types() []Type {
 	return []Type{
 		{"identity.user_registered", TopicIdentity, func() proto.Message { return new(identityv1.UserRegistered) }},
@@ -53,9 +54,12 @@ func Types() []Type {
 		{"identity.user_role_changed", TopicIdentity, func() proto.Message { return new(identityv1.UserRoleChanged) }},
 		{"course.course_published", TopicCourse, func() proto.Message { return new(coursev1.CoursePublished) }},
 		{"course.course_archived", TopicCourse, func() proto.Message { return new(coursev1.CourseArchived) }},
+		{"course.publish_failed", TopicCourse, func() proto.Message { return new(coursev1.CoursePublishFailed) }},
 		{"enrollment.student_enrolled", TopicEnrollment, func() proto.Message { return new(enrollmentv1.StudentEnrolled) }},
 		{"enrollment.student_withdrawn", TopicEnrollment, func() proto.Message { return new(enrollmentv1.StudentWithdrawn) }},
+		{"progress.lesson_completed", TopicProgress, func() proto.Message { return new(progressv1.LessonCompleted) }},
 		{"progress.course_completed", TopicProgress, func() proto.Message { return new(progressv1.CourseCompleted) }},
+		{"progress.certificate_issued", TopicProgress, func() proto.Message { return new(progressv1.CertificateIssued) }},
 	}
 }
 

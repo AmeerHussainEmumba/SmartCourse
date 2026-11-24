@@ -11,3 +11,4 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 - `cmd/register-schemas`: idempotent bootstrap of 12 subjects at BACKWARD compatibility.
 - `registry.Client.LatestSchema` and `registry.ErrSubjectNotFound`: the latest version of a subject with its global id, so a producer can frame messages and fill `Envelope.schema_version` without registering (used by the worker at start, ADR-0029). Additive.
 - Golden files under `testdata/golden` as the CI guard for BACKWARD compatibility; `live`-tagged tests against a real registry.
+- `progress.lesson_completed`, `progress.certificate_issued` and `course.publish_failed` (RFC §6.5 `LessonCompleted`, `CertificateIssued`, `CoursePublishFailed`): new payload messages, golden files, registered subjects (15 in all) and `Types()` entries. Additive: no existing message or field changed. `certificate_issued` deliberately omits the verification code.

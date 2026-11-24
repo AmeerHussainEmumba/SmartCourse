@@ -91,8 +91,8 @@ func TestRun_RegistersEverySubjectIdempotently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 4 envelope subjects (one per topic) + 8 payload records.
-	if len(subjects) != 12 {
+	// 4 envelope subjects (one per topic) + 11 payload records.
+	if len(subjects) != 15 {
 		t.Fatalf("%d subjects", len(subjects))
 	}
 

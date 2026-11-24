@@ -1,0 +1,5 @@
+smartcourse.progress.v1.LessonCompleted
+completed_at 4 message optional
+enrollment_id 1 string optional
+lesson_key 3 string optional
+student_id 2 string optional

@@ -4,20 +4,23 @@ Event contracts (ADR-0030, RFC §6.4, §6.5, §6.8): the `.proto` files, the gen
 
 ## What is defined
 
-The eight events the services write to the outbox today. Each payload's fields were derived from the `outbox.Write` call sites, not from the RFC's wider list; events the RFC names but nothing emits (`CourseCreated`, `CertificateIssued`, ...) get a message when a service starts writing them.
+The eleven events the services write to the outbox today. Each payload's fields were derived from the `outbox.Write` call sites, not from the RFC's wider list. RFC §6.5 names 13 events; three of them (`CourseCreated`, `CourseVersionCreated`, `CoursePublishRequested`) are not written by any service and have no consumer in the RFC's own consumer table, so they get a message when a service starts writing them. `identity.user_profile_updated` is in this catalogue but not in the RFC's §6.5 list.
 
-| event_type | Topic (key) | Payload message | Emitted in |
-|---|---|---|---|
-| `identity.user_registered` | `identity.events` (user_id) | `identity.v1.UserRegistered` | `services/identity/identity/service.go` |
-| `identity.user_profile_updated` | `identity.events` | `identity.v1.UserProfileUpdated` | same |
-| `identity.user_role_changed` | `identity.events` | `identity.v1.UserRoleChanged` | same |
-| `course.course_published` | `course.events` (course_id) | `course.v1.CoursePublished` (includes `instructor_id`) | `services/course/course/service.go` |
-| `course.course_archived` | `course.events` | `course.v1.CourseArchived` | same |
-| `enrollment.student_enrolled` | `enrollment.events` (course_id) | `enrollment.v1.StudentEnrolled` | `services/course/enrollment/service.go` |
-| `enrollment.student_withdrawn` | `enrollment.events` | `enrollment.v1.StudentWithdrawn` | same |
-| `progress.course_completed` | `progress.events` (enrollment_id) | `progress.v1.CourseCompleted` | `services/course/progress/service.go` |
+| event_type | In RFC §6.5 | Topic (key) | Payload message | Emitted in |
+|---|---|---|---|---|
+| `identity.user_registered` | yes | `identity.events` (user_id) | `identity.v1.UserRegistered` | `services/identity/identity/service.go` |
+| `identity.user_profile_updated` | no (added) | `identity.events` | `identity.v1.UserProfileUpdated` | same |
+| `identity.user_role_changed` | yes | `identity.events` | `identity.v1.UserRoleChanged` | same |
+| `course.course_published` | yes | `course.events` (course_id) | `course.v1.CoursePublished` (includes `instructor_id`) | `services/course/course/service.go` |
+| `course.course_archived` | yes | `course.events` | `course.v1.CourseArchived` | same |
+| `course.publish_failed` | yes (`CoursePublishFailed`) | `course.events` | `course.v1.CoursePublishFailed` | `services/course/course/service.go` (workflow failure step and stale-publish reconciler) |
+| `enrollment.student_enrolled` | yes | `enrollment.events` (course_id) | `enrollment.v1.StudentEnrolled` | `services/course/enrollment/service.go` |
+| `enrollment.student_withdrawn` | yes | `enrollment.events` | `enrollment.v1.StudentWithdrawn` | same |
+| `progress.lesson_completed` | yes (`LessonCompleted`) | `progress.events` (enrollment_id) | `progress.v1.LessonCompleted` | `services/course/progress/service.go` |
+| `progress.course_completed` | yes | `progress.events` | `progress.v1.CourseCompleted` | same |
+| `progress.certificate_issued` | yes (`CertificateIssued`) | `progress.events` | `progress.v1.CertificateIssued` (no verification code) | `services/course/certificate/service.go` |
 
-The topic follows the event type's prefix, not the outbox `aggregate_type` (which is `user`, `course` or `enrollment`; enrollment events use `course`). `events.Types()` is the machine-readable form of this table.
+The topic follows the event type's prefix, not the outbox `aggregate_type` (which is `user`, `course` or `enrollment`; enrollment and progress events use `enrollment`). `events.Types()` is the machine-readable form of this table.
 
 ## Layout
 
@@ -44,7 +47,7 @@ Verified on 2026-11-18 against Confluent's "Schema Registry serializer and forma
 
 ## Subjects and schema_version
 
-12 subjects, all `BACKWARD`:
+15 subjects, all `BACKWARD`:
 
 - `<topic>-value` for each of the 4 topics: the envelope schema (what the Kafka value is).
 - the payload message's full name (for example `smartcourse.course.v1.CoursePublished`) for each event: the registry's record-name strategy. The registered text is the whole `events.proto` file for that domain.
