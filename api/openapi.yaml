@@ -9,7 +9,7 @@ info:
     error shape, Idempotency-Key) and docs/rfc/smartcourse-prd.md for
     product context. Publishing workflow status (M2, ADR-0025) is built —
     see POST/GET on /courses/{id}/publish[-status] and GET /courses/search
-    below. 7 of FR-5's 9 analytics metrics are live (DR-021) — see /analytics/*
+    below. 8 of FR-5's 9 analytics metrics are live (DR-021; the ninth, failed events / workflow issues, has an admin route that answers 503 until a source is attached) — see /analytics/*
     below (DR-017: the last two of these had been computed since ADR-0024
     but had no read path until this spec caught up to reality). Endpoints
     not yet built (certificates, "Most Popular Courses"/"Failed Events"
@@ -394,6 +394,58 @@ paths:
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformSnapshot' } } } }
 
+  /analytics/popular-courses:
+    get:
+      summary: >
+        Most Popular Courses (FR-5): published courses ranked by enrollments (active plus completed),
+        highest first, courses with no enrollments omitted. Served from a Redis sorted set refreshed by
+        the reconciler (about every 60 s) and falls back to Postgres if Redis is empty or unavailable;
+        never a 5xx on a Redis miss. Ids and counts only, so any authenticated user may read it.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 50, default: 10 } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties: { course_id: { type: string, format: uuid }, enrollments: { type: integer, format: int64 } }
+        '400': { description: "limit is not an integer from 1 to 50", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /analytics/issues:
+    get:
+      summary: >
+        Failed Events / Workflow Issues (FR-5), admin only. Dead-letter backlog and failed-workflow counts.
+        Answers 503 until a dead-letter source is attached to analytics-api (not wired yet).
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  failed_events:
+                    type: object
+                    properties:
+                      total: { type: integer, format: int64 }
+                      unresolved: { type: integer, format: int64 }
+                      by_event_type: { type: object, additionalProperties: { type: integer, format: int64 } }
+                  workflow_issues:
+                    type: object
+                    properties:
+                      failed: { type: integer, format: int64 }
+                      by_workflow: { type: object, additionalProperties: { type: integer, format: int64 } }
+        '403': { description: "Caller is not an admin", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: "No failed-events or workflow source is attached", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
   /analytics/courses/{id}:
     get:
       summary: >
@@ -401,23 +453,25 @@ paths:
         to complete) — zeros if the course has never been published, not a
         404 (this schema never queries services/course/course directly, ADR-0024,
         so it can't distinguish "never published" from "doesn't exist").
-        Access: admins and instructors may read any course; a student may
-        read it only if they have an active or completed enrollment in it
+        Access: admins may read any course; an instructor only a course they
+        own; a student only if they have an active or completed enrollment in it
         (from analytics' own enrollment mirror). Everyone else gets 404, not
-        403, so a course's existence is not leaked. (Instructor ownership is
-        not yet enforced: the course_published event now carries instructor_id, but analytics does not read it yet.)
+        403, so a course's existence is not leaked. Instructors are limited to
+        courses they own (instructor_id from the course_published event); a
+        course published before analytics recorded owners is readable by admins
+        only until it is published again.
       security: [{ bearerAuth: [] }]
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CourseStats' } } } }
-        '404': { description: "Caller is a student without an active or completed enrollment in the course", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: "Caller is a student without an active or completed enrollment in the course, or an instructor who does not own it", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /analytics/courses/{id}/daily-enrollments:
     get:
       summary: >
         One course's daily enrollment counts (FR-5 — "New Enrollments Over Time"), oldest first,
         bucketed by the enrollment's UTC day. Same access rule as GET /analytics/courses/{id}:
-        admins and instructors any course, a student only a course they are enrolled in, otherwise 404.
+        admins any course, an instructor only a course they own, a student only a course they are enrolled in, otherwise 404.
       security: [{ bearerAuth: [] }]
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
