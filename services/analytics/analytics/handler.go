@@ -5,7 +5,9 @@
 package analytics
 
 import (
+	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -23,6 +25,8 @@ func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig) {
 	g := r.Group("/analytics")
 	g.Use(auth.RequireAuth(jwtCfg))
 	g.GET("/platform", h.getPlatformSnapshot)
+	g.GET("/popular-courses", h.listPopularCourses)
+	g.GET("/issues", auth.RequireRole("admin"), h.getIssues)
 	g.GET("/courses/:id", h.authorizeCourse, h.getCourseStats)
 	g.GET("/courses/:id/daily-enrollments", h.authorizeCourse, h.listDailyEnrollments)
 }
@@ -66,11 +70,70 @@ func (h *Handler) getPlatformSnapshot(c *gin.Context) {
 	})
 }
 
+// listPopularCourses backs GET /analytics/popular-courses (FR-5: "Most
+// Popular Courses"). Platform-level like /platform: ids and enrollment
+// counts only, so any authenticated user may read it.
+func (h *Handler) listPopularCourses(c *gin.Context) {
+	limit := 0 // 0 = the service default
+	if raw := c.Query("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > maxPopularLimit {
+			httpx.Fail(c, apperrors.ErrValidation)
+			return
+		}
+		limit = n
+	}
+	rows, err := h.svc.GetPopularCourses(c.Request.Context(), limit)
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrInternal.Wrap(err))
+		return
+	}
+	items := make([]gin.H, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, gin.H{"course_id": row.CourseID, "enrollments": row.Enrollments})
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+// getIssues backs GET /analytics/issues (FR-5: "Failed Events / Workflow
+// Issues"), admin only: dead-letter contents are operational detail. 503
+// when no sources are attached (the dead-letter store lives outside this
+// module, issues.go).
+func (h *Handler) getIssues(c *gin.Context) {
+	report, err := h.svc.GetIssues(c.Request.Context())
+	if errors.Is(err, ErrIssuesNotConfigured) {
+		httpx.Fail(c, apperrors.ErrUnavailable.Wrap(err))
+		return
+	}
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrInternal.Wrap(err))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"failed_events": gin.H{
+			"total":         report.FailedEvents.Total,
+			"unresolved":    report.FailedEvents.Unresolved,
+			"by_event_type": nonNilCounts(report.FailedEvents.ByEventType),
+		},
+		"workflow_issues": gin.H{
+			"failed":      report.WorkflowIssues.Failed,
+			"by_workflow": nonNilCounts(report.WorkflowIssues.ByWorkflow),
+		},
+	})
+}
+
+// nonNilCounts keeps an absent map serialising as {} rather than null.
+func nonNilCounts(m map[string]int64) map[string]int64 {
+	if m == nil {
+		return map[string]int64{}
+	}
+	return m
+}
+
 // getCourseStats backs GET /analytics/courses/{id} (FR-5: total/active
 // enrollments, completions, completion rate, average time to complete).
-// Gated by authorizeCourse: admin/instructor any course, student only an
-// enrolled course, else 404. No instructor ownership check: the events
-// carry no instructor_id.
+// Gated by authorizeCourse: admin any course, an instructor only a course
+// they own, a student only an enrolled course, else 404.
 func (h *Handler) getCourseStats(c *gin.Context) {
 	courseID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
