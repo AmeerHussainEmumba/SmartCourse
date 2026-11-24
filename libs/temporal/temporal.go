@@ -22,9 +22,14 @@ import (
 // consequence — "Temporal down means publishing unavailable — though
 // nothing else is affected."
 func Connect(cfg *config.Config) (temporalclient.Client, error) {
+	ints, err := interceptors() // none unless Observe was called (observability.go)
+	if err != nil {
+		return nil, err
+	}
 	c, err := temporalclient.NewLazyClient(temporalclient.Options{
-		HostPort:  cfg.Temporal.HostPort,
-		Namespace: cfg.Temporal.Namespace,
+		HostPort:     cfg.Temporal.HostPort,
+		Namespace:    cfg.Temporal.Namespace,
+		Interceptors: ints,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build temporal client: %w", err)
