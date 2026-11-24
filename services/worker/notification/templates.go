@@ -15,9 +15,12 @@ const (
 	KindEnrollmentConfirm  = "enrollment_confirmation"
 	KindCourseCompleted    = "course_completed"
 	KindCoursePublished    = "course_published"
+	KindCertificateIssued  = "certificate_issued"
+	KindPublishFailed      = "publish_failed"
 	fallbackRecipientName  = "there"
 	fallbackCourseTitle    = "your course"
 	maxTemplateFieldLength = 200
+	maxPublishReasonLength = 500
 )
 
 // TemplateData is everything a template may interpolate. Both fields are
@@ -25,6 +28,10 @@ const (
 type TemplateData struct {
 	Name        string
 	CourseTitle string
+	// FailedActivity and Reason describe a failed publish (KindPublishFailed
+	// only). Both come from an activity's error text, so both are untrusted.
+	FailedActivity string
+	Reason         string
 }
 
 type tmpl struct {
@@ -67,6 +74,16 @@ var templates = map[string]tmpl{
 		"Hi {{.Name}},\n\nYour course {{.CourseTitle}} is now published and open for enrollment.\n",
 		"<p>Hi {{.Name}},</p><p>Your course <strong>{{.CourseTitle}}</strong> is now published and open for enrollment.</p>",
 	),
+	KindCertificateIssued: newTmpl(
+		"Your certificate for {{SUBJECT_COURSE}}",
+		"Hi {{.Name}},\n\nYour certificate for {{.CourseTitle}} has been issued. You can find it under your certificates in SmartCourse.\n",
+		"<p>Hi {{.Name}},</p><p>Your certificate for <strong>{{.CourseTitle}}</strong> has been issued. You can find it under your certificates in SmartCourse.</p>",
+	),
+	KindPublishFailed: newTmpl(
+		"Publishing {{SUBJECT_COURSE}} failed",
+		"Hi {{.Name}},\n\nPublishing {{.CourseTitle}} did not complete{{if .FailedActivity}} at step {{.FailedActivity}}{{end}}{{if .Reason}}: {{.Reason}}{{end}}.\n\nYour students are not affected: the version they see is unchanged. Fix the problem and publish again.\n",
+		"<p>Hi {{.Name}},</p><p>Publishing <strong>{{.CourseTitle}}</strong> did not complete{{if .FailedActivity}} at step {{.FailedActivity}}{{end}}{{if .Reason}}: {{.Reason}}{{end}}.</p><p>Your students are not affected: the version they see is unchanged. Fix the problem and publish again.</p>",
+	),
 }
 
 // Render builds the message content for kind. An unknown kind is a
@@ -84,6 +101,8 @@ func Render(kind string, d TemplateData) (subject, text, html string, err error)
 	if d.CourseTitle == "" {
 		d.CourseTitle = fallbackCourseTitle
 	}
+	d.FailedActivity = clip(cleanLine(d.FailedActivity), maxTemplateFieldLength)
+	d.Reason = clip(cleanLine(d.Reason), maxPublishReasonLength)
 	var tb, hb bytes.Buffer
 	if err := t.text.Execute(&tb, d); err != nil {
 		return "", "", "", fmt.Errorf("%w: render text: %v", ErrPermanent, err)
