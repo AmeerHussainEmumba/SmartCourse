@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -242,10 +243,22 @@ func startTemporal(ctx context.Context, run runFunc) (string, error) {
 			return err
 		}
 		defer tc.Close()
-		dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		_, err = tc.WorkflowService().DescribeNamespace(dctx, &workflowservice.DescribeNamespaceRequest{Namespace: "default"})
-		return err
+		if _, err = tc.WorkflowService().DescribeNamespace(dctx, &workflowservice.DescribeNamespaceRequest{Namespace: "default"}); err != nil {
+			return err
+		}
+		// The namespace answers before the history service accepts work. Start
+		// (and terminate) a throwaway workflow: it succeeds only when the
+		// frontend, history and persistence all work, which is what a publish
+		// needs.
+		run, err := tc.ExecuteWorkflow(dctx, temporalclient.StartWorkflowOptions{
+			ID: "e2e-readiness-" + uuid.NewString(), TaskQueue: "e2e-readiness-probe",
+		}, "probe")
+		if err != nil {
+			return err
+		}
+		return tc.TerminateWorkflow(dctx, run.GetID(), run.GetRunID(), "readiness probe")
 	})
 	if err != nil {
 		return "", fmt.Errorf("temporal namespace default not ready at %s: %w", addr, err)

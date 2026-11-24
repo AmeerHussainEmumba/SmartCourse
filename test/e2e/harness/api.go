@@ -334,6 +334,19 @@ type CourseStats struct {
 	AvgCompletionS    *int64  `json:"avg_completion_s"`
 }
 
+// Same compares two readings by value (AvgCompletionS is a pointer, so ==
+// would compare addresses).
+func (c CourseStats) Same(o CourseStats) bool {
+	if (c.AvgCompletionS == nil) != (o.AvgCompletionS == nil) {
+		return false
+	}
+	if c.AvgCompletionS != nil && *c.AvgCompletionS != *o.AvgCompletionS {
+		return false
+	}
+	return c.TotalEnrollments == o.TotalEnrollments && c.ActiveEnrollments == o.ActiveEnrollments &&
+		c.Completions == o.Completions && c.CompletionRate == o.CompletionRate
+}
+
 // PlatformStats reads the platform snapshot as user.
 func (s *Stack) PlatformStats(t testing.TB, user *User) Platform {
 	t.Helper()

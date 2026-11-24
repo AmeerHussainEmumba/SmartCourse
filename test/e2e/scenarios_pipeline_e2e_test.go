@@ -274,3 +274,124 @@ func TestE2E_E01_HappyPath(t *testing.T) {
 		}
 	})
 }
+
+// TestE2E_E03_DuplicateDelivery is E3, matrix row E03 (Phase 3).
+//
+// Steps:
+//  1. Stack as E01. Student enrolls; wait until the event is consumed
+//     (processed_events has one row per consumer; Mailpit has one mail).
+//  2. Read the current analytics counters and the mail count.
+//  3. Re-produce the exact same Kafka record (same event id, same key, same
+//     bytes) to enrollment.events twice more, bypassing the relay (a test-only
+//     producer), simulating at-least-once redelivery.
+//  4. Wait until every consumer group's lag is 0.
+//
+// Assertions:
+//   - Analytics counters are unchanged from step 2 (changed exactly once in
+//     total relative to before the enrollment).
+//   - Mailpit still holds exactly one enrollment mail for the student.
+//   - processed_events still has exactly one row per (consumer, event id).
+//   - No row in failed_events.
+//
+// Implementation notes: "every consumer" is the three groups that handle
+// StudentEnrolled (analytics-aggregator, notification-dispatcher,
+// audit-archiver); the lag wait covers all six groups. The worker's
+// event_processed_total{outcome="duplicate"} is logged, not asserted (see the
+// end of the scenario): the redelivery is proven by the topic holding the
+// copies and the lag returning to 0 with the effects unchanged.
+func TestE2E_E03_DuplicateDelivery(t *testing.T) {
+	s := harness.Start(t, harness.Options{})
+	inst := s.NewInstructor(t)
+	student := s.NewStudent(t)
+	course := s.PublishedCourse(t, inst, 1)
+	s.WaitSettled(t, time.Minute)
+
+	enrollment := s.Enroll(t, student, course)
+	eventID := ""
+	harness.Eventually(t, time.Minute, "the StudentEnrolled event in the outbox", func() error {
+		var err error
+		eventID, err = s.EventIDFor("enrollment.student_enrolled", "enrollment_id", enrollment.String())
+		return err
+	})
+	s.WaitSettled(t, time.Minute)
+
+	consumers := []string{"analytics-aggregator", "notification-dispatcher", "audit-archiver"}
+	oneEffect := func() error {
+		for _, c := range consumers {
+			if n, err := s.ProcessedCount(c, eventID); err != nil || n != 1 {
+				return harness.Errf("processed_events for %s: %d (err %v), want 1", c, n, err)
+			}
+		}
+		msgs, err := s.Mailpit.MessagesToWithSubject(student.Email, "enrolled")
+		if err != nil || len(msgs) != 1 {
+			return harness.Errf("enrollment mails: %d (err %v), want 1", len(msgs), err)
+		}
+		return nil
+	}
+	harness.Eventually(t, time.Minute, "one processed_events row per consumer and one mail", oneEffect)
+
+	// Step 2: the counters to compare against.
+	admin := s.Login(t, s.AdminEmail())
+	platform := s.PlatformStats(t, admin)
+	stats := s.CourseStatsFor(t, inst, course)
+	daily := s.DailyEnrollments(t, inst, course)
+	if stats.TotalEnrollments != 1 || stats.ActiveEnrollments != 1 {
+		t.Fatalf("after one enrollment the course stats are %+v, want total 1, active 1", stats)
+	}
+	before, _ := s.WorkerMetrics()
+
+	// Step 3: re-deliver the exact same record twice more, bypassing the relay.
+	recs, err := s.ReadTopic("enrollment.events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original *harness.KRecord
+	for i := range recs {
+		if recs[i].EventID() == eventID {
+			original = &recs[i]
+		}
+	}
+	if original == nil {
+		t.Fatalf("event %s not found on enrollment.events", eventID)
+	}
+	producer := s.NewEventProducer(t)
+	producer.Redeliver(t, *original)
+	producer.Redeliver(t, *original)
+	if again, err := s.ReadTopic("enrollment.events"); err != nil || len(again) != len(recs)+2 {
+		t.Fatalf("after redelivery enrollment.events holds %d records (err %v), want %d", len(again), err, len(recs)+2)
+	}
+
+	// Step 4: every consumer group's lag is 0 again.
+	s.WaitSettled(t, time.Minute)
+
+	// The copies were consumed; the effects stay single. Checked for a short
+	// window after the lag is 0, so a late second effect would show.
+	harness.Never(t, 3*time.Second, "single effects after redelivery", func() error {
+		if p := s.PlatformStats(t, admin); p != platform {
+			return harness.Errf("platform counters %+v, were %+v", p, platform)
+		}
+		if cs := s.CourseStatsFor(t, inst, course); !cs.Same(stats) {
+			return harness.Errf("course stats %+v, were %+v", cs, stats)
+		}
+		if d := s.DailyEnrollments(t, inst, course); d != daily {
+			return harness.Errf("daily enrollments %d, were %d", d, daily)
+		}
+		return oneEffect()
+	})
+	if n := s.MustCount(t, `SELECT count(*) FROM notification.deliveries WHERE event_id = ?`, eventID); n != 1 {
+		t.Errorf("notification.deliveries rows for the event: %d, want 1", n)
+	}
+	if n, err := s.Mongo.ArchivedEvents(eventID); err != nil || n != 1 {
+		t.Errorf("archive documents for the event: %d (err %v), want 1", n, err)
+	}
+	if fe, err := s.Mongo.Count("failed_events", nil); err != nil || fe != 0 {
+		t.Errorf("failed_events holds %d documents (err %v), want 0", fe, err)
+	}
+	if got := s.ListFailedEvents(t, ""); len(got) != 0 {
+		t.Errorf("failed-events admin list shows %d records, want 0", len(got))
+	}
+	if after, err := s.WorkerMetrics(); err == nil && before != nil {
+		dup := after.SumWhere("event_processed_total", `outcome="duplicate"`) - before.SumWhere("event_processed_total", `outcome="duplicate"`)
+		t.Logf("event_processed_total{outcome=duplicate} moved by %v over the redelivery (3 consumers x 2 copies = 6 when the metric is wired)", dup)
+	}
+}
