@@ -4,6 +4,7 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- `Idempotency-Key` is honoured on the `POST` routes (create course, add module, add lesson, publish, archive, `POST /assets/upload-url`, `POST /enrollments`) through `libs/idempotency`; `RegisterRoutes` in `course` and `enrollment` take optional per-`POST` middleware. Behaviour with no middleware passed is unchanged (DR-023).
 - Added `POST /assets/upload-url` (instructor who owns the course): a 15-minute pre-signed PUT URL for a server-generated object key scoped to the course (and optionally a draft lesson), with a content-type allowlist and per-type maximum size signed into the URL. New package `services/course/assets` (AWS SDK for Go v2 S3 client, `service/s3` v1.115.0, Apache-2.0, pure Go) implements the new `course.AssetStore` interface; attach it with `Service.WithAssetStore`. New `invalid_asset_key`, `unsupported_content_type`, `asset_too_large`, `assets_unavailable` and `asset_invalid` error codes.
 - `VerifyAssets` now checks every lesson `asset_key` against object storage (exists, non-empty, size and content type within the allowlist, key scoped to the same course) and fails the publish cleanly when one is missing or invalid; lessons without an asset are unaffected. Behaviour change: `AddLesson` rejects an `asset_key` that is not a key issued for the course (400 `invalid_asset_key`), and a service with no asset store fails a publish whose lessons reference assets. The worker must call `WithAssetStore` for `VerifyAssets` to run there.
 

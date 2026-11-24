@@ -15,12 +15,14 @@ import (
 
 type Handler struct{ svc *Service }
 
-func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig) {
+// postMW runs after authentication on POST /enrollments (the Idempotency-Key
+// middleware, RFC §8.1 step 2); withdraw is idempotent by construction.
+func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig, postMW ...gin.HandlerFunc) {
 	h := &Handler{svc: svc}
 
 	g := r.Group("/enrollments")
 	g.Use(auth.RequireAuth(jwtCfg))
-	g.POST("", h.enroll)
+	g.POST("", append(append([]gin.HandlerFunc{}, postMW...), h.enroll)...)
 	g.GET("", h.listMine)
 	g.GET("/:id", h.getByID)
 	g.DELETE("/:id", h.withdraw)

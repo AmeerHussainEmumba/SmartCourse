@@ -366,7 +366,40 @@ check_TS_GRAF()  { pending "Phase 7: GET /api/search?type=dash-db on Grafana lis
 check_TS_JAEGER(){ pending "Phase 7: GET /api/services on Jaeger lists identity-api, course-api, analytics-api, worker"; }
 check_TS_OTEL()  { pending "Phase 7: covered by E02; instrumentation present in HTTP, DB, Redis, Kafka, Asynq, Temporal"; }
 check_AD_3()     { pending "Phase 5: Asynq scheduler has a 60 s analytics reconciliation task"; }
-check_P1_3()     { pending "Phase 1: two POST /enrollments with one Idempotency-Key return the same response; 10 concurrent execute once"; }
+check_P1_3() {
+  # A fresh student, so no other check's enrollment state is disturbed.
+  local email="verify-idem-$RUN_ID@example.test" tok key="idem-$RUN_ID" body i n
+  publish_course || { fixture_fail; return; }
+  [ "$PUBLISH_FINAL_STATE" = ready ] || { fail "course did not reach ready (state=$PUBLISH_FINAL_STATE)"; return; }
+  register_user "$email" && login_user "$email" "$USER_PASSWORD" || { fixture_fail; return; }
+  tok=$LOGIN_TOKEN
+  body=$(jq -nc --arg c "$COURSE_ID" '{course_id:$c}')
+  req POST "$COURSE_URL/api/v1/enrollments" "$tok" "$body" -H "Idempotency-Key: $key-1"
+  local c1=$HTTP_CODE b1=$HTTP_BODY
+  req POST "$COURSE_URL/api/v1/enrollments" "$tok" "$body" -H "Idempotency-Key: $key-1"
+  [ "$c1" = 201 ] || { fail "first enroll: HTTP $c1 $b1"; return; }
+  [ "$HTTP_CODE" = 201 ] && [ "$(jq -S . <<<"$HTTP_BODY")" = "$(jq -S . <<<"$b1")" ] \
+    || { fail "retry with the same key: HTTP $HTTP_CODE, expected the stored 201 and body"; return; }
+  case "$HTTP_HDRS" in *"idempotent-replayed: true"*) ;; *) fail "retry not marked Idempotent-Replayed"; return ;; esac
+  req POST "$COURSE_URL/api/v1/enrollments" "$tok" "$body" -H "Idempotency-Key: $key-1-other"
+  [ "$HTTP_CODE" = 409 ] || { fail "a new key for the same course should be a genuine duplicate (409), got $HTTP_CODE"; return; }
+  # Ten concurrent requests, one key, a second fresh student: exactly one enrollment.
+  email="verify-idem2-$RUN_ID@example.test"
+  register_user "$email" && login_user "$email" "$USER_PASSWORD" || { fixture_fail; return; }
+  tok=$LOGIN_TOKEN
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    curl -sS --max-time 20 -o /dev/null -w '%{http_code}\n' -X POST -H "Authorization: Bearer $tok" -H 'Content-Type: application/json' \
+      -H "Idempotency-Key: $key-race" --data-binary "$body" "$COURSE_URL/api/v1/enrollments" >"$TMPDIR_V/race.$i" 2>/dev/null &
+  done
+  wait
+  n=$(cat "$TMPDIR_V"/race.* | grep -c '^201$' || true)
+  [ "$n" -ge 1 ] || { fail "no concurrent request got the 201"; return; }
+  if cat "$TMPDIR_V"/race.* | grep -qvE '^(201|409)$'; then fail "unexpected status among concurrent requests: $(sort "$TMPDIR_V"/race.* | uniq -c | tr '\n' ' ')"; return; fi
+  req GET "$COURSE_URL/api/v1/enrollments" "$tok" ''
+  n=$(jq --arg c "$COURSE_ID" '[(.items // .data // .)[] | select(.course_id == $c)] | length' <<<"$HTTP_BODY" 2>/dev/null || echo "?")
+  [ "$n" = 1 ] && pass "replay returns the stored response; 10 concurrent requests with one key left $n enrollment" \
+    || fail "10 concurrent requests with one key left $n enrollments, want 1"
+}
 check_E01() { pending "Phase 8 (needs Phases 2-7): go test -run TestE2E_E01_ in test/e2e"; }
 check_E02() { pending "Phase 7: go test -run TestE2E_E02_ in test/e2e"; }
 check_E03() { pending "Phase 3: go test -run TestE2E_E03_ in test/e2e"; }

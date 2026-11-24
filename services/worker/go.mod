@@ -145,6 +145,7 @@ replace (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/db => ../../libs/db
 	github.com/AmeerHussainEmumba/SmartCourse/libs/errors => ../../libs/errors
 	github.com/AmeerHussainEmumba/SmartCourse/libs/httpx => ../../libs/httpx
+	github.com/AmeerHussainEmumba/SmartCourse/libs/idempotency => ../../libs/idempotency
 	github.com/AmeerHussainEmumba/SmartCourse/libs/infra => ../../libs/infra
 	github.com/AmeerHussainEmumba/SmartCourse/libs/logging => ../../libs/logging
 	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox => ../../libs/outbox

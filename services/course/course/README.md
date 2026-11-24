@@ -26,6 +26,8 @@ Courses, versions, modules, lessons, and the publish lifecycle (RFC §4.3, §7).
 
 ## Endpoints
 
+The `POST` routes below (create course, add module, add lesson, publish, archive, `POST /assets/upload-url`) honour an optional `Idempotency-Key` header through `libs/idempotency`, passed to `RegisterRoutes` as optional middleware; `PATCH` and `DELETE` are idempotent by construction and are not wrapped (DR-023).
+
 | Method & path | Auth | Notes |
 |---|---|---|
 | `GET /courses` | — | Catalogue, keyset-paginated (`?limit=&cursor=`), filterable (`?category=&level=&q=`) |

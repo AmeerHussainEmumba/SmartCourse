@@ -9,6 +9,7 @@ use (
 	./libs/errors
 	./libs/events
 	./libs/httpx
+	./libs/idempotency
 	./libs/infra
 	./libs/logging
 	./libs/mongostore

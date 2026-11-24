@@ -43,6 +43,7 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-020](#dr-020--one-go-module-per-service-and-per-shared-library-beyond-the-baselines-clear-moduleservice-separation) | One Go module per service and per shared library, beyond the baseline's "clear module/service separation" | Interpretation | Accepted |
 | [DR-021](#dr-021--the-analytics-metric-count-is-nine-not-ten) | The analytics metric count is nine, not ten | Correction | Accepted |
 | [DR-022](#dr-022--limits-and-behaviours-chosen-during-the-bug-fix-pass-confirmed) | Limits and behaviours chosen during the bug-fix pass, confirmed | Clarification | Accepted |
+| [DR-023](#dr-023--idempotency-key-scope-and-replay-semantics) | `Idempotency-Key` scope and replay semantics | Clarification | Proposed |
 
 ---
 
@@ -435,6 +436,34 @@ None of these contradict the baseline; they fill gaps in it. They are numbers an
 ### If this turns out to be wrong
 
 Each value is a constant or an environment variable in the file named in the findings register. Changing one is a one-line edit plus the test that pins it.
+
+---
+
+## DR-023 — `Idempotency-Key` scope and replay semantics
+
+**Category:** Clarification · **Date:** 2026-11-18 · **Related:** RFC §8.1 step 2, §15.1, §15.2; `libs/idempotency`; Week 3 plan Phase 1
+
+### What was chosen
+
+RFC §15.1 says the header is "honoured on all non-idempotent writes" and §8.1 says a completed request's stored response is replayed. It does not say which routes, which responses are stored, or what a conflicting retry gets. The implementation chose:
+
+| Area | Choice |
+|---|---|
+| Routes | The `POST` routes in course-api: create course, add module, add lesson, publish, archive, `POST /assets/upload-url`, and `POST /enrollments`. `PATCH`, `PUT` and `DELETE` are idempotent by construction and are not wrapped. Identity routes are not wrapped: `register` and `login` have no authenticated user to scope a key to, and the authenticated identity writes are `PATCH` |
+| Stored responses | Only 2xx responses with a JSON body up to 1 MiB. A 4xx, a 5xx, a panic or a larger response releases the key, so the retry runs again as it would without a key |
+| Same key, different request | 422 `idempotency_key_reused` (the RFC's "rejected as a client error"). The comparison covers method, path, query and body |
+| Retry while the first request runs | 409 `idempotency_request_in_progress` with `Retry-After: 1` |
+| Replay | Stored status and body, with `Idempotent-Replayed: true`. The body is kept as JSONB, so key order and whitespace may differ from the first response |
+| Scope and lifetime | Per authenticated user and route pattern; 24 hours (RFC §15.2). An `in_progress` row older than 3 minutes is treated as abandoned and can be claimed |
+| Cleanup | `PruneExpired` exists; the scheduled job that calls it belongs to the worker wiring (Phase 5) and is not scheduled yet |
+
+### Why this is logged
+
+The RFC names the header but not these edges. A reviewer may want 4xx responses stored too (the Stripe convention), or the identity routes covered.
+
+### If this turns out to be wrong
+
+Storing 4xx responses is a change to one predicate in `libs/idempotency` (`storable`). Wrapping more routes is passing the middleware to `RegisterRoutes`.
 
 ---
 

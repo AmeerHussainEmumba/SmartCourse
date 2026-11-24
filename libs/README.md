@@ -6,7 +6,7 @@ This used to be one package tree, `internal/platform/`. Each directory here is n
 
 ## How the modules fit together
 
-- Dependencies between libraries form a DAG with no cycles: `httpx → errors`, `router → httpx`, `auth → config, errors, httpx`, `ratelimit → errors, httpx`, `cache → config`, `db → config`, `infra → cache, config, db, router`, `temporal → config`. `errors`, `config`, `logging`, `outbox` and `relay` have no sibling dependencies. `testenv` (test-only) depends on `config` and `db`.
+- Dependencies between libraries form a DAG with no cycles: `httpx → errors`, `router → httpx`, `auth → config, errors, httpx`, `ratelimit → errors, httpx`, `cache → config`, `db → config`, `infra → cache, config, db, router`, `temporal → config`, `idempotency → errors, httpx` (test-only: `testenv`). `errors`, `config`, `logging`, `outbox` and `relay` have no sibling dependencies. `testenv` (test-only) depends on `config` and `db`.
 - A library's `go.mod` lists a `replace` for **every** sibling library it depends on, including indirect ones, because Go does not inherit `replace` directives from dependencies. When you add an import of another library, add its `require` and `replace` lines (and those of anything it depends on) to your module's `go.mod`, then run `go mod tidy` with `GOWORK=off`.
 - `go.work` at the repo root lists every module for local development. CI and the Dockerfiles build with `GOWORK=off`, so a missing `replace` fails there even if it works on your machine.
 - `go test ./...` does not cross module boundaries. Use `make test` (or `scripts/for-each-module.sh go test ./...`), which runs the command in every module.
@@ -21,6 +21,7 @@ This used to be one package tree, `internal/platform/`. Each directory here is n
 | `cache` | The Redis connection. |
 | `errors` | The `*AppError` type every handler returns — stable `code`, safe `message`, internal detail kept out of the response. |
 | `httpx` | Request ID middleware, error-response writing, DTO binding, keyset-pagination cursor helpers. |
+| `idempotency` | `Idempotency-Key` middleware for non-idempotent POST routes: replay of the stored response, in-flight and mismatch handling, expired-key pruning (DR-023). |
 | `auth` | argon2id hashing, JWT issue/verify, opaque single-use tokens (refresh/reset/verify), and the three-layer middleware (`RequireAuth`, `RequireRole`, `RequireFreshPrivilege`). See its own README. |
 | `ratelimit` | GCRA rate limiting (ADR-0020) via `go-redis/redis_rate` — per-IP middleware and a per-identity `Allow` call for checks middleware can't express (e.g. per-account login limits). |
 | `outbox` | The only path from a state change to a published event (ADR-0006). See its own README. |

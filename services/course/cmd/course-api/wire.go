@@ -4,9 +4,12 @@ import (
 	"log/slog"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	temporalclient "go.temporal.io/sdk/client"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/idempotency"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/assets"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
@@ -27,6 +30,14 @@ import (
 func registerRoutes(r *gin.Engine, deps *infra.Dependencies, cfg *config.Config, temporal temporalclient.Client) {
 	api := r.Group("/api/v1")
 
+	// Idempotency-Key (RFC §15.1) on the non-idempotent POST routes.
+	idem := idempotency.Middleware(deps.DB, idempotency.Options{
+		UserID: func(c *gin.Context) (uuid.UUID, bool) {
+			id, ok := auth.FromContext(c.Request.Context())
+			return id.UserID, ok
+		},
+	})
+
 	courseSvc := course.NewService(course.NewRepository(deps.DB), deps.RDB, temporal, cfg.Temporal.TaskQueue)
 	// Object storage backs POST /assets/upload-url. If it cannot be built
 	// (bad MinIO settings), upload-url answers 503; nothing else is affected.
@@ -35,10 +46,10 @@ func registerRoutes(r *gin.Engine, deps *infra.Dependencies, cfg *config.Config,
 	} else {
 		courseSvc.WithAssetStore(store)
 	}
-	course.RegisterRoutes(api, courseSvc, cfg.JWT)
+	course.RegisterRoutes(api, courseSvc, cfg.JWT, idem)
 
 	enrollmentSvc := enrollment.NewService(enrollment.NewRepository(deps.DB))
-	enrollment.RegisterRoutes(api, enrollmentSvc, cfg.JWT)
+	enrollment.RegisterRoutes(api, enrollmentSvc, cfg.JWT, idem)
 
 	progressSvc := progress.NewService(progress.NewRepository(deps.DB))
 	progress.RegisterRoutes(api, progressSvc, cfg.JWT)

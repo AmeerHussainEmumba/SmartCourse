@@ -136,7 +136,7 @@
 | AD-11 | ADR-0031 (status Proposed) | Accepted when Phase 4 passes | the `Status:` line; E04, E13 PASS | `Accepted` | pending | |
 | AD-12 | ADR-0032 (status Proposed) | Accepted when Phase 7 passes | the `Status:` line; E02 PASS | `Accepted` | pending | |
 | AD-13 | ADR-0014 notification decision / week-3.md D6 | Mailpit as the sink is documented as a deliberate limit | `grep -n -i 'mailpit' README.md docs/rfc/differences-from-requirements.md` | A statement that no real mail provider is integrated | pending | |
-| AD-14 | Week 3 plan section 2: "no `Idempotency-Key` middleware" (RFC 15.1) | Same key twice returns the stored response | see P1-3 | see P1-3 | pending | |
+| AD-14 | Week 3 plan section 2: "no `Idempotency-Key` middleware" (RFC 15.1) | Same key twice returns the stored response | see P1-3 | see P1-3 | built, live run pending | `libs/idempotency` tests; `enrollment_idempotency_http_test.go` |
 
 ## 8. Phase 1 rough edges (week-3.md section 4, Phase 1)
 
@@ -144,7 +144,7 @@
 |---|---|---|---|---|---|---|
 | P1-1 | Phase 1 "Publish lease" | A claimed version whose workflow is not running in Temporal is released on a schedule | Test in `services/course` or the worker: start publish, kill the worker, wait one reconciliation interval, republish | Republish returns 202 without waiting 15 minutes | pending | |
 | P1-2 | Phase 1 "VerifyAssets" | See B-2.2 | see B-2.2 | see B-2.2 | pending | |
-| P1-3 | Phase 1 "Idempotency-Key" (RFC 15.1) | Write endpoints named by the RFC honour `Idempotency-Key` | `V P1-3`: two `POST /enrollments` with the same key; and 10 concurrent with the same key | Second response equals the first (status and body); the 10 concurrent calls produce one row | pending | |
+| P1-3 | Phase 1 "Idempotency-Key" (RFC 15.1) | Write endpoints named by the RFC honour `Idempotency-Key` | `V P1-3`: two `POST /enrollments` with the same key; and 10 concurrent with the same key | Second response equals the first (status and body); the 10 concurrent calls produce one row | built, live run pending | Integration tests pass locally with -race; `check_P1_3` not yet run against a live stack |
 | P1-4 | Phase 1 "argon2 concurrency" | Concurrent password hashing is bounded | Go test: 200 concurrent logins with a heap ceiling | Peak heap under the ceiling; excess requests wait or get 429; no 5xx | pending | |
 | P1-5 | Phase 1 "`token_stale` window" | After a Redis flush the first stale rejection re-seeds when the DB version matches | extend `TestE2E_InstructorAfterRedisRestart_...` (it must be extended, not replaced) | After a flush the existing token works again on the next request (or after one clean 401) per the chosen design; revoked tokens stay refused | pending | |
 | P1-6 | Phase 1 "relay pool connections" | Config validation enforces the pool size relation | `cd libs/config && GOWORK=off go test -count=1 -run 'Pool' ./...` | A config with fewer connections than twice the workers is rejected at startup with a clear error | pending | |

@@ -193,6 +193,8 @@ paths:
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogueResponse' } } } }
     post:
+      parameters:
+      - { $ref: '#/components/parameters/IdempotencyKey' }
       summary: Create a course (instructor only) — also creates its initial draft version
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -227,7 +229,7 @@ paths:
     post:
       summary: Add a module to the draft (instructor, owner only)
       security: [{ bearerAuth: [] }]
-      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       requestBody:
         required: true
         content:
@@ -243,7 +245,7 @@ paths:
     post:
       summary: Add a lesson to a module in the draft (instructor, owner only)
       security: [{ bearerAuth: [] }]
-      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/CreateLessonRequest' } } }
@@ -290,6 +292,8 @@ paths:
 
   /assets/upload-url:
     post:
+      parameters:
+      - { $ref: '#/components/parameters/IdempotencyKey' }
       summary: >
         Get a pre-signed URL to upload a learning asset straight to object
         storage (instructor who owns the course only; RFC §7.4, §11.7,
@@ -333,7 +337,7 @@ paths:
         call can simply be retried. Poll GET /courses/{id}/publish-status for
         the result.
       security: [{ bearerAuth: [] }]
-      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         '202': { description: Publish workflow started, content: { application/json: { schema: { $ref: '#/components/schemas/PublishAccepted' } } } }
         '404': { description: "Course not found, or not owned by the caller", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
@@ -376,7 +380,7 @@ paths:
         relay handler reacts to the course.course_archived event this
         writes). No "unarchive" exists.
       security: [{ bearerAuth: [] }]
-      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         '204': { description: No Content }
         '404': { description: "Course not found, or not owned by the caller (a non-owner gets the same 404 as an unknown id so existence is not leaked; ADR-0026 phase 5, F-36)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
@@ -436,6 +440,8 @@ paths:
       security: [{ bearerAuth: [] }]
       responses: { '200': { description: OK } }
     post:
+      parameters:
+      - { $ref: '#/components/parameters/IdempotencyKey' }
       summary: Enroll in a course (RFC §8.1, ADR-0012)
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -478,6 +484,17 @@ paths:
         '404': { description: "Enrollment not found or not yours, or lessonKey is not a lesson of the published version (lesson_not_found). Previously 204 for an unknown key.", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
 components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: >-
+        Optional client-chosen key (1-255 printable ASCII characters). A retry with the same
+        key, user and request gets the stored 2xx response back with Idempotent-Replayed: true;
+        the same key with a different request gets 422 idempotency_key_reused; a retry while the
+        first request is still running gets 409 idempotency_request_in_progress. Stored for 24 hours.
+      schema: { type: string, minLength: 1, maxLength: 255 }
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
 
