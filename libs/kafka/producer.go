@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -13,6 +14,10 @@ import (
 const (
 	DefaultMaxRetries      = 10
 	DefaultDeliveryTimeout = 30 * time.Second
+
+	// stuckGrace is how long past DeliveryTimeout Produce waits for franz-go to
+	// report a record before it treats the client as wedged (see Produce).
+	stuckGrace = 3 * time.Second
 )
 
 // ProducerConfig configures a Producer.
@@ -67,7 +72,12 @@ func (c ProducerConfig) validate() error {
 // have been stored, and a caller retry can then produce a duplicate. Consumers
 // must stay idempotent (RFC §6.6).
 type Producer struct {
-	cl *kgo.Client
+	opts    []kgo.Opt
+	timeout time.Duration
+
+	mu     sync.RWMutex
+	cl     *kgo.Client
+	closed bool
 }
 
 // NewProducer validates cfg and builds a client. It does not contact the
@@ -111,7 +121,7 @@ func NewProducer(cfg ProducerConfig) (*Producer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("kafka: new producer client: %w", err)
 	}
-	return &Producer{cl: cl}, nil
+	return &Producer{opts: opts, timeout: timeout, cl: cl}, nil
 }
 
 // Produce sends one message and returns after the broker has acknowledged it
@@ -128,18 +138,72 @@ func (p *Producer) Produce(ctx context.Context, m Message) (Result, error) {
 			rec.Headers[i] = kgo.RecordHeader{Key: h.Key, Value: h.Value}
 		}
 	}
-	got, err := p.cl.ProduceSync(ctx, rec).First()
-	if err != nil {
-		if errors.Is(err, kgo.ErrClientClosed) {
-			return Result{}, ErrClosed
-		}
-		return Result{}, fmt.Errorf("kafka: produce to %s: %w", m.Topic, err)
+	p.mu.RLock()
+	cl, closed := p.cl, p.closed
+	p.mu.RUnlock()
+	if closed {
+		return Result{}, ErrClosed
 	}
-	return Result{Partition: got.Partition, Offset: got.Offset}, nil
+
+	type outcome struct {
+		rec *kgo.Record
+		err error
+	}
+	done := make(chan outcome, 1) // buffered: a promise that fires after we gave up must not block
+	cl.Produce(ctx, rec, func(r *kgo.Record, err error) { done <- outcome{r, err} })
+
+	// franz-go is meant to fail a record at RecordDeliveryTimeout, but a test
+	// (a broker stopped and started with a relay backlog, 1 run in 4) left a
+	// buffered record that was never reported, and ProduceSync waited for it
+	// for ever, wedging the relay worker that called it. The wait is therefore
+	// bounded here as well, and a client that overran it is replaced: closing
+	// the old one fails whatever it still buffers, so an abandoned record
+	// cannot be delivered later behind its own retry.
+	stuck := time.NewTimer(p.timeout + stuckGrace)
+	defer stuck.Stop()
+	select {
+	case o := <-done:
+		if o.err != nil {
+			if errors.Is(o.err, kgo.ErrClientClosed) {
+				return Result{}, ErrClosed
+			}
+			return Result{}, fmt.Errorf("kafka: produce to %s: %w", m.Topic, o.err)
+		}
+		return Result{Partition: o.rec.Partition, Offset: o.rec.Offset}, nil
+	case <-ctx.Done():
+		return Result{}, fmt.Errorf("kafka: produce to %s: %w (the record may still be delivered)", m.Topic, ctx.Err())
+	case <-stuck.C:
+		p.replace(cl)
+		return Result{}, fmt.Errorf("kafka: produce to %s: %w", m.Topic, ErrDeliveryStuck)
+	}
+}
+
+// replace swaps in a fresh client for old, if old is still the current one, and
+// closes old in the background (Close can block on a wedged client).
+func (p *Producer) replace(old *kgo.Client) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed || p.cl != old {
+		return
+	}
+	cl, err := kgo.NewClient(p.opts...)
+	if err != nil {
+		return // keep the old client; the next stuck Produce tries again
+	}
+	p.cl = cl
+	go old.Close()
 }
 
 // Close releases the client. Produce calls still in flight fail; call it after
 // the callers have stopped. It is safe to call more than once.
 func (p *Producer) Close() {
-	p.cl.Close()
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	p.closed = true
+	cl := p.cl
+	p.mu.Unlock()
+	cl.Close()
 }

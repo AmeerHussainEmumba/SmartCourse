@@ -1,6 +1,6 @@
 # libs/kafka
 
-A pure-Go Kafka transport for SmartCourse: ADR-0030 (client choice), ADR-0021 (the relay), RFC §6.2, §6.5, §6.6, §6.9. Nothing imports it yet; the relay's Kafka transport and the worker's consumers are built on it in the next phase.
+A pure-Go Kafka transport for SmartCourse: ADR-0030 (client choice), ADR-0021 (the relay), RFC §6.2, §6.5, §6.6, §6.9. `services/worker/transport` is its one user (ADR-0029): the relay's producer and the worker's consumer groups are built on `Producer`, `Consumer`, `topics` and `HealthCheck`. `libs/relay` does not import it.
 
 Built against franz-go v1.22.3 (`pkg/kgo`) with `pkg/kadm` v1.20.0 for topic administration, both BSD-3-Clause. Pure Go, `CGO_ENABLED=0`. It depends on no other SmartCourse module (`testenv` only in tests), and not on `libs/telemetry` or `libs/mongostore`: callers wire metrics and dead-letter parking through `Stats` and the `OnExhausted` hook.
 
