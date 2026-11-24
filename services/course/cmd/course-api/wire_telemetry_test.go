@@ -8,6 +8,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/router"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
@@ -101,5 +103,25 @@ func TestArchiveCourse_OutboxRowCarriesTheRequestTrace(t *testing.T) {
 	}
 	if !db || !redisSpan {
 		t.Errorf("want Postgres and Redis child spans, got db=%v redis=%v", db, redisSpan)
+	}
+
+	// The same request is a RED series labelled by the route template, and the
+	// service exposes the DB pool and outbox gauges.
+	m := httptest.NewRecorder()
+	r.ServeHTTP(m, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := m.Body.String()
+	for _, want := range []string{
+		`http_requests_total{method="POST",route="/api/v1/courses/:id/archive",status="204"} 1`,
+		"http_request_duration_seconds_bucket", "db_connections_in_use", "# HELP outbox_backlog",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("course-api /metrics lacks %q", want)
+		}
+	}
+	if strings.Contains(body, courseID.String()) {
+		t.Error("a course id leaked into a metric label")
+	}
+	if err := telemetry.CheckLabels(obs.Gatherer()); err != nil {
+		t.Error(err)
 	}
 }
