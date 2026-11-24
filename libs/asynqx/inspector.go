@@ -3,6 +3,7 @@ package asynqx
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -53,7 +54,7 @@ func (i *Inspector) Stats(queues ...string) ([]QueueStats, error) {
 	for _, q := range queues {
 		info, err := i.i.GetQueueInfo(q)
 		if err != nil {
-			if errors.Is(err, asynq.ErrQueueNotFound) {
+			if queueNotFound(err) {
 				out = append(out, QueueStats{Queue: q})
 				continue
 			}
@@ -80,4 +81,18 @@ func (i *Inspector) TaskState(queue, id string) (state string, found bool, err e
 		return "", false, fmt.Errorf("asynqx: task info %s/%s: %w", queue, id, err)
 	}
 	return info.State.String(), true, nil
+}
+
+// queueNotFound reports whether err says the queue has never held a task.
+// GetQueueInfo does not wrap asynq.ErrQueueNotFound as the other Inspector
+// calls do: it returns Asynq's internal NOT_FOUND error, whose type cannot be
+// imported, so the exported sentinel alone misses it and the first scrape
+// before any task was enqueued would fail (asynq v0.26.0, found by the gauge
+// test).
+func queueNotFound(err error) bool {
+	if errors.Is(err, asynq.ErrQueueNotFound) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "NOT_FOUND") && strings.Contains(msg, "does not exist")
 }

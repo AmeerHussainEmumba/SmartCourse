@@ -209,6 +209,15 @@ func (o *Observability) ForceFlush(ctx context.Context) error {
 	return o.provider.ForceFlush(ctx)
 }
 
+// Gatherer is the metrics registry, or nil when metrics are disabled. Tests
+// pass it to telemetry.CheckLabels.
+func (o *Observability) Gatherer() prometheus.Gatherer {
+	if o == nil || o.reg == nil {
+		return nil
+	}
+	return o.reg
+}
+
 // Shutdown stops the outbox poller and flushes buffered spans. ctx should
 // carry a deadline; an unreachable collector therefore costs at most that
 // long at exit. Safe on a nil or inert value and idempotent.

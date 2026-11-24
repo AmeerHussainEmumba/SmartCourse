@@ -43,6 +43,11 @@ func HTTPTracing() gin.HandlerFunc {
 			span.SetAttributes(attribute.String("http.route", route))
 		}
 		span.SetAttributes(attribute.Int("http.response.status_code", status))
+		// Correlates the trace with the access log line and the X-Request-Id
+		// the client saw (RFC §12.4); set by httpx.RequestID, which runs first.
+		if id := c.GetString("request_id"); id != "" {
+			span.SetAttributes(attribute.String("smartcourse.request_id", id))
+		}
 		if status >= http.StatusInternalServerError {
 			span.SetStatus(codes.Error, "")
 		}

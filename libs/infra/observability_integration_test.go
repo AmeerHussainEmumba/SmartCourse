@@ -18,6 +18,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/router"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
@@ -149,6 +150,9 @@ func TestObserve_MetricsUseRouteTemplatesAndExposeCatalogue(t *testing.T) {
 	}
 	if strings.Contains(body, id) {
 		t.Error("a raw request id leaked into a metric label")
+	}
+	if err := telemetry.CheckLabels(obs.Gatherer()); err != nil {
+		t.Errorf("unbounded metric label: %v", err)
 	}
 }
 
