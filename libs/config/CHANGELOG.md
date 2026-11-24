@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Added `Config.Asynq` and `Config.Jobs` (new file `asynq.go`): `ASYNQ_CRITICAL_CONCURRENCY` / `ASYNQ_DEFAULT_CONCURRENCY` / `ASYNQ_LOW_CONCURRENCY` (1 to 256; default 10/5/3, RFC §10.2), `ASYNQ_MAX_RETRY` (0 to 25, default 5), `ASYNQ_BACKOFF_BASE` (2s) and `ASYNQ_BACKOFF_MAX` (10m, at least the base), `ASYNQ_SHUTDOWN_TIMEOUT` (30s), `OUTBOX_RETENTION` (1h to 365d, default 168h) and the five scheduled-job intervals `JOBS_RECONCILE_PUBLISHES_INTERVAL`, `JOBS_ANALYTICS_RECONCILE_INTERVAL` (1m each), `JOBS_ENROLLMENT_COUNT_INTERVAL`, `JOBS_IDEMPOTENCY_PRUNE_INTERVAL`, `JOBS_OUTBOX_PRUNE_INTERVAL` (1h each). An interval must be a whole number of minutes that divides 60, or whole hours that divide 24 (`CronSpec` renders it as the cron expression the asynqx scheduler needs). `Load` fails for a value outside these in every binary; the defaults are unaffected. Additive.
+
 - Added optional `MinIOConfig.PublicEndpoint` (`MINIO_PUBLIC_ENDPOINT`): the endpoint written into pre-signed URLs for browsers, when it differs from the internal `MINIO_ENDPOINT`. Additive; empty means the same as `Endpoint`.
 
 - Added `RELAY_WORKERS` (1 to 64, default 4) as `Config.Relay.Workers`, and a startup check that `POSTGRES_MAX_OPEN_CONNS` is at least 2 x `RELAY_WORKERS` (ADR-0027: each relay worker holds a claim connection while its handlers need another). `Load` now fails for a smaller pool in every binary; the defaults (20 and 4) are unaffected. Nothing reads `Relay.Workers` yet: `services/worker` still builds the relay with its own default of 4 until it passes `relay.WithWorkerCount(cfg.Relay.Workers)`.
