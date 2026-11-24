@@ -16,6 +16,10 @@ import (
 func registerRoutes(r *gin.Engine, deps *infra.Dependencies, cfg *config.Config) {
 	api := r.Group("/api/v1")
 
-	analyticsSvc := analytics.NewService(analytics.NewRepository(deps.DB))
+	// Redis serves the Most Popular Courses ranking the reconciler keeps; every
+	// read falls back to Postgres if it is empty or down. The dead-letter and
+	// workflow sources for GET /analytics/issues are not attached here yet (see
+	// analytics/issues.go), so that route answers 503 until they are.
+	analyticsSvc := analytics.NewService(analytics.NewRepository(deps.DB)).WithPopularCache(deps.RDB)
 	analytics.RegisterRoutes(api, analyticsSvc, cfg.JWT)
 }

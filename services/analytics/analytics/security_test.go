@@ -61,8 +61,8 @@ func TestSecurity_Analytics_AnonymousAndForgedTokens_Rejected_OnEveryRoute(t *te
 				t.Errorf("%s with token %.20q: want 401, got %d", p, tok, rec.Code)
 			}
 		}
-		if rec := s.get(p, s.token("instructor")); rec.Code != 200 {
-			t.Errorf("control: instructor call to %s should be 200, got %d", p, rec.Code)
+		if rec := s.get(p, s.token("admin")); rec.Code != 200 {
+			t.Errorf("control: admin call to %s should be 200, got %d", p, rec.Code)
 		}
 	}
 }
@@ -86,11 +86,12 @@ func TestSecurity_Analytics_InvalidCourseIDs_AreClientErrors_AndLeakNothing(t *t
 	}
 }
 
-// A well-formed but unknown course yields neutral zeros (documented) rather than an error that
+// A well-formed but unknown course yields neutral zeros for an admin (documented) rather than an error that
 // would let a caller distinguish existing from non-existing courses; and the daily series is empty.
+// (Instructors get a 404 for it: they are owner-gated, see instructor_ownership_integration_test.go.)
 func TestSecurity_Analytics_UnknownCourse_NeutralResponse(t *testing.T) {
 	s := newSecEnv(t)
-	tok := s.token("instructor")
+	tok := s.token("admin")
 	a := s.get("/api/v1/analytics/courses/"+uuid.NewString(), tok)
 	b := s.get("/api/v1/analytics/courses/"+uuid.NewString(), tok)
 	if a.Code != 200 || a.Body.String() != b.Body.String() {

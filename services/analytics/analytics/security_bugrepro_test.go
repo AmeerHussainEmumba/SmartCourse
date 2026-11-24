@@ -13,7 +13,7 @@ import (
 
 // Analytics routes were RequireAuth only, so any student could read any
 // course's stats. Rule now: platform totals for any authenticated user;
-// per-course routes for admin/instructor, or a student with an active or
+// per-course routes for admin, the owning instructor, or a student with an active or
 // completed enrollment in that course; everyone else gets 404.
 func TestBug_Analytics_StudentCanReadAnyCoursesStatsAndPlatformTotals(t *testing.T) {
 	s := newSecEnv(t)
@@ -52,10 +52,13 @@ func TestBug_Analytics_StudentCanReadAnyCoursesStatsAndPlatformTotals(t *testing
 		if rec := s.get(own, tok(withdrawnID, "student")); rec.Code != 404 {
 			t.Errorf("withdrawn student on %s: want 404, got %d", own, rec.Code)
 		}
-		for _, role := range []string{"instructor", "admin"} {
-			if rec := s.get(other, tok(uuid.New(), role)); rec.Code != 200 {
-				t.Errorf("%s on %s: want 200, got %d", role, other, rec.Code)
-			}
+		if rec := s.get(other, tok(uuid.New(), "admin")); rec.Code != 200 {
+			t.Errorf("admin on %s: want 200, got %d", other, rec.Code)
+		}
+		// Instructors are owner-gated since Week 3 (see
+		// instructor_ownership_integration_test.go for the full matrix).
+		if rec := s.get(other, tok(uuid.New(), "instructor")); rec.Code != 404 {
+			t.Errorf("non-owner instructor on %s: want 404, got %d", other, rec.Code)
 		}
 	}
 	for _, role := range []string{"student", "instructor", "admin"} {

@@ -123,7 +123,11 @@ func TestGetCourseStats_RealRequest_ReflectsSeededRow(t *testing.T) {
 		t.Fatalf("seed course_stats: %v", err)
 	}
 
-	token, err := auth.IssueAccessToken(testJWTCfg(), uuid.New(), "instructor", 1)
+	instructorID := uuid.New()
+	if err := env.DB.Exec(`INSERT INTO course_mirror (course_id, published, instructor_id) VALUES (?, true, ?)`, courseID, instructorID).Error; err != nil {
+		t.Fatalf("seed course_mirror: %v", err)
+	}
+	token, err := auth.IssueAccessToken(testJWTCfg(), instructorID, "instructor", 1)
 	if err != nil {
 		t.Fatalf("IssueAccessToken: %v", err)
 	}

@@ -54,12 +54,13 @@ func handlePlatformCounts(ctx context.Context, tx *gorm.DB, evt relay.DecodedEve
 
 func handleCoursePublished(ctx context.Context, tx *gorm.DB, evt relay.DecodedEvent) error {
 	var payload struct {
-		CourseID uuid.UUID `json:"course_id"`
+		CourseID     uuid.UUID  `json:"course_id"`
+		InstructorID *uuid.UUID `json:"instructor_id"`
 	}
 	if err := json.Unmarshal(evt.Payload, &payload); err != nil {
 		return fmt.Errorf("decode course.course_published payload: %w", err)
 	}
-	if err := UpsertCourseMirror(ctx, tx, payload.CourseID, true); err != nil {
+	if err := UpsertCourseMirror(ctx, tx, payload.CourseID, true, payload.InstructorID); err != nil {
 		return err
 	}
 	if err := EnsureCourseStatsRow(ctx, tx, payload.CourseID); err != nil {

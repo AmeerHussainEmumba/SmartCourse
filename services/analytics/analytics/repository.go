@@ -54,11 +54,24 @@ func UpsertUserRoleMirror(ctx context.Context, tx *gorm.DB, userID uuid.UUID, ro
 // total_courses_published counts "ever published," matching the behavior
 // this had before ADR-0024 (archiving a course never cleared
 // courses.published_version_id either).
-func UpsertCourseMirror(ctx context.Context, tx *gorm.DB, courseID uuid.UUID, published bool) error {
+//
+// instructorID is the event's instructor_id, the course's owner for
+// per-course analytics (CanReadCourse). nil (or uuid.Nil) means the
+// payload carried none; the stored owner is then left as it was, so an
+// event without the field can never erase an owner already recorded. Rows
+// written before migration 000003 stay NULL until the next course_published.
+func UpsertCourseMirror(ctx context.Context, tx *gorm.DB, courseID uuid.UUID, published bool, instructorID *uuid.UUID) error {
+	var owner any // NULL unless the payload really named an owner
+	if instructorID != nil && *instructorID != uuid.Nil {
+		owner = *instructorID
+	}
 	return tx.WithContext(ctx).Exec(`
-		INSERT INTO course_mirror (course_id, published, updated_at) VALUES (?, ?, now())
-		ON CONFLICT (course_id) DO UPDATE SET published = EXCLUDED.published, updated_at = EXCLUDED.updated_at
-	`, courseID, published).Error
+		INSERT INTO course_mirror (course_id, published, instructor_id, updated_at) VALUES (?, ?, ?, now())
+		ON CONFLICT (course_id) DO UPDATE SET
+			published = EXCLUDED.published,
+			instructor_id = COALESCE(EXCLUDED.instructor_id, course_mirror.instructor_id),
+			updated_at = EXCLUDED.updated_at
+	`, courseID, published, owner).Error
 }
 
 // InsertEnrollmentMirror records a new enrollment, fed by enrollment.
@@ -131,7 +144,20 @@ func CourseIDForEnrollment(ctx context.Context, tx *gorm.DB, enrollmentID uuid.U
 // RecomputePlatformSnapshot recomputes the single-row platform snapshot
 // from this module's own mirror tables — correct by construction, not by
 // keeping a running total in sync.
+//
+// The row is locked first and the aggregate read afterwards, as two
+// statements: under READ COMMITTED each statement takes its own snapshot, so
+// a recompute that waited for another writer's lock still sees what that
+// writer committed. Without the lock-then-read split, a handler and the
+// Reconciler could each compute from a snapshot that missed the other's
+// mirror write and the slower one would overwrite the newer total.
 func RecomputePlatformSnapshot(ctx context.Context, tx *gorm.DB) error {
+	if err := tx.WithContext(ctx).Exec(`INSERT INTO platform_snapshot (id) VALUES (true) ON CONFLICT (id) DO NOTHING`).Error; err != nil {
+		return err
+	}
+	if err := tx.WithContext(ctx).Exec(`SELECT 1 FROM platform_snapshot WHERE id = true FOR UPDATE`).Error; err != nil {
+		return err
+	}
 	return tx.WithContext(ctx).Exec(`
 		INSERT INTO platform_snapshot (id, total_students, total_instructors, total_courses_published, avg_courses_per_student, updated_at)
 		SELECT
@@ -156,8 +182,13 @@ func RecomputePlatformSnapshot(ctx context.Context, tx *gorm.DB) error {
 
 // RecomputeCourseStats recomputes one course's aggregate row — total and
 // active enrollments, completions, completion rate, and average time to
-// complete — from enrollment_mirror directly.
+// complete — from enrollment_mirror directly. Locks the course's stats row
+// before reading, for the reason RecomputePlatformSnapshot documents; the
+// lock order everywhere is course_stats row, then platform_snapshot.
 func RecomputeCourseStats(ctx context.Context, tx *gorm.DB, courseID uuid.UUID) error {
+	if err := lockCourseStats(ctx, tx, courseID); err != nil {
+		return err
+	}
 	return tx.WithContext(ctx).Exec(`
 		INSERT INTO course_stats (course_id, total_enrollments, active_enrollments, completions, completion_rate, avg_completion_s, updated_at)
 		SELECT
@@ -183,12 +214,22 @@ func RecomputeCourseStats(ctx context.Context, tx *gorm.DB, courseID uuid.UUID) 
 	`, courseID, courseID, courseID).Error
 }
 
+// lockCourseStats creates the course's stats row if missing and takes its
+// row lock for the rest of the transaction.
+func lockCourseStats(ctx context.Context, tx *gorm.DB, courseID uuid.UUID) error {
+	if err := EnsureCourseStatsRow(ctx, tx, courseID); err != nil {
+		return err
+	}
+	return tx.WithContext(ctx).Exec(`SELECT 1 FROM course_stats WHERE course_id = ? FOR UPDATE`, courseID).Error
+}
+
 // IncrementDailyEnrollment bumps the (day, course_id) bucket for the UTC
 // day of enrolledAt (the event payload's enrolled_at), never the day the
-// event happens to be processed. Unlike the recomputed aggregates above,
-// an incremental bump is correct here: "an enrollment happened on this
-// UTC day" is an immutable historical fact once true. Exactly-once per
-// event is provided by the relay's processed_events marker.
+// event happens to be processed. The event path increments because "an
+// enrollment happened on this UTC day" is an immutable historical fact;
+// exactly-once per event is provided by the relay's processed_events
+// marker. The Reconciler (reconcile.go) re-derives the buckets from
+// enrollment_mirror to repair a bump that was lost or doubled.
 func IncrementDailyEnrollment(ctx context.Context, tx *gorm.DB, courseID uuid.UUID, enrolledAt time.Time) error {
 	return tx.WithContext(ctx).Exec(`
 		INSERT INTO daily_enrollments (day, course_id, count)
@@ -260,6 +301,60 @@ func (r *Repository) StudentHasEnrollment(ctx context.Context, courseID, student
 		WHERE course_id = ? AND student_id = ? AND status IN ('active','completed')
 	`, courseID, studentID).Row().Scan(&n)
 	return n > 0, err
+}
+
+// InstructorOwnsCourse reports whether instructorID is the recorded owner of
+// the course, from course_mirror.instructor_id (set by course_published). A
+// course with no mirror row, or one whose owner is still NULL (published
+// before migration 000003 and not republished since), has no owner here, so
+// this is false for every instructor.
+func (r *Repository) InstructorOwnsCourse(ctx context.Context, courseID, instructorID uuid.UUID) (bool, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT count(*) FROM course_mirror WHERE course_id = ? AND instructor_id = ?
+	`, courseID, instructorID).Row().Scan(&n)
+	return n > 0, err
+}
+
+// PopularCourse is one row of the Most Popular Courses ranking (FR-5): a
+// published course and its current enrollment count (active plus completed).
+type PopularCourse struct {
+	CourseID    uuid.UUID
+	Enrollments int64
+}
+
+// PopularCoursesFromPostgres ranks published courses by total_enrollments,
+// ties broken by course_id descending so the order matches what Redis's
+// ZREVRANGE returns for equal scores. Courses with no enrollments are
+// omitted: a ranking of zeros says nothing. This is both the source the
+// Reconciler loads the Redis sorted set from and the fallback the Service
+// reads when Redis is empty or unreachable.
+func PopularCoursesFromPostgres(ctx context.Context, db *gorm.DB, limit int) ([]PopularCourse, error) {
+	rows, err := db.WithContext(ctx).Raw(`
+		SELECT s.course_id, s.total_enrollments
+		FROM course_stats s JOIN course_mirror m ON m.course_id = s.course_id AND m.published
+		WHERE s.total_enrollments > 0
+		ORDER BY s.total_enrollments DESC, s.course_id DESC
+		LIMIT ?
+	`, limit).Rows()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []PopularCourse
+	for rows.Next() {
+		var pc PopularCourse
+		if err := rows.Scan(&pc.CourseID, &pc.Enrollments); err != nil {
+			return nil, err
+		}
+		out = append(out, pc)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) PopularCourses(ctx context.Context, limit int) ([]PopularCourse, error) {
+	return PopularCoursesFromPostgres(ctx, r.db, limit)
 }
 
 func (r *Repository) GetPlatformSnapshot(ctx context.Context) (*PlatformSnapshot, error) {
