@@ -20,7 +20,7 @@ outbox.Write(ctx, tx, outbox.Event{
 
 ## Trace and actor fields
 
-`Event` also takes optional `TraceID` and `SpanID` (W3C trace-context hex, 32 and 16 chars) and `ActorID` (`*uuid.UUID`, the authenticated user who caused the event), per RFC §6.4 and §12.2. They are stored in nullable columns added by `migrations/platform/000003_outbox_trace_actor`; leave them empty/nil and the row gets NULLs, exactly as before. This package neither generates nor validates them (no OpenTelemetry dependency here; `libs/telemetry` supplies the values), and the relay passes them through on `relay.DecodedEvent`.
+`Event.TraceID`, `SpanID` and `ActorID` are optional. `Write` fills them when the caller leaves them unset: `TraceID`/`SpanID` from the span active in `ctx` (`go.opentelemetry.io/otel/trace`, API only), `ActorID` from the installed `ActorResolver`. A value the caller sets always wins; with nothing in `ctx` the columns stay NULL, as before. `libs/infra` installs a resolver that reads the authenticated user from `libs/auth`; this module does not import `libs/auth` itself, because the relay links it and the auth module would add dependencies the relay does not need. A binary that does not link `libs/infra` therefore gets the trace fields but not the actor. The relay-side continuation of the trace (reading `trace_id`/`span_id` back and publishing under them) is a later step.
 
 ## Why this is intentionally the simple half
 

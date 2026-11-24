@@ -7,3 +7,7 @@ It replaces the Postgres/Redis half of the old `libs/bootstrap` package. The oth
 ## Testing
 
 No dedicated test file — `Connect` is exercised indirectly by every test that calls `libs/testenv.Setup`.
+
+## Observability
+
+`deps.Observe(ctx, cfg, infra.ObserveOptions{Service, Outbox, Workflows})` is the one call each binary makes after `Connect`. See `libs/telemetry/README.md` ("Wiring") for what it installs and `libs/config/README.md` for the environment. Run `Shutdown` with a deadline at exit. Importing this package also installs the `libs/auth` identity as the outbox actor resolver.

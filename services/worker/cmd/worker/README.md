@@ -40,3 +40,7 @@ This binary's database connection is the only one scoped to `platform`, `course`
 ## Why a separate binary from the API services
 
 See `services/identity/cmd/identity-api/README.md`, `services/course/cmd/course-api/README.md`, or `services/analytics/cmd/analytics-api/README.md` — same reasoning, ADR-0022 for the original api/worker split and ADR-0023 for api's further split, just the async half of it.
+
+## Observability (`telemetry_wire.go`)
+
+`startTelemetry` (one deferred line in `main.go`) wires tracing, the DB and Redis hooks, the Temporal interceptors and `workflow_*` counters, the Asynq queue gauges, the outbox gauges and a `/metrics` listener on `METRICS_HTTP_ADDR` (default `:9100`, published on `127.0.0.1` only by compose). That listener serves only `GET /metrics` and has no authentication: it is deliberately not the admin port (8093, admin JWT). A port that cannot be bound is logged and the worker runs without `/metrics`. `countParked` wraps the dead-letter store to count `dead_letter_total{consumer}`; nothing builds a `deadletter.Sink` yet, so wiring it is part of the Kafka transport step.

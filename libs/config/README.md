@@ -24,3 +24,16 @@ Fail-fast environment configuration (RFC §11.8). `Load()` reads every `cmd/*` b
 ## Testing
 
 `config_test.go` (no build tag — pure env-var logic, no infra) verifies the fail-fast behavior directly: every required var missing individually and in combination (confirming the aggregation, not just that *an* error comes back), `JWT_SIGNING_KEY`'s length check, and that a malformed optional var (an int/bool/duration that fails to parse) is rejected rather than silently falling back to its default.
+
+## Telemetry (Phase 7)
+
+All optional; validated at `Load`, never dialled (an unreachable collector must not stop a service).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | empty (tracing off) | OTLP/HTTP collector, `host:port` or an `http(s)` URL without credentials. |
+| `OTEL_SDK_DISABLED` | `false` | `true` turns tracing off even with an endpoint. |
+| `OTEL_SERVICE_NAME` | the binary's own name | `service.name`; no whitespace. |
+| `OTEL_TRACES_SAMPLER_ARG` | `1` | Head-sampling ratio from 0 to 1. |
+| `METRICS_ENABLED` | `true` | Off: no `/metrics`, no collectors, no request metrics. |
+| `METRICS_HTTP_ADDR` | `:9100` | The worker's own metrics listener (`host:port`); the HTTP services serve `/metrics` on their API port. |

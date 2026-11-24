@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Added `Correlated(ctx)` (logger from `ctx` plus `trace_id` and `span_id` of the active span), `WithEventID`, `WithJobID` and the key constants (RFC section 12.4).
+
 ## [0.1.0] - not yet tagged
 
 - Module created by the module split (ADR-0026, `docs/plans/module-split.md`). Nothing has been tagged; consumers reference it through a `replace` directive.
