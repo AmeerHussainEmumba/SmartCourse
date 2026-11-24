@@ -15,13 +15,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
 	"gorm.io/gorm"
-
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
 )
 
 // Row mirrors the `outbox` table (migrations/platform/000002_platform.up.sql
@@ -65,8 +64,9 @@ type Event struct {
 	TraceID string
 	SpanID  string
 	// ActorID is the authenticated user who caused the event, for audit
-	// (RFC §6.4). Nil means system-originated and is stored as NULL, unless ctx
-	// carries an authenticated identity (libs/auth), which Write then uses; an
+	// (RFC §6.4). Nil means system-originated and is stored as NULL, unless an
+	// ActorResolver is installed (libs/infra installs the libs/auth one) and
+	// finds an authenticated identity in ctx, which Write then uses; an
 	// ActorID the caller sets wins.
 	ActorID *uuid.UUID
 }
@@ -78,8 +78,8 @@ type Event struct {
 // impossible — there is no such window.
 //
 // Trace and actor context are taken from ctx when the caller left them unset:
-// the active span supplies TraceID and SpanID, the authenticated identity
-// supplies ActorID. Values the caller sets are never overwritten. With no span
+// the active span supplies TraceID and SpanID, the ActorResolver (the
+// authenticated identity) supplies ActorID. Values the caller sets are never overwritten. With no span
 // or identity in ctx (a background job, tracing disabled) the columns stay
 // NULL, exactly as before.
 func Write(ctx context.Context, tx *gorm.DB, evt Event) error {
@@ -120,6 +120,25 @@ func nullIfEmpty(s string) *string {
 	return &s
 }
 
+// ActorResolver extracts the authenticated user from a request context. It is
+// a hook, not an import of libs/auth, so this module (which the relay links)
+// does not depend on the auth module and its dependencies. libs/infra installs
+// the libs/auth resolver at start-up; with none installed Write leaves ActorID
+// as the caller set it.
+type ActorResolver func(ctx context.Context) (userID uuid.UUID, ok bool)
+
+var actorResolver atomic.Pointer[ActorResolver]
+
+// SetActorResolver installs r (nil removes it). Safe for concurrent use; call
+// it at process start.
+func SetActorResolver(r ActorResolver) {
+	if r == nil {
+		actorResolver.Store(nil)
+		return
+	}
+	actorResolver.Store(&r)
+}
+
 // contextIDs resolves the trace, span and actor to store: what the caller set,
 // otherwise what ctx carries. A trace id and span id are taken from the same
 // source so a row never mixes a caller's trace with the context's span.
@@ -131,9 +150,10 @@ func contextIDs(ctx context.Context, evt Event) (traceID, spanID string, actorID
 		}
 	}
 	if actorID == nil {
-		if id, ok := auth.FromContext(ctx); ok && id.UserID != uuid.Nil {
-			u := id.UserID
-			actorID = &u
+		if r := actorResolver.Load(); r != nil {
+			if id, ok := (*r)(ctx); ok && id != uuid.Nil {
+				actorID = &id
+			}
 		}
 	}
 	return traceID, spanID, actorID

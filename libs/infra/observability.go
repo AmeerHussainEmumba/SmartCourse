@@ -34,6 +34,15 @@ type ObserveOptions struct {
 	// POSTGRES_SEARCH_PATH includes platform (identity-api, course-api,
 	// worker); analytics-api has no access to the table.
 	Outbox bool
+	// Workflows keeps workflow_started/completed/failed_total, which only the
+	// binary running the Temporal worker feeds (the worker). Without it the
+	// three counters are left out of /metrics instead of reading a permanent
+	// zero that looks like "no workflows ran".
+	Workflows bool
+	// OutboxPollInterval overrides how often the outbox gauges query Postgres
+	// (default 15s). Tests shorten it; production keeps the default so the
+	// database cost does not depend on the scrape rate.
+	OutboxPollInterval time.Duration
 	// SpanExporter replaces the OTLP/HTTP exporter built from
 	// OTEL_EXPORTER_OTLP_ENDPOINT. It exists for tests (an in-memory
 	// exporter); tracing is still gated by the config (an endpoint, or any
@@ -129,8 +138,24 @@ func (o *Observability) initMetrics(ctx context.Context, d *Dependencies, opts O
 		return err
 	}
 	o.reg, o.Metrics = reg, m
+	// A metric this binary never feeds must be absent, not a constant 0: an
+	// analytics-api outbox_backlog of 0 would read as "nothing is waiting".
+	// The collectors stay usable (they just are not exported).
+	if !opts.Outbox {
+		reg.Unregister(m.OutboxBacklog)
+		reg.Unregister(m.OutboxOldestUnpublish)
+	}
+	if !opts.Workflows {
+		reg.Unregister(m.WorkflowStartedTotal)
+		reg.Unregister(m.WorkflowCompletedTotal)
+		reg.Unregister(m.WorkflowFailedTotal)
+	}
 	if opts.Outbox {
-		o.stopPoll = telemetry.StartPoller(ctx, outboxPollInterval,
+		interval := opts.OutboxPollInterval
+		if interval <= 0 {
+			interval = outboxPollInterval
+		}
+		o.stopPoll = telemetry.StartPoller(ctx, interval,
 			telemetry.OutboxGauges(m, func(ctx context.Context) (telemetry.OutboxStats, error) {
 				return QueryOutboxStats(ctx, sqlDB)
 			}))

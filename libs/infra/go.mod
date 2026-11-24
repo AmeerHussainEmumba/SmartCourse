@@ -47,6 +47,7 @@ require (
 	github.com/go-playground/validator/v10 v10.30.1 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/golang-migrate/migrate/v4 v4.20.1 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -120,9 +121,11 @@ require (
 )
 
 require (
+	github.com/AmeerHussainEmumba/SmartCourse/libs/auth v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/cache v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/config v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/db v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/router v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/testenv v0.0.0
@@ -142,3 +145,7 @@ replace (
 replace github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry => ../telemetry
 
 replace github.com/AmeerHussainEmumba/SmartCourse/libs/testenv => ../testenv
+
+replace github.com/AmeerHussainEmumba/SmartCourse/libs/auth => ../auth
+
+replace github.com/AmeerHussainEmumba/SmartCourse/libs/outbox => ../outbox

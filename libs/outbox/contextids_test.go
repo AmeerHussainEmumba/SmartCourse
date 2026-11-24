@@ -6,14 +6,25 @@ import (
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
-
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
 )
 
 const (
 	testTraceHex = "4bf92f3577b34da6a3ce929d0e0e4736"
 	testSpanHex  = "00f067aa0ba902b7"
 )
+
+type userKey struct{}
+
+// useResolver installs a resolver that reads a uuid stored under userKey and
+// removes it when the test ends.
+func useResolver(t *testing.T) {
+	t.Helper()
+	SetActorResolver(func(ctx context.Context) (uuid.UUID, bool) {
+		id, ok := ctx.Value(userKey{}).(uuid.UUID)
+		return id, ok
+	})
+	t.Cleanup(func() { SetActorResolver(nil) })
+}
 
 func ctxWithSpan(t *testing.T) context.Context {
 	t.Helper()
@@ -30,8 +41,9 @@ func ctxWithSpan(t *testing.T) context.Context {
 }
 
 func TestContextIDs_FillsFromContext(t *testing.T) {
+	useResolver(t)
 	user := uuid.New()
-	ctx := auth.WithIdentity(ctxWithSpan(t), auth.Identity{UserID: user, Role: "student"})
+	ctx := context.WithValue(ctxWithSpan(t), userKey{}, user)
 
 	traceID, spanID, actor := contextIDs(ctx, Event{})
 	if traceID != testTraceHex || spanID != testSpanHex {
@@ -43,8 +55,9 @@ func TestContextIDs_FillsFromContext(t *testing.T) {
 }
 
 func TestContextIDs_CallerValuesWin(t *testing.T) {
+	useResolver(t)
 	user, caller := uuid.New(), uuid.New()
-	ctx := auth.WithIdentity(ctxWithSpan(t), auth.Identity{UserID: user})
+	ctx := context.WithValue(ctxWithSpan(t), userKey{}, user)
 
 	traceID, spanID, actor := contextIDs(ctx, Event{TraceID: "aaaa", SpanID: "bbbb", ActorID: &caller})
 	if traceID != "aaaa" || spanID != "bbbb" {
@@ -56,13 +69,28 @@ func TestContextIDs_CallerValuesWin(t *testing.T) {
 }
 
 func TestContextIDs_NothingInContextStaysEmpty(t *testing.T) {
+	useResolver(t)
 	traceID, spanID, actor := contextIDs(context.Background(), Event{})
 	if traceID != "" || spanID != "" || actor != nil {
 		t.Errorf("got %q %q %v, want all empty", traceID, spanID, actor)
 	}
 	// A zero user id is not an actor.
-	_, _, actor = contextIDs(auth.WithIdentity(context.Background(), auth.Identity{}), Event{})
+	_, _, actor = contextIDs(context.WithValue(context.Background(), userKey{}, uuid.Nil), Event{})
 	if actor != nil {
 		t.Errorf("zero identity produced actor %v", actor)
+	}
+}
+
+// With no resolver installed (a binary that does not link libs/infra) the
+// actor stays as the caller set it; the trace still comes from the context.
+func TestContextIDs_NoResolverLeavesActorAlone(t *testing.T) {
+	SetActorResolver(nil)
+	ctx := context.WithValue(ctxWithSpan(t), userKey{}, uuid.New())
+	traceID, _, actor := contextIDs(ctx, Event{})
+	if actor != nil {
+		t.Errorf("actor = %v with no resolver", actor)
+	}
+	if traceID != testTraceHex {
+		t.Errorf("trace not taken from the context: %q", traceID)
 	}
 }

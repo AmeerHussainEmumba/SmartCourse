@@ -115,7 +115,7 @@ func TestObserve_MetricsUseRouteTemplatesAndExposeCatalogue(t *testing.T) {
 		VALUES (?, 'x', ?, 'x.y', 1, '{}', now() - interval '90 seconds')`, uuid.New(), uuid.New()).Error; err != nil {
 		t.Fatal(err)
 	}
-	obs := deps.Observe(context.Background(), telemetryCfg("", true), infra.ObserveOptions{Service: "test-api", Outbox: true})
+	obs := deps.Observe(context.Background(), telemetryCfg("", true), infra.ObserveOptions{Service: "test-api", Outbox: true, OutboxPollInterval: 100 * time.Millisecond})
 	t.Cleanup(func() { obs.Shutdown(context.Background()) })
 	r := serve(t, deps, obs)
 
