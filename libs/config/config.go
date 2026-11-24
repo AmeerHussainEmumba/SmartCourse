@@ -30,6 +30,7 @@ type Config struct {
 	Jobs     JobsConfig
 	Mongo    MongoConfig
 	Admin    AdminConfig
+	Kafka    KafkaConfig
 
 	JWT   JWTConfig
 	Argon Argon2Config
@@ -295,6 +296,7 @@ func Load() (*Config, error) {
 	cfg.Admin, adminErrs = loadAdmin(os.Getenv)
 	errs = append(errs, mongoErrs...)
 	errs = append(errs, adminErrs...)
+	cfg.Kafka = loadKafka(os.Getenv, optInt, optDuration, &errs)
 
 	if len(cfg.JWT.SigningKey) < 32 {
 		// Only enforced once the key is present; the presence check above

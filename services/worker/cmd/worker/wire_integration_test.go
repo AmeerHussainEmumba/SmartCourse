@@ -26,10 +26,21 @@ import (
 // three modules' handlers registered together, fed real outbox rows. Every
 // event must be processed without a single give-up, and every module's own
 // tables must show the effect.
+//
+// It runs once per event transport (ADR-0029): in kafka mode the same handlers
+// run in consumer groups, and every effect must be the same.
 func TestBuildRelay_EndToEnd_OnWorkerSearchPath(t *testing.T) {
+	for _, mode := range transportModes {
+		t.Run(mode, func(t *testing.T) { testBuildRelayEndToEnd(t, mode) })
+	}
+}
+
+func testBuildRelayEndToEnd(t *testing.T, mode string) {
 	env := testenv.Setup(t)
 	conn := env.OpenWithSearchPath(t, "platform,course,analytics,public")
-	rl := buildRelay(&infra.Dependencies{DB: conn}, relayTestConfig())
+	cfg := relayTestConfig()
+	useTransport(t, cfg, mode)
+	deps := &infra.Dependencies{DB: conn}
 
 	instructor, student := uuid.New(), uuid.New()
 	courseID, enrollmentID := uuid.New(), uuid.New()
@@ -63,46 +74,37 @@ func TestBuildRelay_EndToEnd_OnWorkerSearchPath(t *testing.T) {
 	write("course.course_archived", map[string]any{"course_id": courseID})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { rl.Run(ctx); close(done) }()
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		var n int64
-		env.DB.Raw(`SELECT count(*) FROM outbox WHERE published_at IS NULL`).Row().Scan(&n)
-		if n == 0 {
-			break
+	defer cancel()
+	rl, sink, stop := runEvents(t, ctx, cfg, deps)
+
+	// Published is not processed in kafka mode (the consumers run the handlers
+	// afterwards), so the effects themselves are what is waited for, in both.
+	pollUntil(t, 90*time.Second, func() []string {
+		var p []string
+		if n := scalarOf(env.DB, `SELECT count(*) FROM outbox WHERE published_at IS NULL`); n != 0 {
+			p = append(p, "events still unpublished")
 		}
-		if time.Now().After(deadline) {
-			cancel()
-			<-done
-			t.Fatalf("%d events never published", n)
+		if scalarOf(env.DB, `SELECT count(*) FROM instructor_mirror WHERE user_id = ?`, instructor) != 1 {
+			p = append(p, "course instructor_mirror not fed")
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	cancel()
-	<-done
+		if scalarOf(env.DB, `SELECT count(*) FROM user_role_mirror`) != 2 || scalarOf(env.DB, `SELECT total_courses_published FROM platform_snapshot`) != 1 {
+			p = append(p, "analytics mirrors/snapshot not fed")
+		}
+		if scalarOf(env.DB, `SELECT count(*) FROM enrollment_mirror WHERE enrollment_id = ?`, enrollmentID) != 1 {
+			p = append(p, "analytics enrollment_mirror not fed")
+		}
+		if scalarOf(env.DB, `SELECT count(*) FROM enrollments WHERE id = ? AND status = 'withdrawn'`, enrollmentID) != 1 || scalarOf(env.DB, `SELECT enrollment_count FROM courses WHERE id = ?`, courseID) != 0 {
+			p = append(p, "enrollment archive handler did not withdraw the enrollment / fix the counter")
+		}
+		return p
+	})
+	stop()
 
 	if p, f, g := rl.Stats(); g != 0 {
 		t.Fatalf("relay gave up on %d events (processed=%d failed=%d)", g, p, f)
 	}
-	scalar := func(q string, args ...any) int64 {
-		var n int64
-		if err := env.DB.Raw(q, args...).Row().Scan(&n); err != nil {
-			t.Fatalf("%s: %v", q, err)
-		}
-		return n
-	}
-	if scalar(`SELECT count(*) FROM instructor_mirror WHERE user_id = ?`, instructor) != 1 {
-		t.Error("course instructor_mirror not fed")
-	}
-	if scalar(`SELECT count(*) FROM user_role_mirror`) != 2 || scalar(`SELECT total_courses_published FROM platform_snapshot`) != 1 {
-		t.Error("analytics mirrors/snapshot not fed")
-	}
-	if scalar(`SELECT count(*) FROM enrollment_mirror WHERE enrollment_id = ?`, enrollmentID) != 1 {
-		t.Error("analytics enrollment_mirror not fed")
-	}
-	if scalar(`SELECT count(*) FROM enrollments WHERE id = ? AND status = 'withdrawn'`, enrollmentID) != 1 || scalar(`SELECT enrollment_count FROM courses WHERE id = ?`, courseID) != 0 {
-		t.Error("enrollment archive handler did not withdraw the enrollment / fix the counter")
+	if d := sink.parked(); len(d) != 0 {
+		t.Fatalf("%d events were dead-lettered: %+v", len(d), d)
 	}
 }
 

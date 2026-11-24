@@ -16,6 +16,7 @@ COPY libs/events ./libs/events
 COPY libs/httpx ./libs/httpx
 COPY libs/idempotency ./libs/idempotency
 COPY libs/infra ./libs/infra
+COPY libs/kafka ./libs/kafka
 COPY libs/logging ./libs/logging
 COPY libs/mongostore ./libs/mongostore
 COPY libs/outbox ./libs/outbox

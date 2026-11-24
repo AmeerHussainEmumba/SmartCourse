@@ -24,3 +24,7 @@ Fail-fast environment configuration (RFC §11.8). `Load()` reads every `cmd/*` b
 ## Testing
 
 `config_test.go` (no build tag — pure env-var logic, no infra) verifies the fail-fast behavior directly: every required var missing individually and in combination (confirming the aggregation, not just that *an* error comes back), `JWT_SIGNING_KEY`'s length check, and that a malformed optional var (an int/bool/duration that fails to parse) is rejected rather than silently falling back to its default.
+
+## Event transport
+
+`EVENT_TRANSPORT` selects how outbox events reach their handlers (ADR-0029): `inprocess` (default; the relay runs the handlers) or `kafka` (the relay publishes to Kafka and consumer groups run them). Any other value is a startup error, so a typo cannot silently leave events off the broker. In `kafka` mode `KAFKA_BROKERS` (comma-separated host:port) and `SCHEMA_REGISTRY_URL` are required and checked for shape; in `inprocess` mode they are ignored. The consumer tuning (`KAFKA_CONSUMER_MAX_IN_FLIGHT`, `..._MAX_ATTEMPTS`, `..._BACKOFF_BASE`, `..._BACKOFF_MAX`, `..._SHUTDOWN_TIMEOUT`) and `KAFKA_PRODUCE_TIMEOUT` have defaults and are range-checked in every mode. `KAFKA_PRODUCE_TIMEOUT` is capped at 25s because the relay gives one row 30s to claim, publish and record the result. `KAFKA_CONSUMER_MAX_IN_FLIGHT` is per consumer group and each running handler holds a Postgres connection, so the worst case is groups x that value; the pool queues the excess rather than failing, and `Load` does not check it against `POSTGRES_MAX_OPEN_CONNS`.

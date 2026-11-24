@@ -78,6 +78,9 @@ Tests against a real registry sit behind the `live` build tag, so normal CI does
 GOWORK=off go test -tags live -run Live -v ./cmd/register-schemas
 ```
 
-## Not done here
+## Used by
 
-The relay does not use this module yet: `libs/outbox` still writes JSON, and the outbox has no `trace_id`/`span_id`/`actor_id` columns (Phase 2 migration, ADR-0032). Converting the outbox JSON to these messages, and the producer, belong to Phase 3.
+`services/worker/transport` (ADR-0029) is the one consumer. In Kafka mode the relay's publisher parses the outbox row's JSON payload strictly into the message `Lookup(event_type)` names (unknown fields and wrong types are errors), wraps it with `NewEnvelope` (metadata from the row, `schema_version` from `registry.LatestSchema` of the payload subject), frames it with the id of the `<topic>-value` subject via `Encode`, and produces it keyed by `aggregate_id`. A consumer reverses it with `DecodeInto` and `OpenPayload`, then renders the payload as JSON with the proto field names (the keys the outbox payloads use) so the existing handlers decode it unchanged. Fields left at their zero value are absent from that JSON, timestamps come back in UTC, and `outbox_id` (which the mirror handlers need) travels in a record header because the envelope has no field for it.
+
+Interop: still **not** verified against a real Confluent client reading these bytes. What was checked is that our own decoder round-trips every event (`services/worker/transport` tests) and, earlier, that the registry accepts the schemas. A Java or Go Confluent deserializer reading what the relay produced remains the open item; do it before relying on the bytes outside this repository. One thing to look at when doing so: the envelope subjects (`<topic>-value`) all share one schema id, and the message index in the frame (`[0]` for `Envelope`) is what selects the message.
+

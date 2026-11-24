@@ -96,6 +96,7 @@ require (
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
+	github.com/pierrec/lz4/v4 v4.1.33 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
@@ -113,6 +114,8 @@ require (
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
+	github.com/twmb/franz-go/pkg/kadm v1.20.0 // indirect
+	github.com/twmb/franz-go/pkg/kmsg v1.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	github.com/xdg-go/scram v1.4.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
@@ -134,7 +137,6 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260630182238-925bb5da69e7 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260630182238-925bb5da69e7 // indirect
 	google.golang.org/grpc v1.83.2 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
@@ -147,6 +149,7 @@ require (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/httpx v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/idempotency v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/infra v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/kafka v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/logging v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/mongostore v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox v0.0.0
@@ -157,7 +160,9 @@ require (
 	github.com/AmeerHussainEmumba/SmartCourse/services/analytics v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/services/course v0.0.0
 	github.com/testcontainers/testcontainers-go v0.44.0
+	github.com/twmb/franz-go v1.22.3
 	go.mongodb.org/mongo-driver/v2 v2.10.0
+	google.golang.org/protobuf v1.36.11
 )
 
 replace (
@@ -171,6 +176,7 @@ replace (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/httpx => ../../libs/httpx
 	github.com/AmeerHussainEmumba/SmartCourse/libs/idempotency => ../../libs/idempotency
 	github.com/AmeerHussainEmumba/SmartCourse/libs/infra => ../../libs/infra
+	github.com/AmeerHussainEmumba/SmartCourse/libs/kafka => ../../libs/kafka
 	github.com/AmeerHussainEmumba/SmartCourse/libs/logging => ../../libs/logging
 	github.com/AmeerHussainEmumba/SmartCourse/libs/mongostore => ../../libs/mongostore
 	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox => ../../libs/outbox

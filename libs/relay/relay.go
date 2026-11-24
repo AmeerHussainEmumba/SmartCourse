@@ -7,13 +7,12 @@
 // synthetic example: without this package, every outbox row written by
 // identity/course/enrollment/progress just accumulates, unread.
 //
-// Today this dispatches to in-process Go handlers, not Kafka consumers —
-// Kafka, the Schema Registry, and Protobuf encoding are still M3 scope
-// (RFC §21.0). See ADR-0021 for why this exists ahead of Kafka rather than
-// waiting: when Kafka lands, this package's poll loop is replaced by
-// "publish to Kafka," and today's in-process Handler functions become
-// Kafka consumer handlers with the same signature — the fan-out and
-// idempotency logic here doesn't change.
+// By default (in-process transport) it dispatches to in-process Go handlers
+// (ADR-0021). With WithPublisher (ADR-0029, EVENT_TRANSPORT=kafka) the per-row
+// step becomes "hand the row to a Publisher and mark it published only once the
+// Publisher returned nil", and the registered handlers are run by Kafka
+// consumers instead, through Deliver. This package imports no Kafka client: the
+// Publisher is the seam, implemented in the worker.
 package relay
 
 import (
@@ -85,6 +84,16 @@ type Relay struct {
 
 	handlers []Handler
 
+	// publisher, when set, switches the relay to publish mode (ADR-0029): the
+	// per-row step publishes instead of running handlers.
+	publisher Publisher
+	// publishBackoff is how long a row whose publish failed for a transient
+	// reason (broker down) is left alone by this instance.
+	publishBackoff time.Duration
+	// sink receives events the relay gives up on, before they are dropped.
+	// Nil keeps the log-and-drop behaviour (see DeadLetterSink).
+	sink DeadLetterSink
+
 	// cooldown is process-local (RFC §10.3): rows THIS instance just failed
 	// to deliver and when it may retry them, so a failing row is not
 	// re-claimed in a hot loop. Cross-replica safety comes from the row
@@ -92,9 +101,10 @@ type Relay struct {
 	cooldownMu sync.Mutex
 	cooldown   map[int64]time.Time
 
-	processed atomic.Int64
-	failed    atomic.Int64
-	givenUp   atomic.Int64
+	processed    atomic.Int64
+	failed       atomic.Int64
+	givenUp      atomic.Int64
+	parkFailures atomic.Int64
 }
 
 type Option func(*Relay)
@@ -103,6 +113,19 @@ func WithPollInterval(d time.Duration) Option { return func(r *Relay) { r.pollIn
 func WithBatchSize(n int) Option              { return func(r *Relay) { r.batchSize = n } }
 func WithWorkerCount(n int) Option            { return func(r *Relay) { r.workerCount = n } }
 func WithMaxAttempts(n int) Option            { return func(r *Relay) { r.maxAttempts = n } }
+
+// WithPublisher switches the relay to publish mode (ADR-0029). Registered
+// handlers are then not run by the relay: consumers run them from the broker.
+// A nil publisher keeps in-process delivery.
+func WithPublisher(p Publisher) Option { return func(r *Relay) { r.publisher = p } }
+
+// WithPublishBackoff sets how long a row that failed to publish for a
+// transient reason is left alone by this instance (default 1s).
+func WithPublishBackoff(d time.Duration) Option { return func(r *Relay) { r.publishBackoff = d } }
+
+// WithDeadLetterSink sets where the relay parks an event it gives up on. See
+// DeadLetterSink for the contract. Without one the relay logs and drops.
+func WithDeadLetterSink(s DeadLetterSink) Option { return func(r *Relay) { r.sink = s } }
 
 // New builds a Relay. Defaults match RFC §6.3 (200ms poll interval) and
 // §10.2 (pool sizes bounded by the database connection budget, not CPU —
@@ -116,6 +139,8 @@ func New(db *gorm.DB, opts ...Option) *Relay {
 		workerCount:  4,
 		maxAttempts:  5,
 		cooldown:     make(map[int64]time.Time),
+
+		publishBackoff: time.Second,
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -126,6 +151,19 @@ func New(db *gorm.DB, opts ...Option) *Relay {
 func (r *Relay) Register(h Handler) {
 	r.handlers = append(r.handlers, h)
 }
+
+// Handlers returns the registered handlers. In publish mode the worker starts
+// one consumer per entry.
+func (r *Relay) Handlers() []Handler {
+	return append([]Handler(nil), r.handlers...)
+}
+
+// Publishing reports whether the relay is in publish mode.
+func (r *Relay) Publishing() bool { return r.publisher != nil }
+
+// ParkFailures counts the times the dead-letter sink refused an event; the
+// event's row stays unpublished each time.
+func (r *Relay) ParkFailures() int64 { return r.parkFailures.Load() }
 
 // Stats reports processed/failed/given-up counts — sync/atomic, not a
 // mutex, because a handful of independent counters is exactly the case
@@ -228,13 +266,22 @@ func (r *Relay) claimAndProcess(ctx context.Context) (claimed bool, err error) {
 	skip := r.activeCooldowns()
 	q := `SELECT id, event_id, aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at, attempts,
 		trace_id, span_id, actor_id
-		FROM outbox WHERE published_at IS NULL`
+		FROM outbox o WHERE published_at IS NULL`
 	args := []any{}
 	if len(skip) > 0 {
 		q += ` AND id NOT IN ?`
 		args = append(args, skip)
 	}
-	q += ` ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`
+	if r.publisher != nil {
+		// Publish mode keeps per-aggregate order (ADR-0029): a row is only
+		// claimable while no earlier row of its aggregate is unpublished. An
+		// earlier row that another worker holds (not yet acknowledged), one
+		// in cooldown, or one that failed all keep their successors back, so
+		// two workers never produce the same key concurrently and a retry
+		// cannot be overtaken. Other aggregates are not held up.
+		q += ` AND NOT EXISTS (SELECT 1 FROM outbox e WHERE e.aggregate_id = o.aggregate_id AND e.published_at IS NULL AND e.id < o.id)`
+	}
+	q += ` ORDER BY id LIMIT 1 FOR UPDATE OF o SKIP LOCKED`
 	var rows []outboxRow
 	if err := tx.Raw(q, args...).Scan(&rows).Error; err != nil {
 		return false, fmt.Errorf("poll outbox: %w", err)
@@ -250,8 +297,14 @@ func (r *Relay) claimAndProcess(ctx context.Context) (claimed bool, err error) {
 		TraceID: deref(row.TraceID), SpanID: deref(row.SpanID), ActorID: row.ActorID,
 	}
 
-	if lastErr := r.process(workCtx, evt); lastErr != nil {
-		err = r.recordFailure(tx, evt, lastErr)
+	var failures []consumerFailure
+	if r.publisher != nil {
+		failures = r.publish(workCtx, evt)
+	} else {
+		failures = r.process(workCtx, evt)
+	}
+	if len(failures) > 0 {
+		err = r.recordFailure(workCtx, tx, evt, failures)
 	} else {
 		err = tx.Exec(`UPDATE outbox SET published_at = ? WHERE id = ?`, time.Now().UTC(), evt.OutboxID).Error
 		if err == nil {
@@ -283,83 +336,117 @@ func (r *Relay) activeCooldowns() []int64 {
 	return ids
 }
 
-// process runs every registered handler for evt.EventType and returns a
-// non-nil error summarising failures. One handler's failure doesn't block
-// another's (RFC §4.6): each runs in its own transaction with its own
-// idempotency check.
-func (r *Relay) process(ctx context.Context, evt DecodedEvent) error {
-	var errs []error
+// publish hands evt to the Publisher. The caller marks the row published only
+// when this returns no failures, i.e. after the transport's acknowledgement
+// (ADR-0029): a crash in between re-publishes the row (a duplicate that
+// consumers absorb through processed_events), never loses it. A panic in the
+// Publisher is reported as a failed attempt.
+func (r *Relay) publish(ctx context.Context, evt DecodedEvent) (failures []consumerFailure) {
+	defer func() {
+		if p := recover(); p != nil {
+			slog.Error("relay publisher panicked", slog.Int64("outbox_id", evt.OutboxID),
+				slog.Any("panic", p), slog.String("stack", string(debug.Stack())))
+			failures = []consumerFailure{{RelayConsumer, fmt.Errorf("publisher panic: %v", p)}}
+		}
+	}()
+	if err := r.publisher.Publish(ctx, evt); err != nil {
+		r.failed.Add(1)
+		slog.Error("relay publish failed",
+			slog.String("event_type", evt.EventType), slog.Int64("outbox_id", evt.OutboxID),
+			slog.Bool("transient", IsTransient(err)), slog.Any("error", err))
+		return []consumerFailure{{RelayConsumer, err}}
+	}
+	return nil
+}
+
+// process runs every registered handler for evt.EventType and returns the
+// failures. One handler's failure doesn't block another's (RFC §4.6): each
+// runs in its own transaction with its own idempotency check.
+func (r *Relay) process(ctx context.Context, evt DecodedEvent) []consumerFailure {
+	var failures []consumerFailure
 	for _, h := range r.handlers {
 		if !h.EventTypes[evt.EventType] {
 			continue
 		}
-		if err := r.runOne(ctx, h, evt); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", h.ConsumerName, err))
+		if err := Deliver(ctx, r.db, h, evt); err != nil {
+			failures = append(failures, consumerFailure{h.ConsumerName, err})
 			r.failed.Add(1)
 			slog.Error("relay handler failed",
 				slog.String("consumer", h.ConsumerName), slog.String("event_type", evt.EventType),
 				slog.Int64("outbox_id", evt.OutboxID), slog.Any("error", err))
 		}
 	}
-	return errors.Join(errs...)
-}
-
-// runOne is RFC §6.6's idempotency rule, concretely: check
-// processed_events before acting, write the marker in the SAME
-// transaction as the handler's own effect — so a replayed event cannot
-// double-apply. A panic in the handler is recovered and reported as a
-// failed delivery (F-05); the surrounding transaction is rolled back.
-func (r *Relay) runOne(ctx context.Context, h Handler, evt DecodedEvent) (err error) {
-	defer func() {
-		if p := recover(); p != nil {
-			slog.Error("relay handler panicked",
-				slog.String("consumer", h.ConsumerName), slog.Int64("outbox_id", evt.OutboxID),
-				slog.Any("panic", p), slog.String("stack", string(debug.Stack())))
-			err = fmt.Errorf("handler panic: %v", p)
-		}
-	}()
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var already int64
-		if err := tx.Raw(`SELECT count(*) FROM processed_events WHERE consumer_name = ? AND event_id = ?`,
-			h.ConsumerName, evt.EventID).Scan(&already).Error; err != nil {
-			return err
-		}
-		if already > 0 {
-			return nil // this consumer has already handled this event — no-op
-		}
-		if err := h.Handle(ctx, tx, evt); err != nil {
-			return err
-		}
-		return tx.Exec(`INSERT INTO processed_events (consumer_name, event_id) VALUES (?, ?)`,
-			h.ConsumerName, evt.EventID).Error
-	})
+	return failures
 }
 
 const maxLastErrorLen = 2000
 
 // recordFailure is the retry mechanism (SmartCourse.md §7). It persists the
-// attempt count and last_error in the claim transaction. No dead-letter
-// store exists yet (MongoDB failed_events is M3 scope, RFC §21.0), so
-// exceeding maxAttempts means giving up by marking the row published
-// anyway — logged loudly at ERROR, with the reason kept in last_error.
-func (r *Relay) recordFailure(tx *gorm.DB, evt DecodedEvent, cause error) error {
-	attempts := evt.Attempts + 1
-	msg := cause.Error()
+// attempt count and last_error in the claim transaction.
+//
+// A failure marked Transient (the transport is down, not the event bad) records
+// last_error and backs the row off, but does not count an attempt: an outage
+// must not use up the budget of good events.
+//
+// Exceeding maxAttempts means giving up. With a DeadLetterSink the event is
+// parked first (one DeadLetter per failed consumer) and the row is marked
+// published only after every Park succeeded; if one fails the row stays
+// unpublished, the failure is logged and counted, and the next claim tries
+// again, so nothing is dropped unparked. Without a sink the row is marked
+// published anyway, logged loudly, with the reason kept in last_error: the
+// documented gap.
+func (r *Relay) recordFailure(ctx context.Context, tx *gorm.DB, evt DecodedEvent, failures []consumerFailure) error {
+	errs := make([]error, 0, len(failures))
+	transient := true
+	for _, f := range failures {
+		errs = append(errs, fmt.Errorf("%s: %w", f.consumer, f.err))
+		transient = transient && IsTransient(f.err)
+	}
+	msg := errors.Join(errs...).Error()
 	if len(msg) > maxLastErrorLen {
 		msg = msg[:maxLastErrorLen]
 	}
 	msg = strings.ToValidUTF8(msg, "")
+
+	if transient {
+		r.setCooldown(evt.OutboxID, r.publishBackoff)
+		return tx.Exec(`UPDATE outbox SET last_error = ? WHERE id = ?`, msg, evt.OutboxID).Error
+	}
+
+	attempts := evt.Attempts + 1
 	if attempts >= r.maxAttempts {
+		if r.sink != nil {
+			evt.Attempts = attempts
+			parked := true
+			for _, f := range failures {
+				if err := park(ctx, r.sink, DeadLetter{Event: evt, Consumer: f.consumer, Err: f.err, Attempts: attempts}); err != nil {
+					parked = false
+					r.parkFailures.Add(1)
+					slog.Error("relay: dead-letter sink refused the event; leaving the row unpublished",
+						slog.String("consumer", f.consumer), slog.String("event_type", evt.EventType),
+						slog.Int64("outbox_id", evt.OutboxID), slog.Any("error", err))
+				}
+			}
+			if !parked {
+				r.setCooldown(evt.OutboxID, max(r.publishBackoff, r.pollInterval))
+				return tx.Exec(`UPDATE outbox SET attempts = ?, last_error = ? WHERE id = ?`, attempts, msg, evt.OutboxID).Error
+			}
+		}
 		r.givenUp.Add(1)
 		slog.Error("relay: giving up on event after max attempts",
-			slog.String("event_type", evt.EventType), slog.Int64("outbox_id", evt.OutboxID), slog.Int("attempts", attempts))
+			slog.String("event_type", evt.EventType), slog.Int64("outbox_id", evt.OutboxID), slog.Int("attempts", attempts),
+			slog.Bool("parked", r.sink != nil))
 		return tx.Exec(`UPDATE outbox SET attempts = ?, last_error = ?, published_at = ? WHERE id = ?`,
 			attempts, msg, time.Now().UTC(), evt.OutboxID).Error
 	}
-	r.cooldownMu.Lock()
-	r.cooldown[evt.OutboxID] = time.Now().Add(r.pollInterval)
-	r.cooldownMu.Unlock()
+	r.setCooldown(evt.OutboxID, r.pollInterval)
 	return tx.Exec(`UPDATE outbox SET attempts = ?, last_error = ? WHERE id = ?`, attempts, msg, evt.OutboxID).Error
+}
+
+func (r *Relay) setCooldown(id int64, d time.Duration) {
+	r.cooldownMu.Lock()
+	r.cooldown[id] = time.Now().Add(d)
+	r.cooldownMu.Unlock()
 }
 
 func deref(s *string) string {

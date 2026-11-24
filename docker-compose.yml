@@ -115,6 +115,14 @@ services:
       # scheduled jobs (ADR-0013). The Postgres pool of 20 connections holds
       # 4 relay workers x 2 plus the default and low pools that touch it.
       RELAY_WORKERS: "4"
+      # Event transport (ADR-0029). inprocess is the default and needs no Kafka.
+      # To run the Kafka transport, start the `events` profile (kafka and
+      # schema-registry), register the schemas (go run ./cmd/register-schemas in
+      # libs/events), then set EVENT_TRANSPORT to kafka and uncomment the next two
+      # lines. The worker fails at start if the registry or a subject is missing.
+      EVENT_TRANSPORT: inprocess
+      # KAFKA_BROKERS: kafka:9092
+      # SCHEMA_REGISTRY_URL: http://schema-registry:8081
       ASYNQ_CRITICAL_CONCURRENCY: "10"
       ASYNQ_DEFAULT_CONCURRENCY: "5"
       ASYNQ_LOW_CONCURRENCY: "3"

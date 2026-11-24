@@ -7,8 +7,10 @@
 // PublishCourseWorkflow (services/course/workflows, ADR-0009/0025), and the
 // Asynq side (libs/asynqx, ADR-0013): one server per queue with its own
 // bounded pool (RFC §10.2) and the scheduler for the maintenance jobs in
-// services/worker/jobs. A failure in one never stops another. Kafka consumers
-// are still M3 scope (RFC §21.0). The only HTTP surface is the admin port (services/worker/admin: health and failed-event replay).
+// services/worker/jobs. A failure in one never stops another. With
+// EVENT_TRANSPORT=kafka (ADR-0029) the relay publishes to Kafka instead of
+// running the handlers, and a consumer group per handler runs them from the
+// topics (transport.go). The only HTTP surface is the admin port (services/worker/admin: health and failed-event replay).
 package main
 
 import (
@@ -24,6 +26,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/logging"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/temporal"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/jobs"
 )
@@ -47,25 +50,46 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	rl := buildRelay(deps, cfg)
-
 	// MongoDB (archive, dead letters) and the admin surface run beside the
 	// relay and never stop it: see mongo_wire.go.
 	mg := newMongoWiring(cfg)
+	// The dead-letter sink exists only when MongoDB is configured. Without a
+	// store, a sink would keep every poison event unpublished forever; with
+	// none, the relay logs and drops it as it did before Week 3.
+	var sink relay.DeadLetterSink
+	if cfg.Mongo.URI != "" {
+		sink = deadLetterAdapter{mg.Sink()}
+	}
+	events, err := newEventTransport(ctx, logger, cfg, sink)
+	if err != nil {
+		logger.Error("event transport not ready", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer events.Close()
+	rl := buildRelay(deps, cfg, events.RelayOptions()...)
+	replayable := consumerHandlers()
+	if transportMode(cfg) == config.TransportKafka {
+		replayable = append(replayable, registerArchiver(logger, cfg, mg, rl)...)
+	}
+
 	var wg sync.WaitGroup
-	wg.Add(5)
+	wg.Add(6)
 	go func() {
 		defer wg.Done()
 		mg.run(ctx, logger)
 	}()
 	go func() {
 		defer wg.Done()
-		serveAdmin(ctx, logger, deps, cfg, mg, consumerHandlers())
+		serveAdmin(ctx, logger, deps, cfg, mg, replayable)
 	}()
 	go func() {
 		defer wg.Done()
-		logger.Info("outbox relay starting")
+		logger.Info("outbox relay starting", slog.String("transport", transportMode(cfg)))
 		rl.Run(ctx) // blocks until ctx is cancelled, draining in-flight work first
+	}()
+	go func() {
+		defer wg.Done()
+		events.Run(ctx, rl, deps.DB) // kafka mode only: one consumer group per registered handler
 	}()
 	go func() {
 		defer wg.Done()
