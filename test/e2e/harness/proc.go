@@ -71,7 +71,7 @@ func (p *Proc) Start() error {
 	cmd.Stdout, cmd.Stderr = p.logs, p.logs
 	// Own process group, so a kill reaches everything the binary started.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	fmt.Fprintf(p.logs, "--- harness: starting %s at %s ---\n", p.Name, time.Now().Format(time.RFC3339))
+	_, _ = fmt.Fprintf(p.logs, "--- harness: starting %s at %s ---\n", p.Name, time.Now().Format(time.RFC3339))
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start %s: %w", p.Name, err)
 	}

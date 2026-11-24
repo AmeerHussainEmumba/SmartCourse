@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -195,6 +196,10 @@ func TestE2E_E01_HappyPath(t *testing.T) {
 			p := s.PlatformStats(t, admin)
 			if p.TotalStudents != base.TotalStudents+2 || p.TotalInstructors != base.TotalInstructors+1 || p.TotalCoursesPublished != base.TotalCoursesPublished+1 {
 				return harness.Errf("platform %+v, baseline %+v: want students +2, instructors +1, courses published +1", p, base)
+			}
+			// One active or completed enrollment (A's; B withdrew) over every student.
+			if want := 1 / float64(p.TotalStudents); math.Abs(p.AvgCoursesPerStudent-want) > 0.001 {
+				return harness.Errf("avg_courses_per_student %v, want %.3f (1 enrollment / %d students)", p.AvgCoursesPerStudent, want, p.TotalStudents)
 			}
 			return nil
 		})
