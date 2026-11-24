@@ -19,6 +19,7 @@ COPY libs/idempotency ./libs/idempotency
 COPY libs/infra ./libs/infra
 COPY libs/logging ./libs/logging
 COPY libs/outbox ./libs/outbox
+COPY libs/ratelimit ./libs/ratelimit
 COPY libs/relay ./libs/relay
 COPY libs/router ./libs/router
 COPY libs/temporal ./libs/temporal
