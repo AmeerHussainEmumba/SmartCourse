@@ -20,17 +20,17 @@ Each service's connection sets `search_path` (`POSTGRES_SEARCH_PATH`, wired thro
 ## Running migrations
 
 ```
-make migrate-up                              # applies all four services, in order (see below)
+make migrate-up                              # applies all five services, in order (see below)
 make migrate-down service=course             # rolls back one migration for one service
 make migrate-down-all                        # full teardown, all four, reverse order — local dev reset only
 make migrate-create service=course name=add_something
 ```
 
-`make migrate-up`'s order is fixed and matters: `platform` first (its migration installs `citext`/`pg_trgm`, which `identity` and `course` need), then `identity`, `course`, `analytics` — `analytics` last since nothing else depends on it. Each service is tracked by its own `x-migrations-table` (e.g. `course_schema_migrations`) so the four independent sequences don't collide on a single shared `schema_migrations` row.
+`make migrate-up`'s order is fixed and matters: `platform` first (its migration installs `citext`/`pg_trgm`, which `identity` and `course` need), then `identity`, `course`, `analytics`, `notification` — `notification` last since nothing else depends on it. Each service is tracked by its own `x-migrations-table` (e.g. `course_schema_migrations`) so the four independent sequences don't collide on a single shared `schema_migrations` row.
 
 Under the hood these call `golang-migrate`'s CLI via `go run`, against `$POSTGRES_DSN` (see `.env.example`). Migrations run as an explicit step, never automatically on service start (RFC §5.8) — an API replica starting mid-rolling-restart must not race another replica to alter a table.
 
-Test code (`libs/testenv`) runs the same four migration sets, in the same order, against each test's own ephemeral `testcontainers-go` Postgres — see that package for why tests always apply every service's schema regardless of which module is under test (fixtures commonly span schemas).
+Test code (`libs/testenv`) runs the same five migration sets, in the same order, against each test's own ephemeral `testcontainers-go` Postgres — see that package for why tests always apply every service's schema regardless of which module is under test (fixtures commonly span schemas).
 
 ## Rules for adding a migration
 

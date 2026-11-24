@@ -709,6 +709,10 @@ Aggregates stay in PostgreSQL rather than MongoDB (ADR-0004) so reconciliation i
 
 Reconciliation queries becoming expensive enough to affect transactional performance, which would push toward incremental-only with periodic sampled verification.
 
+### Implementation note (Week 3, 2026-11-19)
+
+The reconciliation this ADR calls for is built. `analytics.NewReconciler(db, rdb).Run` recomputes the platform snapshot, every course's stats row and its daily buckets from the event-fed mirrors and rebuilds the Most Popular Courses sorted set; the worker runs it every 60 seconds through the Asynq scheduler. Safety against the relay's handlers: the recompute functions take the `course_stats` / `platform_snapshot` row lock first and read the mirror afterwards, so a writer that waited for the lock sees what the other committed and cannot write back a stale total (lock order is always course stats, then platform snapshot); a second concurrent `Run` waits on a transaction-scoped advisory lock and redoes the same idempotent work. A deterministic test pins the lock-then-read order; a randomised concurrency test checks only that there is no deadlock or error. The earlier statement in the first implementation that reconciliation "does not exist yet" no longer holds. Search-index and cache reconciliation (ADR-0025's gap) remain unbuilt.
+
 ---
 
 ## ADR-0018 — Docker Compose profiles for tiered local development

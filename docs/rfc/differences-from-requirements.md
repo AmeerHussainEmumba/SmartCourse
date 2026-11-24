@@ -44,6 +44,8 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-021](#dr-021--the-analytics-metric-count-is-nine-not-ten) | The analytics metric count is nine, not ten | Correction | Accepted |
 | [DR-022](#dr-022--limits-and-behaviours-chosen-during-the-bug-fix-pass-confirmed) | Limits and behaviours chosen during the bug-fix pass, confirmed | Clarification | Accepted |
 | [DR-023](#dr-023--idempotency-key-scope-and-replay-semantics) | `Idempotency-Key` scope and replay semantics | Clarification | Proposed |
+| [DR-024](#dr-024--analytics-ownership-and-the-metric-count-after-week-3) | Analytics ownership gate, nullable owner, and 8 of 9 metrics | Clarification | Proposed |
+| [DR-025](#dr-025--certificates-and-notification-design-choices) | Certificates and notification design choices | Clarification | Proposed |
 
 ---
 
@@ -402,7 +404,7 @@ The PRD (FR-5 and its traceability row), RFC §21.0 and §A, `services/analytics
 
 ### Why this is logged, and what changed
 
-Same category as DR-007, DR-015 and DR-017: a correction to our own status claims, not a baseline deviation. The count is now "nine" in the documents above, and progress is **7 of 9**. Verified against the code on 2026-11-17: total students, total instructors, total courses published and average courses per student are in `platform_snapshot`; completion rate and average completion time are in `course_stats`; new enrollments over time are in `daily_enrollments`. **Most popular courses** and **failed events / workflow issues** are not implemented.
+Same category as DR-007, DR-015 and DR-017: a correction to our own status claims, not a baseline deviation. The count is now "nine" in the documents above, and progress was **7 of 9** on 2026-11-17 (8 of 9 after Week 3, see DR-024). Verified against the code on 2026-11-17: total students, total instructors, total courses published and average courses per student are in `platform_snapshot`; completion rate and average completion time are in `course_stats`; new enrollments over time are in `daily_enrollments`. **Most popular courses** and **failed events / workflow issues** are not implemented.
 
 ### If this turns out to be wrong
 
@@ -425,7 +427,7 @@ The 38-defect fix pass (module-split-findings.md) left several values and behavi
 | Route limits (F-15) | 5 per minute: register, password-reset request, verification resend. 20: login. 30: password-reset confirm, verification confirm. 60: refresh, logout |
 | HTTP hardening (F-29) | `MAX_BODY_BYTES` 1 MiB; read timeout 15 s, write timeout 30 s, idle timeout 120 s; all overridable by environment variable |
 | Argon2 (F-26) | Defaults 64 MiB, 3 iterations, parallelism 2; values outside the validated range stop the service starting |
-| Analytics (F-18) | Any authenticated user reads platform totals; a student reads per-course stats only for a course they are actively or completed-enrolled in, and a withdrawn student gets 404; instructors may read any course (ownership not enforced, see the assessment) |
+| Analytics (F-18) | Any authenticated user reads platform totals; a student reads per-course stats only for a course they are actively or completed-enrolled in, and a withdrawn student gets 404; instructors may read any course (ownership not enforced, see the assessment) | **Superseded in Week 3 for instructors by DR-024:** an instructor now reads only the courses they own.
 | Admin role (F-33) | An admin may demote themselves when another active admin exists; otherwise 409 `last_admin` |
 | Ownership (F-36) | A non-owner of an existing course gets 404 `not_found`, identical to an unknown id (an API contract change from 403 `not_owner`) |
 
@@ -464,6 +466,58 @@ The RFC names the header but not these edges. A reviewer may want 4xx responses 
 ### If this turns out to be wrong
 
 Storing 4xx responses is a change to one predicate in `libs/idempotency` (`storable`). Wrapping more routes is passing the middleware to `RegisterRoutes`.
+
+---
+
+## DR-024 — Analytics ownership and the metric count after Week 3
+
+**Category:** Clarification · **Date:** 2026-11-19 · **Related:** DR-017, DR-021, DR-022 (F-18), RFC §9, `services/analytics/analytics/README.md`
+
+### What was chosen
+
+| Area | Choice |
+|---|---|
+| Per-course ownership | An instructor reads per-course analytics only for courses they own, using `instructor_id` from `course.course_published` (admins read any course; students keep the DR-022 enrollment rule). Any other caller gets 404, identical to an unknown course (F-36). This replaces the earlier "instructors may read any course" rule |
+| Courses published before the migration | `course_mirror.instructor_id` is nullable and analytics cannot read the course schema (ADR-0024), so there is no backfill. Such a course is readable by admins only until its next `course_published` event fills the owner. An event without `instructor_id` never erases a recorded owner |
+| Behaviour change | An instructor asking about a course analytics has not seen now gets 404 instead of zeros |
+| Most Popular Courses | `GET /analytics/popular-courses`: ranks published courses by active plus completed enrollments, served from a Redis sorted set that the reconciler rebuilds, falling back to Postgres when Redis is absent, down, slow or empty. Any authenticated user may read it; it returns course ids and counts only (no title, because the mirror holds none). Archived courses stay in the ranking, because `course_mirror.published` is never cleared |
+| Reconciliation | `analytics.NewReconciler(db, rdb).Run` recomputes the platform snapshot, every course's stats and the daily buckets from the mirrors; the worker runs it every 60 s. `daily_enrollments` is now rebuilt by it as well as counted on events |
+| Metric count | 8 of the 9 FR-5 metrics are live. The ninth, Failed Events / Workflow Issues, has an admin-only route that answers 503 until a source is attached |
+
+### Why this is logged
+
+The baseline names the metrics but not who may see per-course figures, and the owner cannot be backfilled across a schema boundary. A reviewer may prefer a one-off republish to fill owners sooner, or a different fallback for ownerless rows.
+
+### If this turns out to be wrong
+
+The ownership rule is one predicate in the service; a republish of existing courses fills the owner column.
+
+---
+
+## DR-025 — Certificates and notification design choices
+
+**Category:** Clarification · **Date:** 2026-11-19 · **Related:** RFC §8.3, §8.4, ADR-0014, DR-008, DR-015, `services/course/certificate/README.md`, `services/worker/notification/README.md`
+
+### What was chosen
+
+| Area | Choice |
+|---|---|
+| Certificate table | The `certificates` table already existed (migration 000003) and was unused; migration 000007 alters it: adds `student_id`, `course_id` and a nullable `course_version_id`, a CHECK on the verification code format, two indexes, and backfills the ids from enrollments. The RFC's column list had none of these; they make "my certificates" and the owner check single indexed reads |
+| Issuing | One certificate per enrollment (`UNIQUE(enrollment_id)`, `ON CONFLICT DO NOTHING`), idempotent under duplicate and concurrent delivery. The student's name comes from `instructor_mirror`; if it is not mirrored yet the handler errors so the relay retries rather than issuing a nameless certificate |
+| Revocation | None. An issued certificate survives a completed enrollment returning to `active` (RFC §8.3/§8.4). Today nothing moves `completed` back to `active` |
+| Unknown or withdrawn enrollment | The completion event is acknowledged with a logged warning, because a retry cannot help and an error would only cycle the row until the relay gives up. This is a stopgap until the dead-letter store parks such events |
+| Public verification | `GET /certificates/verify/{code}` is unauthenticated, rate-limited (30 per minute per IP), and returns only course title, student name and issue date. A malformed code is a 400 with no database read |
+| Notification enqueue | Notification handlers only write delivery rows; they do not enqueue. The relay commits a handler's transaction after the handler returns and has no after-commit hook, so an enqueue inside a handler could fire for a rolled-back transaction. A sweeper (`EnqueuePending`) is the single enqueue path and also repairs a crash between commit and enqueue. A row can be enqueued twice; the delivery claim makes that harmless |
+| Duplicate sends | A small duplicate-send window remains by design: the send succeeded but marking it sent failed, a send outlived its lease, or the connection dropped after DATA. It is documented, not denied |
+| Mail provider | A local SMTP sink (Mailpit) only. No real mail provider is integrated (DR-008, DR-015, plan section 9) |
+
+### Why this is logged
+
+None of these are specified by the baseline. They are choices a reviewer may reasonably want different, especially the certificate columns and the sweeper-only enqueue path.
+
+### If this turns out to be wrong
+
+Each choice is local: the certificate columns are one migration, the enqueue path is one package, and the unknown-enrollment behaviour is a branch in `IssueForCompletion`.
 
 ---
 
