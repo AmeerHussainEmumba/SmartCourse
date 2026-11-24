@@ -62,7 +62,7 @@ func TestMetricsServer_ServesOnlyMetrics(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != want {
 			t.Errorf("GET %s = %d, want %d", path, resp.StatusCode, want)
 		}
@@ -79,7 +79,7 @@ func TestServeMetrics_BindFailureReturnsWithoutPanic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	srv := newMetricsServer(l.Addr().String(), http.NotFoundHandler())
 
 	done := make(chan struct{})

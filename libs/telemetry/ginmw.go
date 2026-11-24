@@ -16,6 +16,9 @@ import (
 // It is a constant so scanners probing random paths cannot create series.
 const UnmatchedRoute = "unmatched"
 
+// untraced are the routes HTTPTracing skips (see its doc).
+var untraced = map[string]bool{"/metrics": true, "/health/live": true, "/health/ready": true}
+
 // otherMethod labels request methods outside the standard set.
 const otherMethod = "OTHER"
 
@@ -24,8 +27,16 @@ const otherMethod = "OTHER"
 // span named "METHOD route-template". 5xx responses and handler errors mark
 // the span failed. Mount it after request-ID and before logging so the logger
 // can read the trace id from the request context.
+//
+// Probe and scrape routes (/metrics, /health/live, /health/ready) are not
+// traced: Prometheus and the orchestrator hit them every few seconds forever,
+// and each would be a one-span trace that buries the real ones.
 func HTTPTracing() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if untraced[c.FullPath()] {
+			c.Next()
+			return
+		}
 		ctx := propagator.Extract(c.Request.Context(), propagation.HeaderCarrier(c.Request.Header))
 		method := methodLabel(c.Request.Method)
 		ctx, span := tracer().Start(ctx, method,
