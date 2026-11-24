@@ -26,17 +26,10 @@ cd "$(dirname "$0")/.."
 dir=${1:-test/e2e}
 
 # <id> <owning phase>: the specs allowed to be pending, and who builds them.
-# E02 is the trace scenario (Phase 7, covered by a test in the worker package);
-# E08 to E14 are the second adversarial pass on the harness (Phase 8).
+# None today: E02 and E08 to E14 were implemented by Phase 8 (container tier, tag
+# e2e), so a pending spec is a regression. Add a line here only for a spec that
+# is deliberately skipped again, with the phase that owns it.
 ALLOWED="
-E02 Phase-7
-E08 Phase-8
-E09 Phase-8
-E10 Phase-8
-E11 Phase-8
-E12 Phase-8
-E13 Phase-8
-E14 Phase-8
 "
 
 files=$(find "$dir" -maxdepth 1 -name '*_test.go' | sort)

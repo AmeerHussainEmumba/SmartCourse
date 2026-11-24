@@ -2,12 +2,10 @@
 
 package e2e_test
 
-import "testing"
-
-// The tests in the scenarios_*_test.go files are the executable form of
-// docs/plans/week-3.md section 5 (E1 to E14). Each is a skipped spec today:
-// its doc comment is the exact procedure, so the engineer who builds the
-// phase it names can implement it without guessing. Rules for all of them:
+// The tests in the scenarios_*_e2e_test.go files are the executable form of
+// docs/plans/week-3.md section 5 (E1 to E14). They began as skipped specs whose
+// doc comment is the exact procedure; all fourteen are implemented now, and the
+// comment stays above each test. Rules for all of them:
 //
 //   - Black box. HTTP in; assertions on HTTP responses, Kafka topics, MongoDB,
 //     Redis, Mailpit, Jaeger and /metrics out. No calls into service packages.
