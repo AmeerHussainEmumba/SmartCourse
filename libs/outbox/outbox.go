@@ -18,7 +18,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
 	"gorm.io/gorm"
+
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
 )
 
 // Row mirrors the `outbox` table (migrations/platform/000002_platform.up.sql
@@ -56,14 +59,15 @@ type Event struct {
 	Headers map[string]any
 	// TraceID and SpanID are the W3C trace-context ids (lowercase hex, 32 and
 	// 16 chars) of the request that caused the event (RFC §6.4, §12.2). Empty
-	// means "no trace context" and is stored as NULL. Callers that predate
-	// these fields leave them empty and behave exactly as before. This
-	// package does not validate or generate them; libs/telemetry supplies
-	// them.
+	// means "no trace context" and is stored as NULL. Write fills them from
+	// the span in ctx when the caller leaves them empty, so callers need not
+	// set them; a value the caller does set wins.
 	TraceID string
 	SpanID  string
 	// ActorID is the authenticated user who caused the event, for audit
-	// (RFC §6.4). Nil means system-originated and is stored as NULL.
+	// (RFC §6.4). Nil means system-originated and is stored as NULL, unless ctx
+	// carries an authenticated identity (libs/auth), which Write then uses; an
+	// ActorID the caller sets wins.
 	ActorID *uuid.UUID
 }
 
@@ -72,6 +76,12 @@ type Event struct {
 // row and the state-change rows commit or roll back together, so a crash
 // between "state changed" and "event published" is structurally
 // impossible — there is no such window.
+//
+// Trace and actor context are taken from ctx when the caller left them unset:
+// the active span supplies TraceID and SpanID, the authenticated identity
+// supplies ActorID. Values the caller sets are never overwritten. With no span
+// or identity in ctx (a background job, tracing disabled) the columns stay
+// NULL, exactly as before.
 func Write(ctx context.Context, tx *gorm.DB, evt Event) error {
 	payload, err := json.Marshal(evt.Payload)
 	if err != nil {
@@ -82,6 +92,8 @@ func Write(ctx context.Context, tx *gorm.DB, evt Event) error {
 		return fmt.Errorf("marshal outbox headers: %w", err)
 	}
 
+	traceID, spanID, actorID := contextIDs(ctx, evt)
+
 	row := Row{
 		EventID:       uuid.New(), // dedup key for at-least-once delivery (RFC §6.4) — random UUID is fine, not UUIDv7; ordering comes from `id`, not this
 		AggregateType: evt.AggregateType,
@@ -91,9 +103,9 @@ func Write(ctx context.Context, tx *gorm.DB, evt Event) error {
 		Payload:       payload,
 		Headers:       headers,
 		OccurredAt:    time.Now().UTC(),
-		TraceID:       nullIfEmpty(evt.TraceID),
-		SpanID:        nullIfEmpty(evt.SpanID),
-		ActorID:       evt.ActorID,
+		TraceID:       nullIfEmpty(traceID),
+		SpanID:        nullIfEmpty(spanID),
+		ActorID:       actorID,
 	}
 	if err := tx.WithContext(ctx).Create(&row).Error; err != nil {
 		return fmt.Errorf("write outbox row: %w", err)
@@ -106,4 +118,23 @@ func nullIfEmpty(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// contextIDs resolves the trace, span and actor to store: what the caller set,
+// otherwise what ctx carries. A trace id and span id are taken from the same
+// source so a row never mixes a caller's trace with the context's span.
+func contextIDs(ctx context.Context, evt Event) (traceID, spanID string, actorID *uuid.UUID) {
+	traceID, spanID, actorID = evt.TraceID, evt.SpanID, evt.ActorID
+	if traceID == "" && spanID == "" {
+		if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+			traceID, spanID = sc.TraceID().String(), sc.SpanID().String()
+		}
+	}
+	if actorID == nil {
+		if id, ok := auth.FromContext(ctx); ok && id.UserID != uuid.Nil {
+			u := id.UserID
+			actorID = &u
+		}
+	}
+	return traceID, spanID, actorID
 }
