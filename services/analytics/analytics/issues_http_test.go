@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -127,6 +128,41 @@ func TestIssues_SourcesNotWired_Is503NotAZero(t *testing.T) {
 	// Non-admins are still refused before anything about the wiring is revealed.
 	if rec := s.get(issuesPath, s.token("student")); rec.Code != 403 {
 		t.Errorf("student with unwired sources: want 403, got %d", rec.Code)
+	}
+}
+
+// A source whose store is unreachable is a degraded dependency: 503, with the
+// cause (host, port) kept out of the body.
+func TestIssues_SourceUnavailable_Is503(t *testing.T) {
+	s := issuesEnv(t, &fakeFailedEvents{err: fmt.Errorf("%w: dial tcp 10.0.0.5:27017: refused", analytics.ErrSourceUnavailable)}, nil)
+	rec := s.get(issuesPath, s.token("admin"))
+	if rec.Code != 503 || strings.Contains(rec.Body.String(), "10.0.0.5") {
+		t.Fatalf("want 503 without the cause, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Failed events alone are enough: the workflow section is null (unavailable),
+// not a made-up zero, and the new fields are reported.
+func TestIssues_WithoutWorkflowSource_ReportsNullWorkflowSection(t *testing.T) {
+	age := int64(42)
+	s := issuesEnv(t, &fakeFailedEvents{sum: &analytics.FailedEventsSummary{
+		Total: 3, Unresolved: 2, Replayed: 1, ByConsumer: map[string]int64{"analytics": 2}, OldestUnresolvedAgeSeconds: &age,
+	}}, nil)
+	rec := s.get(issuesPath, s.token("admin"))
+	var raw map[string]json.RawMessage
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &raw) != nil {
+		t.Fatalf("want 200 JSON, got %d %s", rec.Code, rec.Body.String())
+	}
+	if string(raw["workflow_issues"]) != "null" {
+		t.Errorf("workflow_issues = %s, want null", raw["workflow_issues"])
+	}
+	var fe struct {
+		Replayed   int64            `json:"replayed"`
+		ByConsumer map[string]int64 `json:"by_consumer"`
+		Age        *int64           `json:"oldest_unresolved_age_seconds"`
+	}
+	if err := json.Unmarshal(raw["failed_events"], &fe); err != nil || fe.Replayed != 1 || fe.ByConsumer["analytics"] != 2 || fe.Age == nil || *fe.Age != 42 {
+		t.Errorf("failed_events = %s (%v)", raw["failed_events"], err)
 	}
 }
 

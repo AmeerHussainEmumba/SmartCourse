@@ -52,7 +52,7 @@ func main() {
 		os.Exit(1)
 	}
 	router.RegisterHealth(r, deps.HealthCheckers())
-	registerRoutes(r, deps, cfg)
+	closeRoutes := registerRoutes(r, deps, cfg)
 
 	srv := router.NewServer(fmt.Sprintf(":%d", cfg.HTTPPort), r, router.ServerOptions{
 		ReadTimeout:  cfg.HTTPReadTimeout,
@@ -75,6 +75,7 @@ func main() {
 	logger.Info("shutting down analytics-api")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	defer closeRoutes(shutdownCtx)
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", slog.Any("error", err))
 	}

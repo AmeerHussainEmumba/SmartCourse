@@ -14,9 +14,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mod=github.com/AmeerHussainEmumba/SmartCourse
 
+# analytics-api MAY link libs/mongostore (ADR-0031 deviation note): the Failed
+# Events metric is served from failed_events. identity-api stays forbidden, and
+# so does every other forbidden prefix below; course-api's rule is unchanged.
 rules=(
   "services/identity  identity-api  services/course,services/analytics,services/worker,libs/temporal,libs/mongostore,libs/asynqx,libs/kafka  yes"
-  "services/analytics analytics-api services/identity,services/course,services/worker,libs/temporal,libs/mongostore,libs/asynqx,libs/kafka   yes"
+  "services/analytics analytics-api services/identity,services/course,services/worker,libs/temporal,libs/asynqx,libs/kafka   yes"
   "services/course    course-api    services/identity,services/analytics,services/worker                no"
   "services/worker    worker        services/identity                                                   no"
 )

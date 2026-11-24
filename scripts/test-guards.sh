@@ -135,6 +135,34 @@ d=$(fresh c9); rm -rf "$d/libs/ratelimit"
 expect_fail "standalone build of identity fails when a replaced lib is missing" "ratelimit|no such file|reading" "$d/services/identity" env GOWORK=off go build ./...
 
 echo
+echo "== inject: identity-api imports libs/mongostore (still forbidden) =="
+d=$(fresh c11)
+cat >"$d/services/identity/cmd/identity-api/zz_inject.go" <<EOF
+package main
+
+import _ "$mod/libs/mongostore"
+EOF
+add_dep "$d/services/identity" libs/mongostore ../../libs/mongostore
+if tidy_offline "$d/services/identity"; then
+  expect_fail "link graph rejects identity-api -> libs/mongostore" "FAIL identity-api links packages it must not" "$d" scripts/check-link-graph.sh
+else skp "identity-api imports mongostore (go mod tidy offline failed: ${TIDY_ERR##*$'\n'})"; fi
+
+echo
+echo "== inject: analytics-api imports libs/mongostore (allowed, ADR-0031) and libs/asynqx (forbidden) =="
+d=$(fresh c12)
+out=$(cd "$d" && scripts/check-link-graph.sh 2>&1)
+if grep -q "^ok   analytics-api" <<<"$out"; then ok "link graph lets analytics-api link libs/mongostore (it does on the clean tree)"; else bad "link graph rejects analytics-api"; echo "$out" | tail -5 | sed 's/^/        /'; fi
+cat >"$d/services/analytics/cmd/analytics-api/zz_inject.go" <<EOF
+package main
+
+import _ "$mod/libs/asynqx"
+EOF
+add_dep "$d/services/analytics" libs/asynqx ../../libs/asynqx
+if tidy_offline "$d/services/analytics"; then
+  expect_fail "link graph rejects analytics-api -> libs/asynqx" "FAIL analytics-api links packages it must not" "$d" scripts/check-link-graph.sh
+else skp "analytics-api imports asynqx (go mod tidy offline failed: ${TIDY_ERR##*$'\n'})"; fi
+
+echo
 echo "== known weakness probe (informational, not counted as pass/fail) =="
 d=$(fresh c10)
 printf '\nrequire %s/services/course v0.0.0\n' "$mod" >>"$d/services/identity/go.mod"
