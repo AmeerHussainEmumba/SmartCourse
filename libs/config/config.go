@@ -25,6 +25,7 @@ type Config struct {
 	MinIO    MinIOConfig
 	Temporal TemporalConfig
 	Relay    RelayConfig
+	SMTP     SMTPConfig
 
 	JWT   JWTConfig
 	Argon Argon2Config
@@ -280,6 +281,10 @@ func Load() (*Config, error) {
 	if msg := relayPoolError(cfg.Postgres.MaxOpenConns, cfg.Relay.Workers); msg != "" {
 		errs = append(errs, msg)
 	}
+
+	var smtpErrs []string
+	cfg.SMTP, smtpErrs = loadSMTP()
+	errs = append(errs, smtpErrs...)
 
 	if len(cfg.JWT.SigningKey) < 32 {
 		// Only enforced once the key is present; the presence check above

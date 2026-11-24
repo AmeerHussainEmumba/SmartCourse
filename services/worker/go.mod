@@ -96,7 +96,6 @@ require (
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
-	github.com/testcontainers/testcontainers-go v0.44.0 // indirect
 	github.com/testcontainers/testcontainers-go/modules/mongodb v0.44.0 // indirect
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0 // indirect
 	github.com/testcontainers/testcontainers-go/modules/redis v0.44.0 // indirect
@@ -136,6 +135,7 @@ require (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/testenv v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/services/analytics v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/services/course v0.0.0
+	github.com/testcontainers/testcontainers-go v0.44.0
 )
 
 replace (
