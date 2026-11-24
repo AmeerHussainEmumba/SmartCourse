@@ -789,8 +789,24 @@ func (s *Service) PromoteAndPublish(ctx context.Context, courseID, versionID uui
 // oversight"). Called by the workflow with the triggering activity's error
 // message; never from the HTTP path, which only ever starts a publish, not
 // fails one.
-func (s *Service) MarkPublishFailed(ctx context.Context, versionID uuid.UUID, reason string) error {
-	if err := s.repo.UpdateVersionState(ctx, versionID, StatePublishFailed, &reason); err != nil {
+//
+// It writes course.publish_failed in the same transaction as the transition,
+// and only when the version was not already publish_failed: Temporal retries
+// this activity (retry5x), and a retry after a committed first attempt must
+// not emit a second event. failedActivity names the workflow activity whose
+// final failure ended the publish.
+func (s *Service) MarkPublishFailed(ctx context.Context, versionID uuid.UUID, reason, failedActivity string) error {
+	// Postgres text rejects invalid UTF-8 and NUL; an activity error that
+	// carried either would otherwise fail this step on every retry.
+	reason = strings.ReplaceAll(strings.ToValidUTF8(reason, ""), "\x00", "")
+	err := s.repo.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		changed, err := s.repo.WithTx(tx).FailVersion(ctx, versionID, reason)
+		if err != nil || !changed {
+			return err
+		}
+		return s.writePublishFailed(ctx, tx, versionID, failedActivity, reason)
+	})
+	if err != nil {
 		return apperrors.ErrInternal.Wrap(err)
 	}
 	return nil

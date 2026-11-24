@@ -410,7 +410,7 @@ func TestAdvPublish_PartialPipelineLeavesLiveVersionUntouched(t *testing.T) {
 		t.Fatalf("course_published events before the second promote: %d", n)
 	}
 	// MarkPublishFailed then leaves the draft retryable.
-	if err := svc.MarkPublishFailed(ctx, v2, "boom"); err != nil {
+	if err := svc.MarkPublishFailed(ctx, v2, "boom", "BuildOutline"); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := svc.GetPublishStatus(ctx, courseID, instr)

@@ -42,7 +42,7 @@ func TestBugrepro_SearchIndexesUnpublishedCourse_BeforePromote(t *testing.T) {
 		t.Fatal(err)
 	}
 	// the workflow now fails (e.g. WarmCache exhausts its retries) -> MarkPublishFailed
-	if err := svc.MarkPublishFailed(ctx, draft, "warm cache failed"); err != nil {
+	if err := svc.MarkPublishFailed(ctx, draft, "warm cache failed", "WarmCache"); err != nil {
 		t.Fatal(err)
 	}
 

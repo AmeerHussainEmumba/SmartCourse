@@ -110,7 +110,14 @@ func failPublish(ctx workflow.Context, versionID uuid.UUID, cause error) error {
 	if errors.As(cause, &appErr) {
 		reason = appErr.Message()
 	}
+	// The name of the activity whose final failure ended the publish, for
+	// course.publish_failed. Empty when the cause is not an activity failure.
+	var failedActivity string
+	var actErr *temporal.ActivityError
+	if errors.As(cause, &actErr) {
+		failedActivity = actErr.ActivityType().GetName()
+	}
 	failCtx := workflow.WithActivityOptions(ctx, withRetry(retry5x))
-	_ = workflow.ExecuteActivity(failCtx, a.MarkPublishFailed, versionID, reason).Get(ctx, nil)
+	_ = workflow.ExecuteActivity(failCtx, a.MarkPublishFailed, versionID, reason, failedActivity).Get(ctx, nil)
 	return cause
 }
