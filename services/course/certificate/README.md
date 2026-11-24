@@ -37,7 +37,7 @@ A 200 from the public route means "this certificate was issued", not "the holder
 
 ## Not built here
 
-- **No `progress.certificate_issued` event.** RFC §4.6 lists `CertificateIssued` for the archive and notifications, but `libs/events` has no schema or catalog entry for it, so writing the outbox row now would produce an event the codec cannot encode. Add the proto and catalog entry, then write the outbox row in `IssueForCompletion`'s transaction when `OutcomeIssued`.
+- **`progress.certificate_issued` (DR-026, 2026-11-24).** `IssueForCompletion` writes it (`CertificateIssuedPayload`: certificate id, enrollment, student, course, course title, `issued_at`) in the transaction that inserts the certificate, only when the outcome is `issued`: a replay, a duplicate with a new event id, a concurrent delivery that lost the insert and a skipped event write none (`TestIssue_*`, including 20 concurrent deliveries and a rollback). The verification code is deliberately not in the payload (a bearer token; it would land in Kafka and the permanent archive). The notification dispatcher mails the student from it. Certificates issued before this change have no event and were not mailed.
 - No rendered PDF (A3), no admin re-issue or revoke.
 - No audit-log row for issuance (RFC §5.4 lists it; `audit_log` is Mongo, Week 3 Phase 4).
 

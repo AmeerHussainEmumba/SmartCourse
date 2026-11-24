@@ -10,7 +10,9 @@ Lesson-level progress and course completion (RFC §4.3, §8.3).
 
 **Completion is checked against the CURRENT published version, not the version the student enrolled in** (RFC assumption A5). If an instructor republishes a course with a new lesson, a previously-completed student can correctly move back to incomplete — `isFullyComplete` in `repository.go` always counts lessons in `courses.published_version_id` at check time, never a version pinned at enrollment.
 
-**Certificate issuance is not implemented here yet — deliberately, matching the RFC's own milestone plan.** RFC §8.4 specifies certificates are issued asynchronously, triggered by the `CourseCompleted` event via a Kafka consumer — infrastructure that's explicitly M3 scope (RFC §21). `MarkComplete` already writes the `progress.course_completed` outbox event on every transition, so M3's consumer has something to consume from day one; it just doesn't exist yet. This is not a silent gap — see the comment in `service.go`'s `MarkComplete`.
+**Certificate issuance is not part of `MarkComplete`.** RFC §8.4 makes it asynchronous: `services/course/certificate` consumes `progress.course_completed` as a relay handler and writes `progress.certificate_issued` in the transaction that inserts the certificate.
+
+**Events written (outbox, aggregate `enrollment`, key `enrollment_id`).** `progress.lesson_completed` (`LessonCompletedPayload`: enrollment, student, lesson key, `completed_at`) is written when `markLessonComplete` changes a row, in the same transaction, so a lesson completes and is announced once: an idempotent repeat (RFC §8.3), a repeat on an already completed enrollment, a concurrent duplicate and a rejected request write nothing (added 2026-11-24, DR-026; lessons completed before that have no event). When the completion finishes the course it is followed by `progress.course_completed` (`CourseCompletedPayload`, unchanged on the wire). The payload structs live in `events.go`; this module does not import `libs/events`, and `services/worker/cmd/worker/payload_contract_test.go` runs them through the transport's strict codec so a drift from the schema fails in CI.
 
 ## Endpoints
 

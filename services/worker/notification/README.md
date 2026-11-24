@@ -28,8 +28,10 @@ Delivery statuses: `pending`, `sending`, `sent`, `parked` (recipient unknown, pr
 | `enrollment.student_enrolled` | enrollment confirmation | the student |
 | `progress.course_completed` | congratulation | the student |
 | `course.course_published` | "is now published" | the instructor (`instructor_id`; older events without it notify nobody) |
+| `progress.certificate_issued` | "your certificate for ... has been issued" (no verification code) | the student |
+| `course.publish_failed` | "publishing ... failed", naming the failed step and a bounded reason | the instructor (`instructor_id`; an event without it notifies nobody) |
 
-`course.course_archived` is not consumed: the RFC's event table has no notification column for it and the event carries no recipient. `identity.user_profile_updated` only refreshes the recipient mirror. RFC rows for `CoursePublishFailed` and `CertificateIssued` have no event in `libs/events` yet and are not built.
+`course.course_archived` is not consumed: the RFC's event table has no notification column for it and the event carries no recipient. `identity.user_profile_updated` only refreshes the recipient mirror. The RFC rows for `CoursePublishFailed` (instructor job) and `CertificateIssued` (delivery job) are built (DR-026, 2026-11-24). Both templates escape every interpolated value in the HTML part, the subject carries only the course title (cleaned to one line and capped), and the publish-failed reason appears only in the body, flattened to one line and capped at 500 characters. One delivery per event, as for the other kinds; an unknown recipient is parked. Events written before this change were not mailed.
 
 `student_enrolled` and `course_completed` carry ids, not emails, so the module keeps its own mirror (`migrations/notification`, schema `notification`): `recipients` (id, email, name, status, `last_event_id`), `course_titles`, `enrollment_courses`. It never reads `identity` or `course` tables (ADR-0024). The name is only overwritten by an event with a higher outbox id, the same out-of-order guard as `analytics.user_role_mirror`; a profile update that beats the registration creates the row without an email, and the email is filled in when the registration arrives. SQL is qualified `notification.` because the worker's `search_path` also contains `analytics` and `course`.
 
@@ -74,6 +76,10 @@ The sweeper enqueues a delivery seconds after the handler wrote its row, from a 
 4. **Enqueuer:** an adapter implementing `Enqueue(ctx, taskType, payload)` over `libs/asynqx`; it must treat an already-queued duplicate as success.
 5. **Sweep:** `go notification.RunSweeper(ctx, db, enqueuer, 2*time.Second, notification.SweepOptions{})` (it calls `EnqueuePending` on a ticker, logs failures and keeps going), started once at worker boot so rows committed before a restart are picked up immediately.
 6. **Compose (worker service):** `SMTP_HOST=mailpit`, `SMTP_PORT=1025`; optional `SMTP_FROM`. No credentials are needed for Mailpit.
+
+## Retry timing (E07)
+
+A failed send puts the row back to `pending` and returns the error; the queue retries it with its backoff. The sweeper does not re-enqueue it early (`TestFailedSend_IsNotReEnqueuedBySweepBeforeRequeueAfter`: a pending row enqueued within `RequeueAfter`, 5 minutes, is left alone). The retry gaps the E2E run saw (about 2 s, then about 6 s, flat instead of doubling) came from Asynq's 5-second delayed-task check, fixed in `libs/asynqx` (`DefaultDelayedTaskCheckInterval`, 1 s). Not covered here: a task that exhausts its retries and is archived keeps its task id, so the sweeper's later re-enqueue of the still-pending row is reported as a duplicate and does not run it again (inferred from Asynq's id-conflict behaviour, not tested).
 
 ## Tests
 
