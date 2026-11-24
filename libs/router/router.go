@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/httpx"
 )
@@ -29,6 +30,13 @@ type Options struct {
 	// HSTS forces Strict-Transport-Security; it is always sent for requests
 	// that arrive over TLS.
 	HSTS bool
+	// Observe is middleware mounted right after the request ID and security
+	// headers and before the access logger: tracing and request metrics
+	// (libs/telemetry HTTPTracing and HTTPMetrics). Running before the logger
+	// puts the request span in the context the logger reads, so the access
+	// log line carries trace_id (RFC §12.4); running outside Recovery means a
+	// recovered panic is recorded as the 500 it answers. Empty means none.
+	Observe []gin.HandlerFunc
 }
 
 // New builds a Gin engine with the standard middleware chain and the safe
@@ -60,6 +68,7 @@ func NewWithOptions(o Options) (*gin.Engine, error) {
 	}
 	r.Use(httpx.RequestID())
 	r.Use(httpx.SecurityHeaders(o.HSTS))
+	r.Use(o.Observe...)
 	r.Use(requestLogger())
 	r.Use(gin.Recovery())
 	r.Use(httpx.MaxBodyBytes(o.MaxBodyBytes))
@@ -103,20 +112,25 @@ func NewServer(addr string, h http.Handler, o ServerOptions) *http.Server {
 }
 
 // requestLogger emits one structured line per request (RFC §12.4): method,
-// path, status, latency, request_id. Detail beyond that lives in traces
-// (§12.2, wired in M4), not in this log line.
+// path template, status, latency, request_id, plus trace_id and span_id when
+// a request span is active (Options.Observe). Detail beyond that lives in
+// traces (§12.2), not in this log line.
 func requestLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
 
-		slog.Info("request",
+		attrs := []any{
 			slog.String("method", c.Request.Method),
 			slog.String("path", c.FullPath()),
 			slog.Int("status", c.Writer.Status()),
 			slog.Duration("latency", time.Since(start)),
 			slog.String("request_id", httpx.RequestIDFromContext(c)),
-		)
+		}
+		if sc := trace.SpanContextFromContext(c.Request.Context()); sc.IsValid() {
+			attrs = append(attrs, slog.String("trace_id", sc.TraceID().String()), slog.String("span_id", sc.SpanID().String()))
+		}
+		slog.Info("request", attrs...)
 	}
 }
 
