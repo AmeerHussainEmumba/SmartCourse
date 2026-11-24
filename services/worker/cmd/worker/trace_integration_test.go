@@ -28,6 +28,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka/topics"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/router"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/enrollment"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/notification"
@@ -49,6 +50,7 @@ type pipeline struct {
 	course  uuid.UUID
 	token   string
 	rl      *relay.Relay
+	kafka   *testenv.KafkaEnv // nil in-process
 
 	mu   sync.Mutex
 	sent []notification.Message
@@ -59,6 +61,14 @@ type pipeline struct {
 // Observe is given no endpoint, so it installs no provider and no hooks.
 func startPipeline(t *testing.T, mode string, tracing bool) *pipeline {
 	t.Helper()
+	return startPipelineWith(t, mode, tracing, nil)
+}
+
+// startPipelineWith is startPipeline with the dead-letter sink built by sinkFor
+// from the pipeline's Metrics, as main builds it from startTelemetry's
+// (nil keeps a recording sink), and extra handlers registered on the relay.
+func startPipelineWith(t *testing.T, mode string, tracing bool, sinkFor func(*telemetry.Metrics) relay.DeadLetterSink, extra ...relay.Handler) *pipeline {
+	t.Helper()
 	p := &pipeline{t: t, env: testenv.Setup(t)}
 	conn := p.env.OpenWithSearchPath(t, "platform,course,analytics,public")
 	p.deps = &infra.Dependencies{DB: conn, RDB: p.env.RDB}
@@ -66,9 +76,9 @@ func startPipeline(t *testing.T, mode string, tracing bool) *pipeline {
 	p.cfg.Env = "test"
 	p.cfg.Relay.Workers = 3
 	p.cfg.JWT = config.JWTConfig{SigningKey: "test-signing-key-at-least-32-bytes-long!!", Issuer: "smartcourse-test", AccessTokenTTL: 15 * time.Minute}
-	useTransport(t, p.cfg, mode)
+	p.kafka = useTransport(t, p.cfg, mode)
 	p.cfg.Telemetry = config.TelemetryConfig{SampleRatio: 1, MetricsEnabled: true}
-	opts := infra.ObserveOptions{Service: "worker", Outbox: true, Workflows: true}
+	opts := infra.ObserveOptions{Service: "worker", Outbox: true, Workflows: true, OutboxPollInterval: 200 * time.Millisecond}
 	if tracing {
 		p.cfg.Telemetry.OTLPEndpoint = "jaeger:4318" // never contacted: the exporter below replaces OTLP
 		p.exp = tracetest.NewInMemoryExporter()
@@ -132,7 +142,11 @@ func startPipeline(t *testing.T, mode string, tracing bool) *pipeline {
 	}
 	t.Cleanup(scheduler.Shutdown)
 	t.Cleanup(servers.Shutdown)
-	p.rl, _, _ = runEventsObserved(t, ctx, p.cfg, p.deps, p.obs)
+	var sink relay.DeadLetterSink = &recordingSink{}
+	if sinkFor != nil {
+		sink = sinkFor(p.obs.Metrics)
+	}
+	p.rl, _ = runEventsWith(t, ctx, p.cfg, p.deps, p.obs, sink, extra...)
 	return p
 }
 

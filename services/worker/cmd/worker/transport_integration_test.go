@@ -25,12 +25,13 @@ import (
 var transportModes = []string{config.TransportInProcess, config.TransportKafka}
 
 // useTransport sets cfg.Kafka for mode. For kafka it starts a real broker and
-// the registry stand-in (not the real Schema Registry, see transporttest).
-func useTransport(t *testing.T, cfg *config.Config, mode string) {
+// the registry stand-in (not the real Schema Registry, see transporttest), and
+// returns the broker so a test can stop and restart it; it is nil in-process.
+func useTransport(t *testing.T, cfg *config.Config, mode string) *testenv.KafkaEnv {
 	t.Helper()
 	if mode != config.TransportKafka {
 		cfg.Kafka = config.KafkaConfig{Transport: config.TransportInProcess}
-		return
+		return nil
 	}
 	kb := testenv.SetupKafka(t)
 	reg := transporttest.NewRegistry(t)
@@ -40,6 +41,7 @@ func useTransport(t *testing.T, cfg *config.Config, mode string) {
 		ConsumerBackoffBase: 50 * time.Millisecond, ConsumerBackoffMax: time.Second,
 		ConsumerShutdownTimeout: 5 * time.Second, ProduceTimeout: 10 * time.Second,
 	}
+	return kb
 }
 
 // recordingSink counts what the transport parked.
@@ -74,11 +76,25 @@ func runEvents(t *testing.T, ctx context.Context, cfg *config.Config, deps *infr
 func runEventsObserved(t *testing.T, ctx context.Context, cfg *config.Config, deps *infra.Dependencies, obs *infra.Observability) (rl *relay.Relay, sink *recordingSink, stop func()) {
 	t.Helper()
 	sink = &recordingSink{}
+	rl, stop = runEventsWith(t, ctx, cfg, deps, obs, sink)
+	return rl, sink, stop
+}
+
+// runEventsWith runs the event side with sink as the dead-letter sink and the
+// extra handlers registered on the relay (and so given consumer groups in kafka
+// mode) before anything starts. The gauge intervals are short, for the tests
+// that watch them.
+func runEventsWith(t *testing.T, ctx context.Context, cfg *config.Config, deps *infra.Dependencies, obs *infra.Observability, sink relay.DeadLetterSink, extra ...relay.Handler) (rl *relay.Relay, stop func()) {
+	t.Helper()
 	tr, err := newEventTransport(ctx, slog.New(slog.NewTextHandler(io.Discard, nil)), cfg, sink, obs)
 	if err != nil {
 		t.Fatalf("newEventTransport: %v", err)
 	}
+	tr.lagInterval = 200 * time.Millisecond
 	rl = buildRelay(deps, cfg, tr.RelayOptions()...)
+	for _, h := range extra {
+		rl.Register(h)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -93,7 +109,7 @@ func runEventsObserved(t *testing.T, ctx context.Context, cfg *config.Config, de
 		})
 	}
 	t.Cleanup(stop)
-	return rl, sink, stop
+	return rl, stop
 }
 
 // pollUntil polls problems until it reports none or the deadline passes, and

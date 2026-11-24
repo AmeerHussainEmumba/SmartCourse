@@ -14,6 +14,7 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
@@ -49,7 +50,7 @@ func TestStartTelemetry_WorkerServesMetricsOnItsOwnListener(t *testing.T) {
 	cfg.Telemetry = config.TelemetryConfig{SampleRatio: 1, MetricsEnabled: true, MetricsAddr: addr}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	_, shutdown := startTelemetry(ctx, slog.Default(), &infra.Dependencies{DB: env.DB, RDB: env.RDB}, cfg)
+	obs, shutdown := startTelemetry(ctx, slog.Default(), &infra.Dependencies{DB: env.DB, RDB: env.RDB}, cfg)
 
 	var body string
 	deadline := time.Now().Add(10 * time.Second)
@@ -79,6 +80,15 @@ func TestStartTelemetry_WorkerServesMetricsOnItsOwnListener(t *testing.T) {
 		if !strings.Contains(body, "# HELP "+name) {
 			t.Errorf("worker /metrics lacks %s", name)
 		}
+	}
+	// The registry the worker serves passes the cardinality guard (the event,
+	// lag and dead-letter series are covered where they are fed: see
+	// metrics_integration_test.go).
+	if err := telemetry.CheckLabels(obs.Gatherer()); err != nil {
+		t.Errorf("worker registry fails the cardinality guard: %v", err)
+	}
+	if obs == nil || obs.Metrics == nil {
+		t.Fatal("startTelemetry did not hand the Observability out")
 	}
 
 	cancel()
