@@ -21,7 +21,7 @@ services:
     # Mapped off the Postgres default (5432) to avoid colliding with other
     # local projects' containers — the application always connects via
     # POSTGRES_DSN (env.example), so this is a host-side convenience only.
-    ports: ["5433:5432"]
+    ports: ["127.0.0.1:5433:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -33,7 +33,7 @@ services:
   redis:
     image: redis:7-alpine
     profiles: *profiles-core
-    ports: ["6380:6379"]
+    ports: ["127.0.0.1:6380:6379"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -48,8 +48,8 @@ services:
       MINIO_ROOT_USER: smartcourse
       MINIO_ROOT_PASSWORD: smartcourse123
     ports:
-      - "9002:9000" # S3 API
-      - "9003:9001" # console
+      - "127.0.0.1:9002:9000" # S3 API
+      - "127.0.0.1:9003:9001" # console
     volumes:
       - miniodata:/data
     healthcheck:
@@ -102,6 +102,15 @@ services:
       MINIO_ACCESS_KEY_ID: smartcourse
       MINIO_SECRET_ACCESS_KEY: smartcourse123
       JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
+      # Only read by this binary's Temporal worker (ADR-0009/0025) — not
+      # identity-api/analytics-api. worker is tagged *profiles-core, same
+      # as temporal itself is NOT (it's *profiles-workflow), so under
+      # plain `core` this points at a server that isn't running; that's
+      # fine (temporal.Connect is lazy) — only publishing itself
+      # would fail until `make dev-workflow` brings temporal up too.
+      TEMPORAL_HOST_PORT: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: course-publish
     depends_on:
       postgres:
         condition: service_healthy
@@ -110,7 +119,7 @@ services:
       minio:
         condition: service_healthy
 
-  # identity-api (ADR-0023, extending ADR-0022): internal/identity's HTTP
+  # identity-api (ADR-0023, extending ADR-0022): services/identity/identity's HTTP
   # surface split into its own deployable image — the most self-contained
   # module in the codebase (no other module reads its tables directly;
   # everyone else reads the caller's identity off the JWT claims instead).
@@ -134,7 +143,7 @@ services:
       MINIO_ACCESS_KEY_ID: smartcourse
       MINIO_SECRET_ACCESS_KEY: smartcourse123
       JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
-    ports: ["8090:8080"]
+    ports: ["127.0.0.1:8090:8080"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -143,8 +152,8 @@ services:
       minio:
         condition: service_healthy
 
-  # course-api (ADR-0023, extending ADR-0022): internal/course,
-  # internal/enrollment, and internal/progress's HTTP surface, kept
+  # course-api (ADR-0023, extending ADR-0022): services/course/course,
+  # services/course/enrollment, and services/course/progress's HTTP surface, kept
   # together in one image because enrollment locks the `courses` row in
   # the SAME transaction it writes an enrollment row in (ADR-0012's
   # seat-limit guarantee) — splitting them would force that lock into a
@@ -169,7 +178,13 @@ services:
       MINIO_ACCESS_KEY_ID: smartcourse
       MINIO_SECRET_ACCESS_KEY: smartcourse123
       JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
-    ports: ["8091:8080"]
+      # Service.Publish starts the publish workflow here (ADR-0009/0025) —
+      # see worker's identical block above for why this is safe to boot
+      # with no Temporal present (plain `core` profile).
+      TEMPORAL_HOST_PORT: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: course-publish
+    ports: ["127.0.0.1:8091:8080"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -178,7 +193,7 @@ services:
       minio:
         condition: service_healthy
 
-  # analytics-api (ADR-0023, extending ADR-0022): internal/analytics's HTTP
+  # analytics-api (ADR-0023, extending ADR-0022): services/analytics/analytics's HTTP
   # surface split into its own deployable image — read-only, already
   # decoupled (consumes other modules' state via the relay/outbox, never a
   # direct call into another module), the lowest-risk candidate to split
@@ -203,7 +218,7 @@ services:
       MINIO_ACCESS_KEY_ID: smartcourse
       MINIO_SECRET_ACCESS_KEY: smartcourse123
       JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
-    ports: ["8092:8080"]
+    ports: ["127.0.0.1:8092:8080"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -229,7 +244,7 @@ services:
       SWAGGER_JSON: /openapi.yaml
     volumes:
       - ./api/openapi.yaml:/openapi.yaml:ro
-    ports: ["8089:8080"]
+    ports: ["127.0.0.1:8089:8080"]
 
   temporal:
     image: temporalio/auto-setup:latest
@@ -240,7 +255,7 @@ services:
       POSTGRES_USER: smartcourse
       POSTGRES_PWD: smartcourse
       POSTGRES_SEEDS: postgres
-    ports: ["7233:7233"]
+    ports: ["127.0.0.1:7233:7233"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -251,7 +266,7 @@ services:
     environment:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_CORS_ORIGINS: http://localhost:3000
-    ports: ["8088:8080"]
+    ports: ["127.0.0.1:8088:8080"]
     depends_on: [temporal]
 
   kafka:
@@ -267,7 +282,7 @@ services:
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-    ports: ["29092:29092"]
+    ports: ["127.0.0.1:29092:29092"]
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.6.0
@@ -276,35 +291,35 @@ services:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:9092
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
-    ports: ["8081:8081"]
+    ports: ["127.0.0.1:8081:8081"]
     depends_on: [kafka]
 
   mongodb:
     image: mongo:7
     profiles: *profiles-events
-    ports: ["27017:27017"]
+    ports: ["127.0.0.1:27017:27017"]
 
   prometheus:
     image: prom/prometheus:latest
     profiles: *profiles-observability
     volumes:
       - ./deploy/prometheus:/etc/prometheus
-    ports: ["9090:9090"]
+    ports: ["127.0.0.1:9090:9090"]
 
   grafana:
     image: grafana/grafana:latest
     profiles: *profiles-observability
     volumes:
       - ./deploy/grafana:/etc/grafana/provisioning
-    ports: ["3001:3000"]
+    ports: ["127.0.0.1:3001:3000"]
 
   jaeger:
     image: jaegertracing/all-in-one:latest
     profiles: *profiles-observability
     ports:
-      - "16686:16686" # UI
-      - "4317:4317"   # OTLP gRPC
-      - "4318:4318"   # OTLP HTTP
+      - "127.0.0.1:16686:16686" # UI
+      - "127.0.0.1:4317:4317"   # OTLP gRPC
+      - "127.0.0.1:4318:4318"   # OTLP HTTP
 
 volumes:
   pgdata:

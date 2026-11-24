@@ -1,0 +1,320 @@
+// HTTP — DTO binding, validation, status codes (RFC §4.3).
+package course
+
+import (
+	"fmt"
+	"net/http"
+	"strconv"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+
+	identityauth "github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/httpx"
+)
+
+type Handler struct{ svc *Service }
+
+func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig) {
+	h := &Handler{svc: svc}
+
+	// Discovery — public. /courses/search is registered before /courses/:slug
+	// so gin's router doesn't treat "search" as a slug value — RFC §7.4's
+	// IndexSearch read side, pulled forward from M3 per ADR-0025.
+	r.GET("/courses", h.listCatalogue)
+	r.GET("/courses/search", h.searchCourses)
+	r.GET("/courses/:slug", h.getDetail)
+
+	// Authoring — instructor-owned, ownership itself checked in service.go.
+	instructor := r.Group("/courses")
+	// RequireFreshPrivilege (token-version check) on every instructor write:
+	// a demoted or suspended instructor's old access token must not keep
+	// authoring, publishing or archiving until its TTL runs out (F-11).
+	fresh := identityauth.RequireFreshPrivilege(svc.rdb)
+	instructor.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"), fresh)
+	instructor.POST("", h.createCourse)
+	instructor.PATCH("/:id", h.updateDraft)
+	instructor.POST("/:id/modules", h.addModule)
+	instructor.POST("/:id/publish", h.publish)
+	// :slug, not :id: gin's router (httprouter-based) panics at startup if
+	// two routes for the same HTTP method share a path depth with
+	// different wildcard names — this GET route and the public
+	// `GET /courses/:slug` above both sit at /courses/<param>[...], so
+	// they must agree on the placeholder name even though this one holds
+	// a course ID, not a slug. The URL contract (RFC §7.5) is unaffected;
+	// this is purely gin's internal routing requirement. Caught by
+	// actually starting course-api against the real router, not by
+	// inspection — see ADR-0025.
+	instructor.GET("/:slug/publish-status", h.publishStatus)
+	instructor.POST("/:id/archive", h.archiveCourse)
+
+	modules := r.Group("/modules")
+	modules.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"), fresh)
+	modules.POST("/:id/lessons", h.addLesson)
+	modules.PATCH("/:id", h.updateModule)
+	modules.DELETE("/:id", h.deleteModule)
+
+	lessons := r.Group("/lessons")
+	lessons.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"), fresh)
+	lessons.PATCH("/:id", h.updateLesson)
+	lessons.DELETE("/:id", h.deleteLesson)
+}
+
+func (h *Handler) createCourse(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	var req CreateCourseRequest
+	if !httpx.BindJSON(c, &req) {
+		return
+	}
+	course, version, err := h.svc.CreateCourse(c.Request.Context(), id.UserID, req)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"course": course, "version": version})
+}
+
+func (h *Handler) updateDraft(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	courseID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(err))
+		return
+	}
+	var req UpdateDraftRequest
+	if !httpx.BindJSON(c, &req) {
+		return
+	}
+	resp, err := h.svc.UpdateDraft(c.Request.Context(), courseID, id.UserID, req)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *Handler) addModule(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	courseID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(err))
+		return
+	}
+	var req CreateModuleRequest
+	if !httpx.BindJSON(c, &req) {
+		return
+	}
+	resp, err := h.svc.AddModule(c.Request.Context(), courseID, id.UserID, req)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, resp)
+}
+
+func (h *Handler) updateModule(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	moduleID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(err))
+		return
+	}
+	courseID, err := h.svc.ResolveModuleCourseID(c.Request.Context(), moduleID)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	var req UpdateModuleRequest
+	if !httpx.BindJSON(c, &req) {
+		return
+	}
+	resp, err := h.svc.UpdateModule(c.Request.Context(), courseID, id.UserID, moduleID, req)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *Handler) deleteModule(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	moduleID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(err))
+		return
+	}
+	courseID, err := h.svc.ResolveModuleCourseID(c.Request.Context(), moduleID)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	if err := h.svc.DeleteModule(c.Request.Context(), courseID, id.UserID, moduleID); err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (h *Handler) addLesson(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	moduleID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(err))
+		return
+	}
+	courseID, err := h.svc.ResolveModuleCourseID(c.Request.Context(), moduleID)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	var req CreateLessonRequest
+	if !httpx.BindJSON(c, &req) {
+		return
+	}
+	resp, err := h.svc.AddLesson(c.Request.Context(), courseID, id.UserID, moduleID, req)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, resp)
+}
+
+func (h *Handler) updateLesson(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	lessonID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(err))
+		return
+	}
+	courseID, err := h.svc.ResolveLessonCourseID(c.Request.Context(), lessonID)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	var req UpdateLessonRequest
+	if !httpx.BindJSON(c, &req) {
+		return
+	}
+	resp, err := h.svc.UpdateLesson(c.Request.Context(), courseID, id.UserID, lessonID, req)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *Handler) deleteLesson(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	lessonID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(err))
+		return
+	}
+	courseID, err := h.svc.ResolveLessonCourseID(c.Request.Context(), lessonID)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	if err := h.svc.DeleteLesson(c.Request.Context(), courseID, id.UserID, lessonID); err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// publish starts the publish workflow and returns 202, not 200 — M2's
+// publish is asynchronous (RFC §7.5). The client polls publishStatus below
+// with the same course ID until the workflow reaches a terminal state.
+func (h *Handler) publish(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	courseID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(err))
+		return
+	}
+	resp, err := h.svc.Publish(c.Request.Context(), courseID, id.UserID)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusAccepted, resp)
+}
+
+func (h *Handler) publishStatus(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	courseID, err := uuid.Parse(c.Param("slug")) // route registered as :slug — see RegisterRoutes' comment
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(err))
+		return
+	}
+	resp, err := h.svc.GetPublishStatus(c.Request.Context(), courseID, id.UserID)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *Handler) archiveCourse(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	courseID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(err))
+		return
+	}
+	if err := h.svc.ArchiveCourse(c.Request.Context(), courseID, id.UserID); err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (h *Handler) listCatalogue(c *gin.Context) {
+	limit := httpx.ClampLimit(atoiOr(c.Query("limit"), 0))
+	resp, err := h.svc.ListCatalogue(c.Request.Context(), limit, c.Query("cursor"), c.Query("category"), c.Query("level"), c.Query("q"))
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// searchCourses backs GET /courses/search?q= — full-text ranked search
+// (RFC §7.4's IndexSearch, read side), distinct from listCatalogue's plain
+// substring filter.
+func (h *Handler) searchCourses(c *gin.Context) {
+	q := c.Query("q")
+	if q == "" {
+		httpx.Fail(c, apperrors.ErrValidation.Wrap(fmt.Errorf("q is required")))
+		return
+	}
+	limit := httpx.ClampLimit(atoiOr(c.Query("limit"), 0))
+	resp, err := h.svc.SearchCourses(c.Request.Context(), q, limit)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": resp})
+}
+
+func (h *Handler) getDetail(c *gin.Context) {
+	resp, err := h.svc.GetPublishedDetail(c.Request.Context(), c.Param("slug"))
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func atoiOr(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return n
+}

@@ -1,16 +1,34 @@
 # The worker service (ADR-0022) — one of four independently built images,
 # the other three being Dockerfile.identity-api, Dockerfile.course-api, and
 # Dockerfile.analytics-api (ADR-0023). See any of those header comments for
-# why they all exist and why they share one source tree despite being
-# separate images.
-FROM golang:1-alpine AS build
+# why they exist.
+# Build context is the repo root: docker build -f Dockerfile.worker .
+FROM golang:1.26.5-alpine AS build
+ENV GOWORK=off CGO_ENABLED=0
 WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -o /out/worker ./cmd/worker
+COPY libs/auth ./libs/auth
+COPY libs/cache ./libs/cache
+COPY libs/config ./libs/config
+COPY libs/db ./libs/db
+COPY libs/errors ./libs/errors
+COPY libs/httpx ./libs/httpx
+COPY libs/infra ./libs/infra
+COPY libs/logging ./libs/logging
+COPY libs/outbox ./libs/outbox
+COPY libs/relay ./libs/relay
+COPY libs/router ./libs/router
+COPY libs/temporal ./libs/temporal
+COPY libs/testenv ./libs/testenv
+COPY services/analytics ./services/analytics
+COPY services/course ./services/course
+COPY services/worker ./services/worker
+WORKDIR /src/services/worker
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    go build -trimpath -o /out/worker ./cmd/worker
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates
+# Run as an unprivileged user: a compromise of the service should not be root in the container.
+RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 app
+USER app
 COPY --from=build /out/worker /usr/local/bin/worker
 ENTRYPOINT ["/usr/local/bin/worker"]

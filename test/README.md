@@ -1,11 +1,28 @@
 # test/
 
-Cross-cutting test infrastructure that doesn't belong to any one module. Most tests actually live *inside* each module (`internal/<module>/*_test.go`, right next to the code they test) — see `docs/guides/testing.md` for the full picture of what's tested and why. This directory holds the shared plumbing those tests depend on.
+Cross-service test material that doesn't belong to any one service. Most tests live *inside* each service module (`services/<service>/<package>/*_test.go`, right next to the code they test) — see `docs/guides/testing.md` for the full picture of what's tested and why.
 
-## What's here
+## Where the shared test infrastructure is
 
-- **`integration/testenv/`** — spins up real, disposable Postgres and Redis containers via `testcontainers-go`, applies every migration, and hands back connected clients. Every module's `*_integration_test.go` file calls `testenv.Setup(t)` rather than hand-rolling container setup, so container lifecycle (start, migrate, teardown) is written exactly once. See the package doc comment in `testenv.go` for the full reasoning, and `docs/guides/testing.md` for how to run the tests that use it.
+**`libs/testenv/`** (it used to be `test/integration/testenv/`) spins up real, disposable Postgres and Redis containers via `testcontainers-go`, applies every service's migrations from `migrations/`, and hands back connected clients. Every `*_integration_test.go` file calls `testenv.Setup(t)` rather than hand-rolling container setup, so container lifecycle and migration order are written once. It finds `migrations/` relative to its own source file, so it must stay two directories below the repo root.
 
-## Why integration tests live in their module, not here
+## Running tests
 
-A test for `internal/enrollment`'s seat-limit logic belongs next to `internal/enrollment`'s code, not in a parallel directory tree that has to be kept in sync by hand. `test/` holds only what's genuinely shared — today, that's container setup. If cross-module end-to-end tests (spanning more than one domain module in a single test) become necessary later, they'd live here in `test/integration/`, separate from `testenv/`.
+`go test ./...` does not cross Go module boundaries, so run tests through the repo's targets, which run the command in every module with `GOWORK=off`:
+
+```
+make test               # unit tests, every module
+make test-integration   # race detector + integration tag (needs Docker)
+```
+
+## Why integration tests live in their service, not here
+
+A test for `services/course/enrollment`'s seat-limit logic belongs next to that code, not in a parallel directory tree kept in sync by hand. This directory holds only what genuinely spans services.
+
+## Cross-service tests: `test/e2e`
+
+`test/e2e` is its own Go module (it is allowed to depend on more than one service, see `scripts/check-module-graph.sh`) holding tests that run services side by side. It boots the real identity routes and the real course routes as two separate engines, each on the production router stack and each with its own database connection restricted to its own schemas (`identity,platform,public` and `course,platform,public`, as in compose), against one shared Postgres and one shared Redis. Only the Temporal client is faked. Run it with the rest: `make test-integration`, or `cd test/e2e && go test -tags=integration ./...`.
+
+Today it has one test, `TestE2E_InstructorAfterRedisRestart_LoginReseedsAndCourseAPIWorks` (F-38). It uses a real admin role change, real logins and a real refresh to check that after a Redis restart an instructor whose token version is above 1 is refused cleanly, regains access by logging in or refreshing, and stays revoked after a demotion. It cannot live in either service's own tests because `course-api` cannot import identity.
+
+Add a test here when the behaviour under test depends on two services agreeing, for example one service writing something to Redis or the outbox that another reads. If it only concerns one service, put it in that service.

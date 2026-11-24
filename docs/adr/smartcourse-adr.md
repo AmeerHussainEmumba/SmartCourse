@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Living document |
-| Last updated | 2026-11-03 |
+| Last updated | 2026-11-17 |
 | Related | `smartcourse-rfc.md` |
 
 ## Review status (2026-09-24)
@@ -24,6 +24,7 @@ The distinction matters when something changes. Six months from now, a contribut
 - `Reversal trigger` states the observable condition that should prompt revisiting. A decision without one is an assertion; a decision with one is a position.
 - Options that were considered and rejected stay in the record. The rejected option is often the more useful half.
 - New decisions during implementation get a new ADR. The register is expected to grow.
+- Paths in records dated before ADR-0026 (`internal/...`, `cmd/...`, `internal/platform/...`) describe the layout at the time of the decision. Since ADR-0026 they live under `services/`, `libs/` and `tools/`; see `services/README.md`.
 
 **Statuses:** `Accepted` · `Superseded by ADR-NNNN` · `Deprecated` · `Proposed`
 
@@ -31,12 +32,12 @@ The distinction matters when something changes. Six months from now, a contribut
 
 | ADR | Title | Status | RFC |
 |---|---|---|---|
-| [0001](#adr-0001--modular-monolith-over-microservices) | Modular monolith over microservices | Accepted | §4.1 |
+| [0001](#adr-0001--modular-monolith-over-microservices) | Modular monolith over microservices | Accepted — single `go.mod` aspect superseded in part by ADR-0026 | §4.1 |
 | [0002](#adr-0002--postgresql-as-the-single-system-of-record) | PostgreSQL as the single system of record | Accepted | §5.1 |
 | [0003](#adr-0003--course-content-in-postgresql-with-jsonb) | Course content in PostgreSQL with JSONB | Accepted | §5.5 |
 | [0004](#adr-0004--mongodb-for-event-archive-and-audit-only) | MongoDB for event archive and audit only | Accepted | §5.4 |
 | [0005](#adr-0005--uuidv7-for-primary-keys) | UUIDv7 for primary keys | Accepted | §5.2 |
-| [0006](#adr-0006--transactional-outbox-for-event-publication) | Transactional outbox for event publication | Accepted | §6.2 |
+| [0006](#adr-0006--transactional-outbox-for-event-publication) | Transactional outbox for event publication | Accepted — claim mechanism amended by ADR-0027 | §6.2 |
 | [0007](#adr-0007--topic-per-aggregate-partition-by-aggregate-id) | Topic per aggregate, partition by aggregate ID | Accepted | §6.5 |
 | [0008](#adr-0008--protobuf-with-schema-registry-backward-compatibility) | Protobuf with Schema Registry, BACKWARD compatibility | Accepted | §6.8 |
 | [0009](#adr-0009--temporal-for-publishing-only) | Temporal for publishing only | Accepted | §7.3 |
@@ -51,16 +52,20 @@ The distinction matters when something changes. Six months from now, a contribut
 | [0018](#adr-0018--docker-compose-profiles-for-tiered-local-development) | Docker Compose profiles for tiered local development | Accepted | §17.1 |
 | [0019](#adr-0019--minio-for-learning-asset-object-storage) | MinIO for learning-asset object storage | Accepted | §2.3 (A1), §4.7 |
 | [0020](#adr-0020--gcra-rate-limiting-over-fixed-window-counters) | GCRA rate limiting over fixed-window counters | Accepted | §5.7, §11.3 |
-| [0021](#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka) | In-process outbox relay with a worker pool, ahead of Kafka | Accepted | §6.3, §21.0 |
-| [0022](#adr-0022--separate-api-and-worker-binaries-one-shared-codebase-and-database) | Separate API and worker binaries, one shared codebase and database | Accepted | §4.2 |
-| [0023](#adr-0023--split-cmdapi-into-identity-api-course-api-and-analytics-api) | Split cmd/api into identity-api, course-api, and analytics-api | Accepted | §4.2 |
-| [0024](#adr-0024--schema-per-service-within-one-shared-database) | Schema-per-service within one shared database | Accepted | §5.3 |
+| [0021](#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka) | In-process outbox relay with a worker pool, ahead of Kafka | Accepted — claim mechanism amended by ADR-0027 | §6.3, §21.0 |
+| [0022](#adr-0022--separate-api-and-worker-binaries-one-shared-codebase-and-database) | Separate API and worker binaries, one shared codebase and database | Accepted — extended by ADR-0026 | §4.2 |
+| [0023](#adr-0023--split-cmdapi-into-identity-api-course-api-and-analytics-api) | Split cmd/api into identity-api, course-api, and analytics-api | Accepted — extended by ADR-0026 | §4.2 |
+| [0024](#adr-0024--schema-per-service-within-one-shared-database) | Schema-per-service within one shared database | Accepted — deferred `go.mod` item resolved by ADR-0026 | §5.3 |
+| [0025](#adr-0025--course-publishing-as-a-temporal-workflow-m2) | Course publishing as a Temporal workflow (M2) | Accepted — amended by ADR-0028 | §7.4 |
+| [0026](#adr-0026--one-go-module-per-service-and-per-shared-library) | One Go module per service and per shared library | Accepted | §4.1, §4.2, §4.4 |
+| [0027](#adr-0027--the-relay-holds-each-rows-claim-through-handling) | The relay holds each row's claim through handling | Accepted | §6.3 |
+| [0028](#adr-0028--publish-claims-the-version-before-starting-the-workflow) | Publish claims the version before starting the workflow | Accepted | §7.5 |
 
 ---
 
 ## ADR-0001 — Modular monolith over microservices
 
-**Status:** Accepted · **Date:** 2026-09-24 · **RFC:** §4.1
+**Status:** Accepted (single-`go.mod` aspect superseded in part by ADR-0026) · **Date:** 2026-09-24 · **RFC:** §4.1
 
 ### Context
 
@@ -236,7 +241,7 @@ None anticipated. Changing this after data exists is a migration of every table 
 
 ## ADR-0006 — Transactional outbox for event publication
 
-**Status:** Accepted · **Date:** 2026-09-24 · **RFC:** §6.2
+**Status:** Accepted (claim mechanism amended by ADR-0027) · **Date:** 2026-09-24 · **RFC:** §6.2
 
 ### Context
 
@@ -822,7 +827,7 @@ None anticipated. If Redis itself is ever removed from the stack, rate limiting 
 
 ## ADR-0021 — In-process outbox relay with a worker pool, ahead of Kafka
 
-**Status:** Accepted · **Date:** 2026-09-25 · **RFC:** §6.3, §21.0
+**Status:** Accepted (claim mechanism amended by ADR-0027) · **Date:** 2026-09-25 · **RFC:** §6.3, §21.0
 
 ### Context
 
@@ -863,7 +868,7 @@ Kafka, Schema Registry, and Protobuf landing (M3) — at which point this packag
 
 ## ADR-0022 — Separate API and worker binaries, one shared codebase and database
 
-**Status:** Accepted · **Date:** 2026-10-19 · **RFC:** §4.2
+**Status:** Accepted (extended by ADR-0026) · **Date:** 2026-10-19 · **RFC:** §4.2
 
 ### Context
 
@@ -899,7 +904,7 @@ None anticipated for this record specifically. If DR-010's broader per-service-t
 
 ## ADR-0023 — Split cmd/api into identity-api, course-api, and analytics-api
 
-**Status:** Accepted · **Date:** 2026-10-26 · **RFC:** §4.2
+**Status:** Accepted (extended by ADR-0026) · **Date:** 2026-10-26 · **RFC:** §4.2
 
 ### Context
 
@@ -939,7 +944,7 @@ If `identity-api`, `course-api`, or `analytics-api` ever need to call each other
 
 ## ADR-0024 — Schema-per-service within one shared database
 
-**Status:** Accepted · **Date:** 2026-11-03 · **RFC:** §5.3
+**Status:** Accepted (deferred `go.mod`/`libs/common` item resolved by ADR-0026) · **Date:** 2026-11-03 · **RFC:** §5.3
 
 ### Context
 
@@ -985,6 +990,219 @@ A direct follow-up conversation narrowed this considerably. Liquibase is confirm
 ### Reversal trigger
 
 If the deferred `go.mod`/`libs/common` split (tracked for a later record) turns out to need schema boundaries drawn differently than ADR-0023's service boundaries — e.g. `search` or `notification` landing and needing their own schema sooner than expected — this record is extended, not reversed, the same way ADR-0023 extended ADR-0022. If the `platform` schema's shared-outbox approach turns out to cause real contention or coupling once more services exist, split it per-producer-schema at that point; nothing here prevents that migration later.
+
+---
+
+## ADR-0025 — Course publishing as a Temporal workflow (M2)
+
+**Status:** Accepted (duplicate-request handling and state-write ordering amended by ADR-0028) · **Date:** 2026-11-05 · **RFC:** §7.4, §21
+
+### Context
+
+RFC §21's delivery plan scopes M2 as "Temporal publishing workflow, activities running concurrently where the graph allows, blue-green version promotion, failure handling, workflow tests, publish-status endpoint." ADR-0009 already settled *why* Temporal applies to publishing and nothing else; this record is the concrete M2 implementation against RFC §7.4's activity graph, which predates both the outbox relay (ADR-0021) and schema-per-service (ADR-0024) and needed revisiting against both.
+
+Three of RFC §7.4's seven activities land on modules that don't fully exist yet: `IndexSearch` needs a search module (not started — `internal/README.md` lists it as the natural next relay handler, not built), `WarmCache` needs a caching layer (nothing reads through Redis for course detail today), and `InitAnalytics` would create `course_stats` directly — work the outbox relay's `internal/analytics` handler already does automatically the moment `PromoteVersion`'s outbox event is processed (ADR-0021). Deferring the first two to M3 as literal RFC scope would be the conservative reading; pulled forward instead, the same way ADR-0021 pulled the relay and concurrent publish validation forward from M2/M3 into M1 "after an audit found §7's concurrency requirements demonstrated almost nowhere in production code" — the same audit logic applies here: a publish workflow that writes two of its seven activities as no-ops isn't proving the graph, it's decorating it.
+
+### Options
+
+**A. Reduced graph — only the activities with a real backing today** (`ValidateMetadata` → `{VerifyAssets, ComputeMetadata}` → `PromoteVersion`), leaving `IndexSearch`/`WarmCache`/`InitAnalytics` as a documented, deferred gap. Honest, but ships a workflow that's thinner than RFC §7.4's own diagram without a forcing reason, when the real pieces are buildable now.
+
+**B. Full graph with no-op stand-ins** for the three unbuilt activities, matching the RFC diagram literally. Rejected on direct instruction: no-ops that do nothing but occupy a graph position are dead code and added determinism surface for work that isn't real — the same objection ADR-0021 raised against adding concurrency primitives nobody needed just to tick a box.
+
+**C. Full graph, with `IndexSearch` and `WarmCache` pulled forward as real, working pieces of their eventual M3 modules (not stubs), and `InitAnalytics` dropped as redundant with the relay's existing event-driven recompute.** `IndexSearch` gets a real `course_search_index` upsert plus a real `GET /courses/search` endpoint reading it (full-text ranked, not the catalogue's plain `ILIKE`). `WarmCache` gets a real version-scoped Redis key, with `GET /courses/{id}` reading through it. Chosen directly.
+
+### Decision
+
+**Option C.** The workflow (`internal/workflows.PublishCourseWorkflow`) implements:
+
+```
+ValidateMetadata -> {VerifyAssets, ComputeMetadata} -> BuildOutline -> {IndexSearch, WarmCache} -> PromoteAndPublish
+```
+
+`InitAnalytics` is not a node: analytics already reaches the same end state (a `course_stats` row reflecting the publish) via the relay's existing `course.course_published` handler, and adding a second, synchronous write here would race that idempotent recompute for no benefit.
+
+**Package boundary.** `internal/workflows` (new) holds the actual `go.temporal.io/sdk` dependency — the workflow function and an `Activities` struct whose methods are one-line forwards to plain, Temporal-agnostic methods on `course.Service` (`ValidateMetadata`, `VerifyAssets`, `ComputeMetadata`, `BuildOutline`, `IndexSearch`, `WarmCache`, `PromoteAndPublish`, `MarkPublishFailed`). `internal/course` never imports `internal/workflows` — the dependency runs one way, the same way `bootstrap` is the one place allowed to import every domain module. `course.Service.Publish` starts the workflow by its registered name (`course.PublishWorkflowName`, a shared string constant), not by importing the workflow function, which is what makes the one-way dependency possible at all.
+
+**Workflow ID and idempotency.** `publish-{course_id}-{version_number}` (RFC §7.5), started with Temporal's default `WorkflowIDReusePolicy` — a duplicate `POST /publish` while one is already running attaches to the existing execution (`ExecuteWorkflow` returns the running handle instead of erroring) rather than starting a second one, on top of `idx_one_draft_per_course`'s storage-layer guard (already in place since M0).
+
+**`PromoteAndPublish` is one atomic transaction**, not two like M1's synchronous `Publish` was (`PromoteVersion` plus a separate outbox-write transaction). Temporal's at-least-once activity execution means this method must tolerate being run twice; it does, via a check-then-transact guard (`if courseID's published_version_id already equals this versionID, no-op`) rather than a database-level dedupe, so a retried activity neither re-promotes nor double-emits `course.course_published`.
+
+**`GET /courses/{id}/publish-status` (RFC §7.5) reads `course_versions` directly, not Temporal's API** — every state transition it needs (`publishing`/`ready`/`publish_failed`, `workflow_id`, `publish_error`) is already written there by the activities above, which is also the system of record every other read in this module already uses. Querying Temporal instead would be a second source of truth for data already sitting in the row.
+
+**Retry policies** mirror RFC §7.4's table (`ValidateMetadata`: none; `VerifyAssets`/`ComputeMetadata`/`WarmCache`: 3×; `IndexSearch`/`PromoteAndPublish`: 5×) — explicitly provisional per RFC §21's deferred decision D1 ("retry counts and backoff curves... settled by observed failure patterns"), not tuned final values.
+
+**Failure handling stores the activity's own message, not the wrapped diagnostic text.** Temporal wraps every activity failure in an `ActivityError`/`ApplicationError` pair whose own `Error()` string embeds scheduled-event IDs and retryability flags — noise that doesn't belong in `course_versions.publish_error` for an instructor to read. `internal/workflows`' failure path unwraps to `ApplicationError.Message()` before calling `MarkPublishFailed`. Caught by a workflow unit test asserting the exact stored string, not by inspection — the first version of this code stored the wrapped text verbatim.
+
+**Temporal client connections are lazy everywhere** (`client.NewLazyClient`, not `client.Dial`) — `bootstrap.ConnectTemporal` never fails at boot even if Temporal is unreachable, matching ADR-0009's own stated consequence ("Temporal down means publishing unavailable — though nothing else is affected"). Neither `identity-api` nor `analytics-api` ever acquires one. `course-api`'s `core` Compose profile boots without Temporal present at all (Temporal only exists from the `workflow` profile tier up); only an actual publish call fails, cleanly, as a 503.
+
+### Bugs found while building this, kept here rather than quietly fixed
+
+All four were caught by actually running the stack (`make dev-workflow`, a real publish, a real `make seed`) — none were visible from the code alone, continuing the pattern ADR-0021/0024 both record.
+
+- **CI never ran a single integration test.** `.github/workflows/ci.yml`'s test step ran `go test -race ./...` with no `-tags=integration` — every `//go:build integration` file in the repo, including the enrollment seat-limit concurrency test and the relay's graceful-shutdown test, was silently excluded from every CI run since the suite existed. The job's declared Postgres/Redis service containers and its "Run migrations" step were themselves dead weight, since every integration test provisions its own disposable containers via `testenv.Setup` and never touches them. Fixed by adding `-tags=integration` to both test steps; left the (now merely redundant, still harmless) service containers and migration step alone as a separate concern.
+- **Gin's router panics at boot on two routes sharing a path depth with different wildcard names.** `GET /courses/:slug` (public detail) and the new `GET /courses/:id/publish-status` collide in gin's httprouter-based tree purely because `:slug` and `:id` are different placeholder names at the same position — `search`, a static segment, had no such problem. Fixed by registering the new route as `:slug` too (an internal gin requirement; the URL contract itself is unchanged).
+- **The Temporal worker's own `Start()` doesn't recover from one failure, even once the server becomes reachable again.** The first version of `cmd/worker`'s retry loop called `Start()` repeatedly on the *same* already-constructed client/worker pair; once the Temporal server returned its very first error (observed at `docker compose up` time, before `temporalio/auto-setup` had finished creating the `default` namespace), every subsequent retry kept failing with the identical stale error for over seven minutes — long after `nc`/`docker exec` confirmed the server was reachable and the namespace existed. Restarting the whole process (which naturally builds a fresh client) connected within seconds. Fixed by rebuilding the Temporal client and worker fresh on every retry attempt rather than reusing one across failures — not just a backoff tuning fix, a different pattern: `worker.New(...).Start()` is a once-per-lifetime call, not one safe to retry on the same instance after it fails.
+- **The warmed cache entry captured the course's pre-promotion state.** `BuildOutline` runs before `PromoteAndPublish` by design (the cache must already be warm the instant the pointer swap makes the course live), but it was caching `toCourseResponse`/`toVersionResponse` built from the row as read at that point — still showing a set `draft_version_id` and version state `"publishing"`. The very first cache hit after any publish served a course that looked unpublished. Fixed by having `BuildOutline` construct the Course/Version pair reflecting the state the row deterministically becomes once `PromoteVersion`'s three field writes commit, rather than the state it's actually in yet. Regression-tested in `internal/workflows/publish_workflow_integration_test.go`.
+
+### Consequences
+
+**Positive.** Publishing survives a worker restart mid-sequence and gets independent per-activity retry, as ADR-0009 predicted. `GET /courses/search` and cache-accelerated course detail are both real, working M3 pull-forwards rather than placeholders — a second instance (after ADR-0021) of auditing against the brief and building the real primitive early rather than decorating a graph around its absence. `PromoteAndPublish`'s atomic promote-plus-outbox-write closes a latent gap M1's synchronous `Publish` had (two separate transactions, a window where promotion could succeed and the event write could fail).
+
+**Negative.** A fourth Go package (`internal/workflows`) now depends on `internal/course`, widening course's blast radius slightly beyond what RFC §4.4's module-boundary table originally described — mitigated by the dependency running only one way and `internal/workflows` containing no business logic of its own. `course_search_index` and the Redis cache are both now populated only by a successful publish; neither has a scheduled reconciliation path yet (the same ADR-0017 gap `internal/analytics` already carries), so a document that falls out of sync with its course's live data — by a bug, not by design — has no self-healing mechanism until M3. The full-text relevance ranking is a reasonable starting default (title weighted above description), not a tuned one — RFC §21's D11 defers that explicitly.
+
+### Reversal trigger
+
+If `internal/search` lands as its own module in M3 with its own schema and ranking logic (per ADR-0024's template for `internal/analytics`), `IndexSearch`'s write path here is superseded by that module's own relay-driven handler, the same way analytics itself was rebuilt rather than merely relocated. If a broader caching strategy (CDN, HTTP cache headers, a dedicated cache-invalidation service) lands later, `WarmCache`'s simple version-keyed Redis entry is superseded by whatever that strategy specifies.
+
+---
+
+## ADR-0026 — One Go module per service and per shared library
+
+**Status:** Accepted · **Date:** 2026-11-17 · **RFC:** §4.1, §4.2, §4.4 · **Supersedes in part:** ADR-0001 (single `go.mod`; boundaries enforced by `depguard`) · **Extends:** ADR-0022, ADR-0023 · **Resolves:** the `go.mod`/`libs/common` item ADR-0024 deferred
+
+### Context
+
+The Week 2 review of PR #11 marked Week 1 complete and Week 2 "fine with minor fixes", and raised one structural point: "the deployment is independent now, but the code isn't — every binary imports bootstrap, which pulls in all modules, so each image builds everyone's code." The requested changes were: move each service's handlers, services and repositories into its own folder with its own `go.mod`; keep shared code in `libs/common`; wire each service in its own `main.go` instead of the shared bootstrap. The review's examples: `identity-api` carried course, enrollment and analytics code; a break in `internal/course` broke `identity-api`'s compile; the Temporal SDK and every other library came along.
+
+The claim was checked rather than assumed. Before any change, `go list -deps` showed all four binaries linking the same six domain packages and 589 packages in total, 61 of them `go.temporal.io`. ADR-0022 and ADR-0023 had made the services independently *deployable* (four binaries, four images) and ADR-0024 had made their *data* independent (schema per service), but the *build graph* was still one: `internal/platform/bootstrap` imported every domain module, and every `cmd/*` imported it. ADR-0024 recorded the `go.mod`/`libs/common` half as "deferred to a later record, per 'we do the schema split first'". This is that record.
+
+**Like ADR-0024, this is adopted because it was given as a direct requirement after review, not because it reverses the engineering case for a single module (ADR-0001).** That case is not retracted: for a system this size and a team this small, one `go.mod` is simpler to run. What this record does is deliver the review's stated direction while keeping the properties the earlier records depend on, and say plainly what it costs.
+
+A second, separate input shaped one choice: the project owner expects that on a real project each module will be controlled by a different person or team, so each needs to be independent. That is why shared code was split into one module per package rather than the single `libs/common` module the review named (see Option D).
+
+### Options
+
+**A. Leave it — one `go.mod`, `bootstrap` as the composition root.** Contradicts the review. Not viable.
+
+**B. Per-service `main.go` wiring only, still one `go.mod`.** Delete `bootstrap`; each binary imports only the modules it runs. Measured result: `identity-api` drops from 589 to 388 packages and from 61 Temporal packages to none; `analytics-api` to 386 and none. This fixes what each binary *links* and costs about a day. It does not give separate `go.mod` files or compiler-enforced boundaries between services. Done first, as a step toward C or D, and it stands alone if the rest is ever reversed.
+
+**C. Per-service modules plus the single `libs/common` module the review named.** Literal match to the request. One shared module means one thing to version and one `replace` per service. The cost is that every service depends on all of the kernel, so `go.mod` files list `gin`, `redis`, `gorm`, `jwt` and the rest whether or not that service uses them, and one owner changing `errors` is changing the same module as another owner changing `auth`.
+
+**D. Per-service modules plus one module per shared package** (`libs/auth`, `libs/db`, ...). Chosen. Each library declares only the third-party dependencies it uses, and each can have its own owner and release cadence.
+
+**E. Separate repositories per service.** Rejected: it would add cross-repo coordination for every change to shared code with no benefit at this size. The monorepo keeps one place to review and one CI.
+
+### Decision
+
+**Option D, delivered in this layout:**
+
+- `services/identity`, `services/course`, `services/analytics`, `services/worker`, `tools/seed`, and 13 library modules under `libs/` (`auth`, `cache`, `config`, `db`, `errors`, `httpx`, `infra`, `logging`, `outbox`, `ratelimit`, `relay`, `router`, `temporal`) plus `libs/testenv` for the integration-test environment. 19 `go.mod` files in total. The root `go.mod` is gone; `go.work` (committed) lists every module for local development.
+- **`course`, `enrollment` and `progress` stay in one module**, together with `workflows`, because ADR-0012's row lock needs one process and one transaction. This was accepted by the review in ADR-0023 and again in ADR-0024 and is unchanged here.
+- **`internal/platform/bootstrap` is deleted.** Each `cmd/<binary>` has its own `wire.go`. Postgres/Redis setup moved to `libs/infra` and the Temporal client to `libs/temporal`, so `identity-api` and `analytics-api` never link the Temporal SDK.
+- **Domain packages are ordinary exported packages, not under `internal/`.** Go forbids one module importing another's `internal/` packages, and both `services/worker` (relay handlers, publish workflow) and `tools/seed` need to import them. The boundary between services is therefore the module graph — a service's `go.mod` must list a module before it can import it — and `scripts/check-module-graph.sh` fails CI if a service requires another service (only the worker and the seed tool may) or a library requires a service.
+- **`.golangci.yml`'s `depguard` rules shrink** to the boundary *inside* `services/course` (course, enrollment, progress, workflows), the one place Go cannot separate.
+- **`scripts/check-link-graph.sh` is the regression test for the review point:** each binary is built from inside its own module with `GOWORK=off` and fails if it links another service or, for the two APIs that don't use it, the Temporal SDK.
+- **Builds are `GOWORK=off`** in CI and in every Dockerfile, so a missing `replace` fails where it would fail in production, not just on a laptop with `go.work`. Dockerfiles use the repo root as context and copy only the modules each service needs, with BuildKit cache mounts.
+- **Migrations stay in `migrations/<schema>/`** at the repo root (ADR-0024); moving each into its service is a separate, optional step.
+
+**The worker deliberately depends on two services.** `services/worker` imports `services/course` and `services/analytics` for their relay handlers and the publish workflow. The relay claims an outbox row, runs every registered handler, and marks it published only when all succeed (ADR-0021). Separate per-service relays would therefore lose events: whichever claimed a row first would mark it published and the others would never see it. A genuine split needs per-consumer delivery tracking — the Kafka consumer-group model planned for M3 — so per-service event consumption is left to M3. Until then the worker is the one place allowed to couple services, and whoever owns the worker owns that coupling.
+
+**Versioning.** While one team owns every module, modules reference each other through `replace` directives and `go.work`, and no tags are needed. Each module is nonetheless tagged-ready (`libs/<name>/vX.Y.Z`, `services/<name>/vX.Y.Z`), each has a `CHANGELOG.md`, and `CODEOWNERS` maps directories to owners. A module's owner decides when a change is breaking: a removed or changed exported identifier, a changed `replace`-visible dependency, or changed behaviour documented in its README is a major-version change once tags are in use. The switch from `replace` to pinned tags happens when a second owner takes over a module, not before; the procedure and the release script are in `docs/guides/versioning.md`. Tags are created by a human through the release workflow, never automatically.
+
+### Consequences
+
+**Positive.** The review's two concrete complaints are closed and now guarded: `identity-api` links 388 packages and no Temporal code (589 and 61 before); a compile error in `course` cannot break `identity-api`, because `identity` does not depend on it. Boundaries between services are enforced by the compiler and by the module graph rather than by lint rules and review. Each library declares only what it uses. Each module can be owned, built and tested on its own.
+
+**Negative.** Real costs, none hidden:
+- **Nineteen `go.mod` files for roughly 1,800 lines of shared code.** Libraries are tens to a few hundred lines each. The overhead is justified only by the ownership model above; with one team it is mostly cost.
+- **`replace` directives are not inherited by Go.** Every module repeats the `replace` for every sibling it depends on, including indirect ones; forgetting one passes locally under `go.work` and fails under `GOWORK=off`. CI and the Dockerfiles use `GOWORK=off` for exactly this reason, and `libs/README.md` and `services/README.md` document the rule.
+- **Changes cascade.** A change to `libs/errors` touches `httpx`, `auth` and `ratelimit` and every service. With `replace` this is invisible; once tagged it is real release work.
+- **`go test ./...` no longer crosses modules.** Everything runs through `scripts/for-each-module.sh` (`make test`, `make lint`). A contributor who runs plain `go test ./...` at the root tests nothing.
+- **Dockerfile COPY lists must stay in step with each module's `replace` closure.** A mismatch breaks the image build (caught in CI).
+- **Go's `internal/` encapsulation is given up** for domain packages, in exchange for module-level control.
+- **A change to a library still affects every consumer.** The split fixes "someone breaks `course` and `identity` won't compile"; it does not fix a broken `libs/auth`.
+- **The worker couples two services** until M3 (above).
+- **`tools/seed` couples identity and course** by design; it is a development tool.
+
+**Addendum (2026-11-17).** The count above (19) was true when this was decided. A 20th module, `test/e2e`, was added later for tests that must run identity and course together; it is allowed to depend on more than one service in the same way `tools/seed` is (`scripts/check-module-graph.sh`). Nothing else in this decision changes.
+
+### Reversal trigger
+
+If, six months in, every module still has the same owner and the cascade and `replace` overhead is being paid with no ownership benefit, collapse the 13 libraries into three grouped modules by dependency footprint — `core` (config, errors, logging), `web` (httpx, router, auth, ratelimit) and `data` (db, cache, outbox, relay) — which keeps most of the dependency hygiene with a fraction of the modules. If M3's Kafka consumers land, the worker stops needing to import service handler packages, and the worker coupling above should be removed in the record that introduces them. If the review's single `libs/common` is still what the supervisor wants, merge the libraries back into one module; nothing in the layout prevents it.
+
+**Open for confirmation.** Two points were decided on the project's side and should be confirmed with the supervisor: that one module per library package (rather than the single `libs/common` named in the review) is acceptable, and that the worker importing the two services' handler packages is acceptable until M3.
+
+---
+
+## ADR-0027 — The relay holds each row's claim through handling
+
+**Status:** Accepted · **Date:** 2026-11-17 · **RFC:** §6.3 · **Amends:** ADR-0006 and ADR-0021 (the claim mechanism only)
+
+### Context
+
+ADR-0006 and ADR-0021 both rely on `FOR UPDATE SKIP LOCKED` so that several relay replicas can poll the same outbox without handling an event twice. Adversarial testing after the module split (finding F-04, `docs/plans/module-split-findings.md`) showed the code did not deliver that. `poll` claimed a batch of rows inside a transaction that **committed immediately**, so the row locks were gone before any handler ran. A second replica could then claim the same rows and run the same handler concurrently; the loser failed on the `processed_events` unique violation, producing spurious failure counts and attempt bumps. Handlers that write only inside their own transaction stayed correct because `processed_events` made the duplicate harmless. A handler with a non-transactional side effect (an email, an external call) would have done it twice. The code comment claiming "without double-processing a row" was false for more than one replica.
+
+### Options
+
+**A. Leave it and rely on idempotency alone.** Correct for today's handlers, wrong for the next one, and it leaves the documented guarantee untrue. Rejected.
+
+**B. A lease column** (`claimed_by`, `claimed_until`) updated at claim time, with expiry for crashed claimers. Works across connections and survives long handlers, but needs a migration, clock assumptions, and a reaper for expired leases.
+
+**C. Hold the claim transaction open through handling.** Each worker claims one row (`SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1`) in its own transaction, runs its handlers, marks the row published (or records the failure), and commits. A crashed replica's connection drops, Postgres releases the lock, and the row becomes claimable again. No schema change.
+
+**D. Advisory locks per event id.** Same effect as C with a second lock mechanism to reason about. Rejected as redundant.
+
+### Decision
+
+**Option C.** Each worker in the bounded pool holds one claim transaction per row it is handling. Handlers still run their own transactions and write `processed_events`, so idempotency remains a second line of defence. Related changes made in the same fix: a `recover()` around handler execution so a panic is a failed delivery and not a crashed process (F-05); `outbox.last_error` and the final attempt count are now persisted on failure and give-up (F-28); shutdown stops claiming and lets the current row finish on a detached context with a 30-second timeout; the old in-process `inFlight` set is replaced by a short cooldown so a failing row is not retried in a hot loop.
+
+### Consequences
+
+**Positive.** The documented guarantee is now true across replicas: a second replica skips a row being handled (checked by `TestBugrepro_TwoRelays_SameEventRunsConcurrently`). A crashed replica releases its rows without any reaper. No migration.
+
+**Negative.**
+- **Each worker holds an extra database connection while handling**, so the pool needs roughly twice the worker count in connections.
+- **Throughput per replica is bounded by the worker count**; claiming is per row, not per batch. `WithBatchSize` remains in the API but does nothing.
+- **A slow handler holds a row lock and a transaction open** for its whole duration. Handlers should stay short; a long-running one would argue for option B.
+- Still no dead-letter store: a poison event past `maxAttempts` is marked published with its error recorded in `last_error`, not parked (ADR-0021's known gap, unchanged).
+
+### Reversal trigger
+
+If handlers become slow enough that held transactions hurt (long idle-in-transaction sessions, connection pressure), move to a lease column (option B). In M3 the poll-and-dispatch loop is replaced by Kafka consumption, where per-consumer offsets make this claim mechanism unnecessary.
+
+---
+
+## ADR-0028 — Publish claims the version before starting the workflow
+
+**Status:** Accepted · **Date:** 2026-11-17 · **RFC:** §7.5 · **Amends:** ADR-0025 (the duplicate-request and state-write ordering only)
+
+### Context
+
+ADR-0025 made `POST /courses/{id}/publish` start a Temporal workflow and return 202, and said a duplicate request "attaches to the running workflow" because the workflow ID is deterministic. The implementation started the workflow first and wrote the `publishing` state afterwards with an unconditional `UPDATE`. The supervisor's review of the Week 2 work flagged the ordering: set the state before starting the workflow, and return 409 if a publish is already running. Checking the code showed the ordering was worse than a style point:
+
+- **No way to tell a duplicate from a fresh publish.** A second request while one was running attached to it and also returned 202, so the client could not know it had not started anything.
+- **A state-overwrite race.** A workflow that fails fast (for example `ValidateMetadata`) writes `publish_failed` from inside an activity, possibly before `Publish` has returned. The late unconditional write then set the version back to `publishing` and cleared `publish_error`, leaving it stuck "publishing" with a workflow that had already finished. `TestPublishClaim_FastFailingWorkflow_FailureNotOverwritten` reproduces it against the old code.
+- **A failed write after a successful start** left a running workflow with a version that never said so.
+
+The adversarial test phase did not catch this: its publish test asserted that 20 concurrent calls share one workflow ID, which encoded the attach-and-202 behaviour instead of questioning it.
+
+### Options
+
+**A. Keep attach-and-202, fix only the ordering.** Removes the overwrite race but leaves duplicates indistinguishable from fresh publishes. Rejected: it ignores the 409 the supervisor asked for.
+
+**B. Claim in the database, then start the workflow (chosen).** One conditional `UPDATE ... RETURNING` moves the version to `publishing` and records the workflow ID and claim time; a duplicate gets 409; a failed workflow start releases the claim.
+
+**C. Ask Temporal whether a run is live** before every publish. Truthful about the workflow, but couples every publish (and the 409 decision) to Temporal's availability, which ADR-0009 deliberately avoids.
+
+### Decision
+
+**Option B.** `Repository.ClaimPublish` runs a single `UPDATE` (guarded by a `SELECT ... FOR UPDATE` in a CTE) that succeeds only from `draft` or `publish_failed`, or from `publishing` when the existing claim is stale. If it claims nothing, `Publish` returns **409 `publish_in_progress`**. Only then does it start the workflow, and it never writes the state again, so the workflow's own transitions cannot be overwritten. If the start fails, `ReleasePublish` restores the previous state, workflow ID and error (and only if this claim is still the current one), and the request fails with 503 as before, so a retry works.
+
+To stop a crash between claiming and starting from wedging a course forever, a `publishing` claim older than 15 minutes (`publishClaimStaleAfter`) may be reclaimed. The workflow's activities are capped at 30 seconds each with at most five attempts, so a live publish finishes in minutes. This needs one column: migration `migrations/course/000006_publish_started_at` adds `course_versions.publish_started_at` (nullable; rows from before the migration have none and are treated as reclaimable).
+
+### Consequences
+
+**Positive.** A client can tell a duplicate (409) from a started publish (202). The fast-failing-workflow overwrite is impossible. A failed start no longer leaves the course stuck. No dependency on Temporal for the 409 decision.
+
+**Negative.**
+- **API contract change:** a duplicate publish is now 409, not 202. Clients that retried blindly on 202 must handle 409 (poll `publish-status` instead).
+- **One migration** and one more column.
+- **The 15-minute lease is a heuristic.** If a workflow genuinely ran longer than that, a second publish could reclaim it and start a second workflow with the same ID, which Temporal would reject or attach to. Activity timeouts make this unlikely, but it is a number someone chose.
+- **Process death after claiming and before starting** leaves the version `publishing` until the lease expires, so that course cannot be republished for up to 15 minutes.
+
+### Reversal trigger
+
+If publishes legitimately approach the lease (longer activities, queueing behind a busy worker pool) or the stuck-for-15-minutes window proves painful, replace the lease with a liveness check against Temporal (option C) used only when the claim is old, not on the hot path.
 
 ---
 

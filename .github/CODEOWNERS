@@ -1,0 +1,31 @@
+# Code owners (ADR-0026). Every module is currently owned by one person because
+# one person is working on the project; that is a placeholder, not a decision.
+# When different people take over different modules, give each its own line
+# here — the last matching pattern wins, so keep specific paths below general
+# ones. Branch protection can then require review from the owner of every
+# module a PR touches.
+#
+# Suggested grouping when ownership splits (see docs/guides/versioning.md):
+#   services/identity, services/course, services/analytics -> one owner each
+#   services/worker                                        -> owns the coupling to
+#                                                              course and analytics
+#   libs/*                                                 -> a platform owner;
+#                                                              several libs can share one
+
+*                         @AmeerHussainEmumba
+
+/services/identity/       @AmeerHussainEmumba
+/services/course/         @AmeerHussainEmumba
+/services/analytics/      @AmeerHussainEmumba
+/services/worker/         @AmeerHussainEmumba
+/tools/seed/              @AmeerHussainEmumba
+/test/e2e/                @AmeerHussainEmumba
+/libs/                    @AmeerHussainEmumba
+
+# Boundary enforcement and release tooling: changes here change what the
+# guards allow, so they should always be reviewed by whoever owns architecture.
+/scripts/check-link-graph.sh    @AmeerHussainEmumba
+/scripts/check-module-graph.sh  @AmeerHussainEmumba
+/scripts/release-module.sh      @AmeerHussainEmumba
+/.golangci.yml                  @AmeerHussainEmumba
+/docs/adr/                      @AmeerHussainEmumba

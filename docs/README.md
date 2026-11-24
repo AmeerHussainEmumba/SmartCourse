@@ -10,6 +10,7 @@
 | [`prd/`](prd/) | The product requirements: use cases, functional/non-functional requirements, traceability | Living — revised as scope is clarified |
 | [`rfc/`](rfc/) | The architecture: `smartcourse-rfc.md` (the design, in full) and `differences-from-requirements.md` (every place the design adds to or reinterprets the frozen baseline, and why) | Living |
 | [`adr/`](adr/) | Every individual architecture decision, recorded as a point-in-time event with its context intact — including decisions that were later reconsidered | Append-only — a reversed decision gets a new entry marked `Superseded`, the old one is never deleted |
+| [`plans/`](plans/) | Working plans for multi-step changes (e.g. `module-split.md`: splitting the build graph into per-service and per-library Go modules), with a progress log | Living — updated as phases land |
 | [`guides/`](guides/) | How-to references, e.g. `testing.md` (what's tested, why, how to run it) | Living |
 | [`for-the-devs/`](for-the-devs/) | Onboarding — the thing to read before any of the above | Living |
 

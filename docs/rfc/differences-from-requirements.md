@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Living document |
-| Last updated | 2026-11-03 |
+| Last updated | 2026-11-17 |
 | Related | `smartcourse-rfc.md`, `smartcourse-adr.md`, `docs/baseline/SmartCourse.md`, `docs/baseline/Execution Guidelines.md` |
 
 ## Purpose
@@ -32,10 +32,17 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-007](#dr-007--celery-citation-correction) | Celery citation correction | Correction | Accepted |
 | [DR-008](#dr-008--password-reset-and-email-verification) | Password reset and email verification | Addition | Accepted |
 | [DR-009](#dr-009--separate-api-and-worker-binaries-per-supervisor-review) | Separate API and worker binaries, per supervisor review | Addition | Accepted |
-| [DR-010](#dr-010--per-service-table-ownership-and-liquibase-deferred-pending-discussion) | Per-service table ownership and Liquibase — deferred pending discussion | Interpretation | Proposed (tables half resolved — see entry's update) |
+| [DR-010](#dr-010--per-service-table-ownership-and-liquibase-deferred-pending-discussion) | Per-service table ownership and Liquibase — deferred pending discussion | Interpretation | Resolved — both halves confirmed by 2026-11-03 (see entry's updates; tables → DR-013, Liquibase → entry itself) |
 | [DR-011](#dr-011--further-splitting-cmdapi-into-per-domain-deployable-services) | Further splitting cmd/api into per-domain deployable services | Interpretation | Accepted |
 | [DR-012](#dr-012--seed-data-created-through-the-service-layer-not-a-sql-script) | Seed data created through the service layer, not a SQL script | Interpretation | Proposed |
 | [DR-013](#dr-013--schema-per-service-reverses-dr-010s-shared-schema-position) | Schema-per-service reverses DR-010's shared-schema position | Interpretation | Accepted |
+| [DR-014](#dr-014--search-indexing-and-course-detail-caching-pulled-forward-into-m2) | Search indexing and course-detail caching pulled forward into M2 | Addition | Accepted |
+| [DR-015](#dr-015--dr-008s-existing-asynq-notification-path-was-inaccurate) | DR-008's "existing Asynq notification path" was inaccurate | Correction | Accepted |
+| [DR-016](#dr-016--syncrwmutex-required-by-the-tech-stack-not-used-not-previously-logged) | sync.RWMutex: required by the tech stack, not used, not previously logged | Interpretation | Accepted |
+| [DR-017](#dr-017--course_stats-and-daily_enrollments-were-computed-but-unreadable) | course_stats and daily_enrollments were computed but unreadable | Correction | Accepted |
+| [DR-020](#dr-020--one-go-module-per-service-and-per-shared-library-beyond-the-baselines-clear-moduleservice-separation) | One Go module per service and per shared library, beyond the baseline's "clear module/service separation" | Interpretation | Accepted |
+| [DR-021](#dr-021--the-analytics-metric-count-is-nine-not-ten) | The analytics metric count is nine, not ten | Correction | Accepted |
+| [DR-022](#dr-022--limits-and-behaviours-chosen-during-the-bug-fix-pass-confirmed) | Limits and behaviours chosen during the bug-fix pass, confirmed | Clarification | Accepted |
 
 ---
 
@@ -227,7 +234,7 @@ The direct conversation this entry was waiting on happened. The supervisor's per
 
 ### Update — 2026-11-03: Liquibase half now resolved too
 
-A later written review asked for Liquibase again ("own Liquibase changelog" per service). Asked directly, the supervisor confirmed: "Liquibase not a hard requirement for you. You're on golang-migrate just we need to make sure each service has its own migrations folder." Both halves of this entry are now resolved — neither in the direction the original review asked for, but both by direct confirmation rather than this project's own unilateral case. `golang-migrate` stays (`internal/platform/db`, `Makefile`), reorganized into one independent migration sequence per service (`migrations/{platform,identity,course,analytics}/`) rather than Liquibase changelogs. See DR-013 and ADR-0024 for what that same conversation asked for on data ownership, which this register's original per-service-table reasoning did not survive unchanged.
+A later written review asked for Liquibase again ("own Liquibase changelog" per service). Asked directly, the supervisor confirmed: "Liquibase not a hard requirement for you. You're on golang-migrate just we need to make sure each service has its own migrations folder." Both halves of this entry are now resolved — neither in the direction the original review asked for, but both by direct confirmation rather than this project's own unilateral case. `golang-migrate` stays (`libs/db`, `Makefile`), reorganized into one independent migration sequence per service (`migrations/{platform,identity,course,analytics}/`) rather than Liquibase changelogs. See DR-013 and ADR-0024 for what that same conversation asked for on data ownership, which this register's original per-service-table reasoning did not survive unchanged.
 
 ---
 
@@ -282,6 +289,152 @@ This is a genuine reversal of DR-010's shared-*schema* position, not an extensio
 ### If this turns out to be wrong
 
 If the schema split ever needs reversing (e.g., it turns out to add operational cost — migration-tooling surface, `search_path` misconfiguration risk — without a corresponding benefit the supervisor confirms she still wants), the fix is a new entry superseding this one and ADR-0024, collapsing back toward DR-010's original shared-schema position, not a silent revert.
+
+---
+
+## DR-014 — Search indexing and course-detail caching pulled forward into M2
+
+**Category:** Addition · **Date:** 2026-11-05 · **Related:** DR-006, ADR-0021, ADR-0025
+
+### What differs
+
+RFC §21.1 maps "Week 2" to M2 (the publishing workflow) and scopes search indexing and caching to M3 ("Kafka events, background workers, analytics, observability"). M2's actual implementation includes a working `IndexSearch` activity (a real `course_search_index` upsert plus a live `GET /courses/search` endpoint) and a working `WarmCache` activity (a real version-scoped Redis cache, read through by `GET /courses/{id}`) — both nominally M3 scope, built as real, working pieces rather than left for later or stubbed out to match the RFC's §7.4 diagram literally.
+
+### Why
+
+The same reasoning DR-006 already established and ADR-0021 already acted on: the weekly/milestone breakdown is a review checkpoint, not a build order, and a design audit that finds a gap between the documented plan and what's actually buildable right now should close that gap rather than wait on a calendar date. Here, the alternative to building these for real was a workflow with two of its seven activities as literal no-ops (rejected directly — see ADR-0025's Option B) or silently dropped (leaves RFC §7.4's own diagram unfulfilled for no forcing reason, when `course_search_index`'s schema and `libs/cache`'s Redis client both already existed from M0/M1). Full reasoning and the real bugs found building this: ADR-0025.
+
+### If this turns out to be wrong
+
+If `internal/search` lands in M3 as its own module with its own schema and ranking strategy (the same way `services/analytics/analytics` was rebuilt rather than merely relocated when ADR-0024 landed), this entry's `IndexSearch` write path is superseded by that module's own relay-driven handler — not a reversal, an upgrade path already anticipated in ADR-0025's reversal trigger.
+
+---
+
+## DR-015 — DR-008's "existing Asynq notification path" was inaccurate
+
+**Category:** Correction · **Date:** 2026-11-06 · **Related:** DR-008, DR-007, `services/identity/identity/email.go`
+
+### What was wrongly asserted
+
+DR-008 (password reset and email verification) states both flows are "delivered by email through the existing Asynq notification path." No such path exists, today or at any point this register can verify: Asynq is not a dependency (absent from `go.mod`), and email delivery is `identity.LoggingEmailSender` — a stand-in that logs `"would send email verification email"` and sends nothing (its own doc comment: "the M0/M1 placeholder... until it does," swappable behind the `EmailSender` interface it's declared against). A baseline-compliance audit comparing claims across this project's own documentation against actual running code found the mismatch.
+
+### Why this is logged
+
+Same reason as DR-007: not a deviation from the baseline, a correction to our own prior documentation, which asserted something false about implementation state. DR-008's underlying decision (add password reset/email verification, reusing the token-hashing pattern already built for refresh tokens) is unaffected and stands — only the "through the existing Asynq notification path" clause was wrong; it should have said "through `LoggingEmailSender`, a stand-in pending real delivery (Asynq, M3)." Left uncorrected, a reviewer reading DR-008 alone would believe background email delivery is built; it isn't.
+
+### If this turns out to be wrong
+
+Not applicable — this entry itself is the correction, the same way DR-007 is. DR-008 is not edited, per this register's own rule against editing an entry to reflect a reversal.
+
+---
+
+## DR-016 — `sync.RWMutex`: required by the tech stack, not used, not previously logged
+
+**Category:** Interpretation · **Date:** 2026-11-06 · **Related:** RFC §21.0, ADR-0021
+
+### What differs
+
+`SmartCourse.md`'s Tech Stack section lists `sync.RWMutex` by name among the concurrency primitives "the implementation must demonstrate practical usage of" — the same list `sync.Mutex`, `sync/atomic`, `sync.WaitGroup`, and `context.Context` appear in, all of which are used in real production code. `sync.RWMutex` has zero uses anywhere in this codebase outside test files, confirmed by a baseline-compliance audit.
+
+### Why
+
+RFC §21.0 already states this plainly in its own status prose: "`sync.RWMutex` has no forced-fit use — the one candidate pattern RFC §10.3 names (a read-heavy/write-rare in-process config cache) doesn't exist as a real need yet, and adding one only to use the primitive would be exactly the anti-pattern ADR-0021 was written to avoid." That's a defensible reading of an ambiguous instruction — "demonstrate practical usage" read as "use it where a real need exists," not "manufacture one" — but it was never logged in this register the way every other baseline departure was, so a reviewer checking this register specifically for unmet tech-stack items wouldn't find it. Logged now for exactly that reason: the gap itself isn't new; its absence from this document was.
+
+### If this turns out to be wrong
+
+If a genuine read-heavy/write-rare shared-state need emerges (the in-process config cache RFC §10.3 names is still the most likely candidate), this is superseded by a new entry recording where `sync.RWMutex` was added and why that specific case earned it. If the reviewer intends literal, forced demonstration of every named primitive regardless of organic need, this entry is superseded and one is added for its own sake, with that tradeoff stated plainly rather than hidden.
+
+---
+
+## DR-017 — `course_stats` and `daily_enrollments` were computed but unreadable
+
+**Category:** Correction · **Date:** 2026-11-06 · **Related:** ADR-0024, DR-014, `services/analytics/analytics`
+
+### What was wrongly asserted
+
+RFC §21.0 and `services/analytics/analytics/README.md` both claimed analytics closed "5 of 10" SmartCourse.md FR-5 metrics, counting per-course completion rate, average time to complete, and new enrollments over time among them. `course_stats` and `daily_enrollments` were genuinely written by the relay's handlers (since ADR-0024) — but neither had a repository read method, a `Service` method, or an HTTP route. "Computed and stored" was reported as "live"; a baseline-compliance audit comparing the brief's metric list against what's actually reachable by a client found the three metrics above were not.
+
+### Why this is logged, and what changed
+
+Same category as DR-007/DR-015: a correction to our own status claims, not a baseline deviation. Fixed in the same pass this was found, rather than left open: `Repository.GetCourseStats`/`ListDailyEnrollments`, `Service` wrappers, and two new routes (`GET /analytics/courses/{id}`, `GET /analytics/courses/{id}/daily-enrollments`) now give both tables a real read path, with integration and HTTP-level test coverage (`service_integration_test.go`, `analytics_http_test.go`). FR-5 is now honestly 7 of 10 — the remaining two ("Most Popular Courses," "Failed Events / Workflow Issues") are genuinely not built yet, not merely unexposed.
+
+### If this turns out to be wrong
+
+Not applicable — this closes a gap between documentation and reality rather than making a bet.
+
+---
+
+## DR-020 — One Go module per service and per shared library, beyond the baseline's "clear module/service separation"
+
+**Category:** Interpretation · **Date:** 2026-11-17 · **Related:** DR-009, DR-011, DR-013, ADR-0001, ADR-0022, ADR-0023, ADR-0024, ADR-0026
+
+### What the baseline says, and what we did
+
+The baseline asks for structure and separation only in general terms: `docs/baseline/Execution Guidelines.md` §3 — "Organized project structure", "Clear module/service separation"; `docs/baseline/SmartCourse.md` §6 — "Clear separation of responsibilities between components"; and, as an expected outcome, "High-quality architecture and maintainability". It does not say how services are packaged, whether the repository is one Go module or many, or where shared code lives.
+
+The Week 2 review of PR #11 read that separation more strictly: the services were independently deployable and owned their own schemas (ADR-0022/0023/0024), but every binary still built every module through one shared composition root and one `go.mod`. It asked for each service in its own folder with its own `go.mod`, shared code in `libs/common`, and each service wired in its own `main.go`. This is implemented as ADR-0026.
+
+Two parts go **beyond** what the review literally named, and are logged here so they are not mistaken for something the review or the baseline required:
+
+1. **Shared code is split into one module per package** (13 library modules plus `libs/testenv`), not the single `libs/common` module named in the review. The reason is an expectation on the project side that on a real project different people will own different modules. With one team today this is mostly overhead (19 `go.mod` files for roughly 1,800 lines of shared code); ADR-0026 states the cost and the fallback (three grouped modules, or one `libs/common`).
+2. **Domain packages are exported, not under `internal/`**, because the worker and the seed tool must import them. Boundaries between services are enforced by the module graph and two CI guards rather than by Go's `internal/` rule.
+
+### Why this is logged as "accepted," not treated as a requirement of the brief
+
+Like DR-013, this is adopted because it was given as a direct requirement after review, not because the baseline needs it — nothing in the brief requires separate `go.mod` files, and DR-010's engineering case for a single shared codebase and database is not retracted. What the baseline does reward ("clarity of architecture", "code quality and structure", Execution Guidelines §7) is served by the change: each binary now links only what it runs (`identity-api`: 388 packages and no Temporal SDK, from 589 and 61), and the boundary between services is enforced by the compiler.
+
+**Not yet confirmed with the supervisor:** that one module per library package is acceptable in place of `libs/common`, and that the worker importing the `course` and `analytics` handler packages is acceptable until M3's per-consumer event delivery removes the need.
+
+### If this turns out to be wrong
+
+If the per-package library split proves to be overhead without a second owner, collapse to three grouped modules (`core`, `web`, `data`) or one `libs/common` — the layout allows it and ADR-0026's reversal trigger says when. If the module split as a whole is rejected, ADR-0026 is superseded by a new record; the per-service wiring change that came first (no shared `bootstrap`) stands on its own.
+
+---
+
+## DR-021 — The analytics metric count is nine, not ten
+
+**Category:** Correction · **Date:** 2026-11-17 · **Related:** DR-017, `docs/baseline/SmartCourse.md` FR-5
+
+### What was wrongly asserted
+
+The PRD (FR-5 and its traceability row), RFC §21.0 and §A, `services/analytics/analytics/README.md` and `services/README.md` all described SmartCourse.md FR-5 as "ten metrics" and reported progress as "7 of 10". The baseline names **nine** metrics (total students, total instructors, total courses published, new enrollments over time, course completion rate, average time to complete, most popular courses, average courses per student, failed events / workflow issues) followed by an empty tenth bullet. The PRD's own enumeration and RFC §9.1's table both list nine; only the prose count said ten. DR-017's earlier "5 of 10" carried the same miscount and is left as written, since entries are never edited.
+
+### Why this is logged, and what changed
+
+Same category as DR-007, DR-015 and DR-017: a correction to our own status claims, not a baseline deviation. The count is now "nine" in the documents above, and progress is **7 of 9**. Verified against the code on 2026-11-17: total students, total instructors, total courses published and average courses per student are in `platform_snapshot`; completion rate and average completion time are in `course_stats`; new enrollments over time are in `daily_enrollments`. **Most popular courses** and **failed events / workflow issues** are not implemented.
+
+### If this turns out to be wrong
+
+If the brief's empty tenth bullet was meant to carry a metric, the right fix is to ask the reviewer what it was and log the answer here as a new entry.
+
+---
+
+## DR-022 — Limits and behaviours chosen during the bug-fix pass, confirmed
+
+**Category:** Clarification · **Date:** 2026-11-18 · **Related:** `docs/plans/module-split-findings.md` (F-17, F-18, F-02, F-26, F-29, F-33, F-36)
+
+### What was chosen
+
+The 38-defect fix pass (module-split-findings.md) left several values and behaviours that the requirements documents do not specify. The people who wrote the fixes chose them; the project owner reviewed them on 2026-11-18 and accepted them. They are recorded here so a later reader knows they are decisions, not accidents, and where to change them.
+
+| Area | Choice |
+|---|---|
+| Input bounds (F-17) | `enrollment_limit` 1,000,000; `position` 100,000; `duration_s` 86,400; category 100 chars; tag 50 chars; `asset_key` 500 chars; lesson content depth 32; lesson content 65,536 bytes |
+| Login limits (F-15) | Failures only: 5 per minute per account+IP, 20 per minute per account |
+| Route limits (F-15) | 5 per minute: register, password-reset request, verification resend. 20: login. 30: password-reset confirm, verification confirm. 60: refresh, logout |
+| HTTP hardening (F-29) | `MAX_BODY_BYTES` 1 MiB; read timeout 15 s, write timeout 30 s, idle timeout 120 s; all overridable by environment variable |
+| Argon2 (F-26) | Defaults 64 MiB, 3 iterations, parallelism 2; values outside the validated range stop the service starting |
+| Analytics (F-18) | Any authenticated user reads platform totals; a student reads per-course stats only for a course they are actively or completed-enrolled in, and a withdrawn student gets 404; instructors may read any course (ownership not enforced, see the assessment) |
+| Admin role (F-33) | An admin may demote themselves when another active admin exists; otherwise 409 `last_admin` |
+| Ownership (F-36) | A non-owner of an existing course gets 404 `not_found`, identical to an unknown id (an API contract change from 403 `not_owner`) |
+
+### Why this is logged
+
+None of these contradict the baseline; they fill gaps in it. They are numbers and edge-case behaviours a reviewer may reasonably want different.
+
+### If this turns out to be wrong
+
+Each value is a constant or an environment variable in the file named in the findings register. Changing one is a one-line edit plus the test that pins it.
 
 ---
 

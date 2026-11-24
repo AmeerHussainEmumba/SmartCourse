@@ -30,7 +30,7 @@ These five ideas explain *why* the code is shaped the way it is. Misunderstandin
 2. **Why consumers of events must be idempotent.** The outbox pattern above guarantees an event is never *lost*, but it can be delivered more than once (a relay might publish successfully and then crash before marking the row done). Every downstream consumer has to handle "I've already seen this" without double-counting.
 3. **Which data is strongly consistent, and which is allowed to lag.** Anything a user can assert as fact about their own account ("I'm enrolled," "I completed that lesson") is transactionally guaranteed and correct immediately. Anything derived (a dashboard count, a search index entry) is allowed to be a few seconds stale, and is always rebuildable from the source of truth. Conflating the two is a real design mistake, not a style issue.
 4. **Why `sync.Mutex` doesn't protect what you might think it protects.** This service runs as multiple stateless replicas. A `sync.Mutex` only guards state *within one process* — it does nothing for state shared *across* replicas. Anything that needs to be correct across replicas (a hot counter, a rate limit) lives in Redis or Postgres, not behind a Go mutex. This is the most common category of subtle bug available in a horizontally-scaled Go service, and it compiles and passes the race detector while being wrong.
-5. **Why a database row lock (`SELECT ... FOR UPDATE`) is used for enrollment limits instead of an application-level check.** Two students racing for the last seat in a course can both read "49 of 50 seats taken," both pass the check, and both enroll — silently violating the limit, with no error anywhere, and no functional test that would ever catch it. The fix is a lock that makes the two requests serialize on the database row. This is proven, not just asserted, by `internal/enrollment/service_integration_test.go`'s concurrency test — read it once you're set up; it's the best single file for understanding why this codebase tests the way it does.
+5. **Why a database row lock (`SELECT ... FOR UPDATE`) is used for enrollment limits instead of an application-level check.** Two students racing for the last seat in a course can both read "49 of 50 seats taken," both pass the check, and both enroll — silently violating the limit, with no error anywhere, and no functional test that would ever catch it. The fix is a lock that makes the two requests serialize on the database row. This is proven, not just asserted, by `services/course/enrollment/service_integration_test.go`'s concurrency test — read it once you're set up; it's the best single file for understanding why this codebase tests the way it does.
 
 ---
 
@@ -40,7 +40,7 @@ These five ideas explain *why* the code is shaped the way it is. Misunderstandin
 
 - **Go 1.25+** — check with `go version`.
 - **Docker** (with Compose v2, i.e. `docker compose`, not the old standalone `docker-compose`) — check with `docker compose version`.
-- That's it to get the core system running. Kafka, Temporal, MongoDB, and the observability stack come later and aren't needed yet — see §5.
+- That's it to get the system running, including course publishing (M2 — Temporal's part of `make dev-workflow`, the profile tier these steps use, not `dev-core`). Kafka, MongoDB, and the observability stack come later and aren't needed yet — see §5.
 
 ### Steps
 
@@ -55,24 +55,33 @@ cp env.example .env
 #    openssl rand -base64 48
 #    and put it in JWT_SIGNING_KEY in .env.
 
-# 2. Start the minimum infrastructure: Postgres, Redis, MinIO.
-make dev-core
+# 2. Start infrastructure — Postgres, Redis, MinIO, and (since make seed
+#    publishes real courses through a real Temporal workflow, M2) Temporal
+#    itself. `dev-workflow` is a superset of `dev-core`, not a different
+#    stack — everything `dev-core` starts is still here too.
+make dev-workflow
 
 # 3. Apply the schema.
 make migrate-up
 
 # 4. Populate realistic data — instructors, courses at every lifecycle
 #    state, students with partial progress. Goes through the real
-#    service layer (not raw SQL), so it also proves the four core
-#    modules work together. Safe to re-run — it's a no-op the second
-#    time. See cmd/seed/README.md.
+#    service layer (not raw SQL), so it also proves the core modules
+#    (including the publish workflow) work together. Safe to re-run —
+#    it's a no-op the second time. See tools/seed/README.md.
+#    `make seed` runs on your host, not in a container, so it reaches
+#    Temporal through the published port: `.env` needs
+#    TEMPORAL_HOST_PORT=localhost:7233 (the default in env.example). If it
+#    fails at the publish step with `no children to pick from`, that value
+#    is the first thing to check. The seed is a no-op once the admin user
+#    exists, so a half-finished run needs the data reset before retrying.
 make seed
 
-# 5. Nothing left to do — `make dev-core` (step 2) already started the
+# 5. Nothing left to do — `make dev-workflow` (step 2) already started the
 #    application containers too (identity-api, course-api, analytics-api,
-#    worker — they're in the `core` profile, same as Postgres/Redis/MinIO).
-#    See "Running natively instead" below if you want faster iteration
-#    than a Docker rebuild on every change.
+#    worker — they're in the `core` profile, which `workflow` includes —
+#    plus Temporal and its UI). See "Running natively instead" below if
+#    you want faster iteration than a Docker rebuild on every change.
 ```
 
 Check it's alive (each HTTP service has its own `/health/ready`):
@@ -99,7 +108,7 @@ curl -X POST localhost:8090/api/v1/auth/register \
   -d '{"email":"you@example.com","password":"correct-horse-battery","full_name":"Your Name"}'
 ```
 
-Either way you should get back an access token, a refresh token, and a user record. Courses live in `course-api`, port **8091**:
+Register answers `202` with no tokens (the same answer whether or not the email exists, so it cannot be used to discover registered emails). Log in with the same credentials to get tokens. Either way, login gives you an access token, a refresh token, and a user record. Courses live in `course-api`, port **8091**:
 
 ```bash
 curl localhost:8091/api/v1/courses
@@ -109,7 +118,7 @@ From here, `api/openapi.yaml` documents every endpoint (across all three service
 
 ### Running natively instead
 
-`make dev-core` containerizes everything, including the app, which means a code change needs a rebuild to see. For faster iteration, stop the containerized app services (`docker compose stop identity-api course-api analytics-api worker` — leave Postgres/Redis/MinIO running) and run natively instead, each in its own terminal:
+`make dev-workflow` containerizes everything, including the app, which means a code change needs a rebuild to see. For faster iteration, stop the containerized app services (`docker compose stop identity-api course-api analytics-api worker` — leave Postgres/Redis/MinIO/Temporal running) and run natively instead, each in its own terminal:
 
 ```bash
 make run-identity-api     # :8090
@@ -148,9 +157,11 @@ make test-race         # unit tests with the race detector (always on in CI)
 make test-integration  # integration + concurrency tests — needs Docker, spins up real Postgres/Redis containers per test
 ```
 
+**Plain `go test ./...` at the repo root tests nothing.** The repo is a set of separate Go modules (§4), and Go does not cross module boundaries. These `make` targets run the command in every module for you (`scripts/for-each-module.sh`). To test one module while you work: `cd services/course && go test -race -tags=integration ./...`.
+
 **Read `docs/guides/testing.md` before writing a new test.** It indexes every existing test — what it checks and why — and explains the two tiers in depth. The short version: this project doesn't mock the database. Integration tests run against real, disposable Postgres containers (`testcontainers-go`) because constraint violations, transaction behavior, and lock contention are precisely what needs verifying, and a mock only proves your code called the method you told it to call.
 
-If you want to see what a real concurrency bug looks like when it's *not* caught: read `internal/enrollment/service_integration_test.go`'s `TestEnroll_SeatLimit_NeverExceededUnderConcurrency`. It's referenced constantly in this codebase's docs for a reason.
+If you want to see what a real concurrency bug looks like when it's *not* caught: read `services/course/enrollment/service_integration_test.go`'s `TestEnroll_SeatLimit_NeverExceededUnderConcurrency`. It's referenced constantly in this codebase's docs for a reason.
 
 ---
 
@@ -158,9 +169,15 @@ If you want to see what a real concurrency bug looks like when it's *not* caught
 
 **PostgreSQL is the single source of truth.** Redis and (eventually) MongoDB hold only derived, rebuildable data — never something a user's correctness depends on.
 
-**Four services, one shared codebase and database, each with its own schema (ADR-0022, ADR-0023, ADR-0024).** `cmd/identity-api` serves auth/users, its own Postgres schema (`identity`). `cmd/course-api` serves courses, enrollments, and progress together, sharing one schema (`course`) — kept in one process and one schema because enrollment locks the `courses` row in the same transaction it writes an enrollment row in (ADR-0012's seat-limit guarantee). `cmd/analytics-api` serves the read-only analytics dashboard from its own schema (`analytics`), fed entirely by relay events — it never queries `course` or `identity` directly. `cmd/worker` runs the outbox relay today (polling a fourth, shared `platform` schema every producer writes to), and will run Kafka consumers and background jobs once those exist (see §5 — they don't yet). All four are built and deployed independently, but all import `internal/platform/bootstrap`, so a shared code change can't drift between them the way it could if each maintained its own wiring. No foreign key or query crosses a schema boundary — a service that only needed another's data for display, not ownership, keeps its own small event-fed copy instead (e.g. `course.instructor_mirror`, so the course catalogue can show an instructor's name without reaching into `identity`). (This used to be one binary with a `--mode` flag, then two services, then four sharing one flat schema, then four each with their own — see ADR-0022 through ADR-0024 if you're curious why and when each change happened; it's a good example of a design decision getting revisited based on real feedback, which is worth seeing happen at least once.)
+**Four services, one repository and one database, each with its own schema (ADR-0022, ADR-0023, ADR-0024).** `services/identity/cmd/identity-api` serves auth/users, its own Postgres schema (`identity`). `services/course/cmd/course-api` serves courses, enrollments, and progress together, sharing one schema (`course`) — kept in one process and one schema because enrollment locks the `courses` row in the same transaction it writes an enrollment row in (ADR-0012's seat-limit guarantee). `services/analytics/cmd/analytics-api` serves the read-only analytics dashboard from its own schema (`analytics`), fed entirely by relay events — it never queries `course` or `identity` directly. `services/worker/cmd/worker` runs the outbox relay today (polling a fourth, shared `platform` schema every producer writes to), and will run Kafka consumers and background jobs once those exist (see §5 — they don't yet). All four are built and deployed independently, but all import `internal/platform/bootstrap`, so a shared code change can't drift between them the way it could if each maintained its own wiring. No foreign key or query crosses a schema boundary — a service that only needed another's data for display, not ownership, keeps its own small event-fed copy instead (e.g. `course.instructor_mirror`, so the course catalogue can show an instructor's name without reaching into `identity`). (This used to be one binary with a `--mode` flag, then two services, then four sharing one flat schema, then four each with their own — see ADR-0022 through ADR-0024 if you're curious why and when each change happened; it's a good example of a design decision getting revisited based on real feedback, which is worth seeing happen at least once.)
 
-**Eight domain modules, one shared kernel.** Each module (`internal/identity`, `internal/course`, `internal/enrollment`, `internal/progress`, `internal/analytics`, and three not yet built — search, notification, audit) owns one business capability and follows the same internal shape: `handler.go` (HTTP), `service.go` (business logic and transactions), `repository.go` (the only file touching the database directly), `dto.go` (API request/response types), `domain.go` (entities). None of them import each other's internals directly — enforced by a lint rule, not just convention. `internal/README.md` has the full module map.
+**Eight domain modules, one shared kernel.** Each module (`services/identity/identity`, `services/course/course`, `services/course/enrollment`, `services/course/progress`, `services/analytics/analytics`, and three not yet built — search, notification, audit) owns one business capability and follows the same internal shape: `handler.go` (HTTP), `service.go` (business logic and transactions), `repository.go` (the only file touching the database directly), `dto.go` (API request/response types), `domain.go` (entities). None of them import each other's internals directly. Between services that is enforced by Go itself (each service is its own Go module, see below); inside the `course` service, where course, enrollment and progress share one module, by a lint rule rather than just convention. `services/README.md` has the full module map.
+
+**One repository, 20 Go modules (ADR-0026).** Each service is its own Go module under `services/` (`identity`, `course`, `analytics`, `worker`), the shared kernel is split into one module per package under `libs/` (`auth`, `db`, `config`, `errors`, ...), and `tools/seed` is a module too. Three things follow that will surprise you if you come from a single-module project:
+
+- **A service can only import what its `go.mod` lists.** `identity` cannot import `course` — not because a linter says so, but because it doesn't depend on it. `scripts/check-module-graph.sh` fails CI if that changes. The `worker` is the one service allowed to depend on others (it runs `course` and `analytics` event handlers and the publish workflow).
+- **Each binary links only what it uses.** `identity-api` has no Temporal SDK in it. `scripts/check-link-graph.sh` enforces that. This is what the Week 2 review asked for.
+- **`go.work` is for your laptop; CI and Docker use `GOWORK=off`.** If you add an import of a library to a module, add its `require` **and its `replace`** (plus the `replace` of anything that library depends on) to your module's `go.mod`, then `GOWORK=off go mod tidy`. Go does not inherit `replace` directives, so forgetting one works on your machine and fails in CI. `libs/README.md` has the dependency order, and `docs/guides/versioning.md` explains when modules get tagged versions (not yet).
 
 **State changes now, side effects later.** A request that changes something (enrolling, publishing a course) commits to Postgres and returns immediately. Anything that doesn't need to block the caller — updating a search index, sending a notification, recalculating analytics — happens asynchronously via the outbox pattern (§1.1 above). This is *why* enrollment feels instant even though "enrolling" conceptually triggers several downstream effects.
 
@@ -172,11 +189,11 @@ If you want to see what a real concurrency bug looks like when it's *not* caught
 
 Don't assume the RFC describes the current state of the code — it describes the target design, and marks what's implemented. As of now:
 
-**Built, tested, running:** the full database schema; the shared kernel (auth, config, error handling, rate limiting, the outbox writer); the `identity`, `course`, `enrollment`, and `progress` modules, each with a working HTTP API and integration tests against real infrastructure; **the outbox relay** (`internal/platform/relay`) — a real bounded worker pool that drains events and dispatches them to handlers, proven by its own concurrency tests, not just written; and `internal/analytics`, the relay's first handler, which is why `GET /analytics/platform` returns real numbers today instead of zeros. Course publishing's validation step also runs genuinely concurrently (`errgroup`), not just sequentially.
+**Built, tested, running:** the full database schema; the shared kernel (auth, config, error handling, rate limiting, the outbox writer); the `identity`, `course`, `enrollment`, and `progress` modules, each with a working HTTP API and integration tests against real infrastructure; **the outbox relay** (`libs/relay`) — a real bounded worker pool that drains events and dispatches them to handlers, proven by its own concurrency tests, not just written; and `services/analytics/analytics`, the relay's first handler, which is why `GET /analytics/platform` returns real numbers today instead of zeros. **Course publishing is a real Temporal workflow** (M2, ADR-0025) — `POST /courses/{id}/publish` starts `services/course/workflows.PublishCourseWorkflow`, `GET /courses/{id}/publish-status` polls it, and the workflow's own activities run concurrently where RFC §7.4's graph allows, with per-activity retry and crash-recoverable orchestration (the thing an in-process `errgroup` alone never provided). `GET /courses/search` (full-text) and a Redis-backed course-detail cache are both real too, pulled forward from M3 as part of the same workflow.
 
-This matters for where you look for examples: if you want to see this codebase's concurrency patterns in production code (not just in a test file), read `internal/platform/relay/` and `internal/course/service.go`'s `runPublishChecks`, not just the RFC's description of them.
+This matters for where you look for examples: if you want to see this codebase's concurrency patterns in production code (not just in a test file), read `libs/relay/` and `services/course/workflows/workflow.go`, not just the RFC's description of them. To run the publish workflow locally, use `make dev-workflow` (not `dev-core`) — that's the Compose profile tier that actually starts Temporal alongside the four services.
 
-**Not built yet, on purpose, not a gap:** the Temporal-based publishing workflow (durable, crash-recoverable orchestration — currently synchronous with real concurrent validation but no crash recovery mid-publish; see `internal/course/service.go`'s `Publish` method, which explicitly marks where Temporal replaces it), Kafka and Schema Registry (the relay is a deliberate in-process bridge ahead of them — see ADR-0021), `search`/`notification`/`audit` modules (same relay-handler pattern as `analytics`, just not built yet), asset upload, and the observability stack (Prometheus/Grafana/Jaeger).
+**Not built yet, on purpose, not a gap:** Kafka and Schema Registry (the relay is a deliberate in-process bridge ahead of them — see ADR-0021), `notification`/`audit` modules (same relay-handler pattern as `analytics`, just not built yet — `search` is the one module name on this list that's partially real: see `internal/README.md`), asset upload, and the observability stack (Prometheus/Grafana/Jaeger).
 
 Full detail: `docs/rfc/smartcourse-rfc.md` §21.0.
 
@@ -189,8 +206,8 @@ Reading order, roughly in order of how much context each one assumes:
 1. This document.
 2. `docs/rfc/smartcourse-rfc.md` §3 and §4 — the consistency model and architecture overview everything else derives from.
 3. `migrations/` in order — the schema *is* the domain model; the constraints encode the actual business rules (a partial unique index doing real work is more informative than a paragraph describing the rule it enforces).
-4. `internal/enrollment/` end to end — the clearest illustration of a transaction, an outbox write, and the sync/async boundary in one small module.
-5. `internal/platform/README.md` — the conventions every module builds on.
+4. `services/course/enrollment/` end to end — the clearest illustration of a transaction, an outbox write, and the sync/async boundary in one small module.
+5. `libs/README.md` — the conventions every module builds on.
 6. `docs/adr/smartcourse-adr.md` — *why* things are the way they are, including decisions that were reconsidered. Skim the index; read the ones relevant to whatever you're about to touch.
 7. `docs/guides/testing.md` — before you write your first test.
 
