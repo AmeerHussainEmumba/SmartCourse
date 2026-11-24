@@ -16,12 +16,9 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/analytics/analytics"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/assets"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/course/certificate"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/course/enrollment"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/workflows"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/jobs"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/notification"
 )
 
 // buildRelay wires every module's relay handlers into one Relay instance.
@@ -35,19 +32,7 @@ import (
 // checked the Postgres pool can hold it (ADR-0027).
 func buildRelay(deps *infra.Dependencies, cfg *config.Config) *relay.Relay {
 	rl := relay.New(deps.DB, relay.WithWorkerCount(cfg.Relay.Workers))
-	for _, h := range analytics.Handlers() {
-		rl.Register(h)
-	}
-	for _, h := range course.Handlers() {
-		rl.Register(h)
-	}
-	for _, h := range enrollment.Handlers() {
-		rl.Register(h)
-	}
-	for _, h := range certificate.Handlers() {
-		rl.Register(h)
-	}
-	for _, h := range notification.Handlers() {
+	for _, h := range consumerHandlers() { // mongo_wire.go: also the dead-letter replay registry
 		rl.Register(h)
 	}
 	return rl

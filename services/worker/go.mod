@@ -3,12 +3,12 @@ module github.com/AmeerHussainEmumba/SmartCourse/services/worker
 go 1.26.5
 
 require (
-	github.com/gin-gonic/gin v1.12.0 // indirect
+	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0 // indirect
 	github.com/lib/pq v1.10.9 // indirect
-	github.com/redis/go-redis/v9 v9.22.0 // indirect
+	github.com/redis/go-redis/v9 v9.22.0
 	go.temporal.io/sdk v1.50.0
 	golang.org/x/crypto v0.57.0 // indirect
 	gorm.io/driver/postgres v1.6.3 // indirect
@@ -17,12 +17,8 @@ require (
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/auth v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/cache v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/db v0.0.0 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/errors v0.0.0 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/httpx v0.0.0 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/router v0.0.0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.48.0 // indirect
@@ -118,8 +114,10 @@ require (
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
+	github.com/xdg-go/scram v1.4.0 // indirect
+	github.com/xdg-go/stringprep v1.0.4 // indirect
+	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	go.mongodb.org/mongo-driver/v2 v2.10.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
@@ -142,17 +140,24 @@ require (
 
 require (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/asynqx v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/auth v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/config v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/errors v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/events v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/httpx v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/idempotency v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/infra v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/logging v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/mongostore v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/relay v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/router v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/temporal v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/testenv v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/services/analytics v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/services/course v0.0.0
 	github.com/testcontainers/testcontainers-go v0.44.0
+	go.mongodb.org/mongo-driver/v2 v2.10.0
 )
 
 replace (
@@ -162,10 +167,12 @@ replace (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/config => ../../libs/config
 	github.com/AmeerHussainEmumba/SmartCourse/libs/db => ../../libs/db
 	github.com/AmeerHussainEmumba/SmartCourse/libs/errors => ../../libs/errors
+	github.com/AmeerHussainEmumba/SmartCourse/libs/events => ../../libs/events
 	github.com/AmeerHussainEmumba/SmartCourse/libs/httpx => ../../libs/httpx
 	github.com/AmeerHussainEmumba/SmartCourse/libs/idempotency => ../../libs/idempotency
 	github.com/AmeerHussainEmumba/SmartCourse/libs/infra => ../../libs/infra
 	github.com/AmeerHussainEmumba/SmartCourse/libs/logging => ../../libs/logging
+	github.com/AmeerHussainEmumba/SmartCourse/libs/mongostore => ../../libs/mongostore
 	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox => ../../libs/outbox
 	github.com/AmeerHussainEmumba/SmartCourse/libs/ratelimit => ../../libs/ratelimit
 	github.com/AmeerHussainEmumba/SmartCourse/libs/relay => ../../libs/relay

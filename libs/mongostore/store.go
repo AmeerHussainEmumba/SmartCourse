@@ -190,6 +190,10 @@ func (s *Store) ensureIndexes(ctx context.Context) error {
 		{s.audit, []mongo.IndexModel{
 			{Keys: bson.D{{Key: "resource_type", Value: 1}, {Key: "resource_id", Value: 1}, {Key: "at", Value: 1}}},
 			{Keys: bson.D{{Key: "actor_id", Value: 1}, {Key: "at", Value: 1}}},
+			// One audit record per source event (AppendAuditOnce); records
+			// written by AppendAudit carry no event_id and are not indexed.
+			{Keys: bson.D{{Key: "event_id", Value: 1}}, Options: options.Index().SetUnique(true).
+				SetPartialFilterExpression(bson.D{{Key: "event_id", Value: bson.D{{Key: "$type", Value: "string"}}}})},
 		}},
 		{s.failed, []mongo.IndexModel{
 			{Keys: bson.D{{Key: "event_id", Value: 1}, {Key: "consumer", Value: 1}}, Options: options.Index().SetUnique(true)},

@@ -28,6 +28,8 @@ type Config struct {
 	SMTP     SMTPConfig
 	Asynq    AsynqConfig
 	Jobs     JobsConfig
+	Mongo    MongoConfig
+	Admin    AdminConfig
 
 	JWT   JWTConfig
 	Argon Argon2Config
@@ -288,6 +290,11 @@ func Load() (*Config, error) {
 	cfg.SMTP, smtpErrs = loadSMTP()
 	errs = append(errs, smtpErrs...)
 	cfg.Asynq, cfg.Jobs = loadAsynq(optInt, optDuration, &errs)
+	var mongoErrs, adminErrs []string
+	cfg.Mongo, mongoErrs = loadMongo(os.Getenv, optDuration)
+	cfg.Admin, adminErrs = loadAdmin(os.Getenv)
+	errs = append(errs, mongoErrs...)
+	errs = append(errs, adminErrs...)
 
 	if len(cfg.JWT.SigningKey) < 32 {
 		// Only enforced once the key is present; the presence check above

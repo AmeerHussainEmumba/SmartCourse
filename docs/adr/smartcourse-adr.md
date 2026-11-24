@@ -1329,6 +1329,28 @@ If the archive's only users are replay and the failed-events metric, and operati
 - **Open, for the consumer-runner phase:** what a consumer does when parking itself fails because MongoDB is down (keep the event retryable, or fail loudly), and whether replay marks before publishing or after.
 - Not verified: replica sets, authentication/TLS, performance.
 
+### Implementation notes (Phase 4: archive, dead letters, replay, admin surface)
+
+**Built** (tests against real MongoDB, Postgres and Redis; details in `services/worker/{archive,deadletter,admin}/README.md`):
+
+- `services/worker/archive`: the `audit-archiver` consumer for every `libs/events` type; archive document per `event_id` with `schema_version`, `schema_id` (0 unless a resolver is supplied) and the registry subject in headers; `audit_log` records, idempotent per event, for `identity.user_role_changed`, `course.course_published`, `course.course_archived`.
+- `services/worker/deadletter`: `Sink` (park: bounded, idempotent per `(event_id, consumer)`, an error means "not parked") and `Replayer` (handler plus `processed_events` marker in one transaction under an advisory lock, then `MarkReplayed`; replay twice is a no-op, concurrent replays apply once, a handler failing again leaves the record parked with the new error).
+- `services/worker/admin`: worker-side HTTP on `ADMIN_HTTP_ADDR` (default `:8093`, loopback in Compose): health and the admin-only failed-events list, detail and replay (admin role plus `RequireFreshPrivilege`). Replay lives in the worker because it must re-run the worker's handlers.
+- analytics-api serves the Failed Events metric from `failed_events` (`services/analytics/failedevents`).
+- `libs/mongostore` gained replay metadata on parked events (including the outbox id, because mirror handlers order updates by it), `AppendAuditOnce` and `SummarizeFailed`.
+
+**Resolves the open items above:** replay is **apply, then mark** (a crash between them leaves the record parked and the next replay finds the marker and only marks it; the reverse order would risk a lost replay). When parking fails because MongoDB is down, `Sink.Park` returns an error and the transport must keep the event retryable; the transport's behaviour on that error is still its own decision and is **not built here**.
+
+**Deviations and decisions:**
+
+- **Link-graph relaxation for analytics-api only.** `scripts/check-link-graph.sh` no longer forbids `libs/mongostore` for analytics-api, so the metric is served from `failed_events` directly. identity-api stays forbidden, course-api's rule is unchanged, and `scripts/test-guards.sh` has cases for both. Reason: the alternatives (a worker-side internal endpoint, a read-model event mirrored into Postgres) add a hop or a migration for one admin metric. Cost: analytics-api now links the MongoDB driver and depends on MongoDB for that one route (503 when it is down, nothing else affected; it connects lazily).
+- The audit-archiver must be registered **only in Kafka mode** (in in-process mode a failing handler fails the whole relay row, so a MongoDB outage would burn attempts for every consumer). It is not registered anywhere yet.
+- The worker gets an HTTP surface (it had none) for the admin routes. `RequireFreshPrivilege` has no token-version source in the worker (it cannot read `identity.users`), so a Redis miss counts as version 1, as in course-api.
+- The Failed Events workflow half (`WorkflowIssuesSource`) is not built; `/analytics/issues` reports `workflow_issues: null`. Recommended: a `course.publish_failed` event mirrored into analytics.
+- `MONGO_URI` is optional everywhere: unset or unreachable degrades archive, parking, replay and the metric, and nothing else.
+
+**Not verified:** the relay's give-up path (`libs/relay`) still marks a poison row published until the dead-letter hook is wired to `Sink`; replay under Kafka and of Protobuf payloads; a MongoDB replica set, authentication or TLS; the admin port from the built image or Compose; anything about throughput. Replay is not written to `audit_log` (who replayed what is not recorded).
+
 ---
 
 ## ADR-0032 — Observability in Week 3: trace context through the event envelope

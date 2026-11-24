@@ -2,7 +2,7 @@
 
 MongoDB archive, audit log and failed-event parking (ADR-0031, ADR-0004, RFC §5.4, §6.9).
 
-Status: implemented for Week 3 (`docs/plans/week-3.md`, section 4a). ADR-0031 is still `Proposed`; nothing here is wired into a service yet.
+Status: implemented for Week 3 (`docs/plans/week-3.md`, section 4a). ADR-0031 is still `Proposed`. Wired into the worker (archive, dead-letter sink, replay, admin) and analytics-api (failed-events metric); see `services/worker/{archive,deadletter,admin}` and ADR-0031's implementation notes. Phase 4 additions: replay metadata on parked events, `AppendAuditOnce`, `SummarizeFailed`.
 
 Driver: `go.mongodb.org/mongo-driver/v2` v2.10.0 (Apache-2.0, pure Go, no cgo). Tests run against `mongo:7` through `libs/testenv.SetupMongo`.
 

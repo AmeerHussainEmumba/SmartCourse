@@ -97,11 +97,12 @@ func (h *Handler) listPopularCourses(c *gin.Context) {
 
 // getIssues backs GET /analytics/issues (FR-5: "Failed Events / Workflow
 // Issues"), admin only: dead-letter contents are operational detail. 503
-// when no sources are attached (the dead-letter store lives outside this
-// module, issues.go).
+// when no failed-events source is attached or its store is unreachable
+// (issues.go); the workflow section is null when no workflow source is
+// attached (unavailable, not zero).
 func (h *Handler) getIssues(c *gin.Context) {
 	report, err := h.svc.GetIssues(c.Request.Context())
-	if errors.Is(err, ErrIssuesNotConfigured) {
+	if errors.Is(err, ErrIssuesNotConfigured) || errors.Is(err, ErrSourceUnavailable) {
 		httpx.Fail(c, apperrors.ErrUnavailable.Wrap(err))
 		return
 	}
@@ -109,16 +110,21 @@ func (h *Handler) getIssues(c *gin.Context) {
 		httpx.Fail(c, apperrors.ErrInternal.Wrap(err))
 		return
 	}
+	var workflow any // nil serialises as null
+	if wf := report.WorkflowIssues; wf != nil {
+		workflow = gin.H{"failed": wf.Failed, "by_workflow": nonNilCounts(wf.ByWorkflow)}
+	}
+	fe := report.FailedEvents
 	c.JSON(http.StatusOK, gin.H{
 		"failed_events": gin.H{
-			"total":         report.FailedEvents.Total,
-			"unresolved":    report.FailedEvents.Unresolved,
-			"by_event_type": nonNilCounts(report.FailedEvents.ByEventType),
+			"total":                         fe.Total,
+			"unresolved":                    fe.Unresolved,
+			"replayed":                      fe.Replayed,
+			"by_event_type":                 nonNilCounts(fe.ByEventType),
+			"by_consumer":                   nonNilCounts(fe.ByConsumer),
+			"oldest_unresolved_age_seconds": fe.OldestUnresolvedAgeSeconds,
 		},
-		"workflow_issues": gin.H{
-			"failed":      report.WorkflowIssues.Failed,
-			"by_workflow": nonNilCounts(report.WorkflowIssues.ByWorkflow),
-		},
+		"workflow_issues": workflow,
 	})
 }
 

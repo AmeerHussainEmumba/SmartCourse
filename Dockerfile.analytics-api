@@ -17,6 +17,7 @@ COPY libs/errors ./libs/errors
 COPY libs/httpx ./libs/httpx
 COPY libs/infra ./libs/infra
 COPY libs/logging ./libs/logging
+COPY libs/mongostore ./libs/mongostore
 COPY libs/outbox ./libs/outbox
 COPY libs/relay ./libs/relay
 COPY libs/router ./libs/router

@@ -60,7 +60,9 @@ func (s *Service) WithPopularCache(rdb *redis.Client) *Service {
 }
 
 // WithIssueSources attaches the dead-letter and workflow-failure readers
-// (issues.go). Without both, GetIssues reports ErrIssuesNotConfigured.
+// (issues.go). Without the failed-events reader GetIssues reports
+// ErrIssuesNotConfigured. The workflow reader is optional: without it the
+// report carries no workflow section (unavailable, not zero).
 func (s *Service) WithIssueSources(failed FailedEventsSource, workflows WorkflowIssuesSource) *Service {
 	s.failed, s.workflows = failed, workflows
 	return s
@@ -72,18 +74,22 @@ var ErrIssuesNotConfigured = errors.New("analytics: failed-events and workflow-i
 
 // GetIssues returns the Failed Events / Workflow Issues metric.
 func (s *Service) GetIssues(ctx context.Context) (*IssuesReport, error) {
-	if s.failed == nil || s.workflows == nil {
+	if s.failed == nil {
 		return nil, ErrIssuesNotConfigured
 	}
 	fe, err := s.failed.SummarizeFailedEvents(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("summarize failed events: %w", err)
 	}
-	wf, err := s.workflows.SummarizeWorkflowIssues(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("summarize workflow issues: %w", err)
+	report := &IssuesReport{FailedEvents: fe}
+	if s.workflows != nil {
+		wf, err := s.workflows.SummarizeWorkflowIssues(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("summarize workflow issues: %w", err)
+		}
+		report.WorkflowIssues = wf
 	}
-	return &IssuesReport{FailedEvents: fe, WorkflowIssues: wf}, nil
+	return report, nil
 }
 
 const (
