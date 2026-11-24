@@ -111,6 +111,23 @@ services:
       TEMPORAL_HOST_PORT: temporal:7233
       TEMPORAL_NAMESPACE: default
       TEMPORAL_TASK_QUEUE: course-publish
+      # Relay pool and Asynq (RFC §10.2: one pool per queue, 10/5/3) and the
+      # scheduled jobs (ADR-0013). The Postgres pool of 20 connections holds
+      # 4 relay workers x 2 plus the default and low pools that touch it.
+      RELAY_WORKERS: "4"
+      ASYNQ_CRITICAL_CONCURRENCY: "10"
+      ASYNQ_DEFAULT_CONCURRENCY: "5"
+      ASYNQ_LOW_CONCURRENCY: "3"
+      ASYNQ_MAX_RETRY: "5"
+      ASYNQ_BACKOFF_BASE: 2s
+      ASYNQ_BACKOFF_MAX: 10m
+      ASYNQ_SHUTDOWN_TIMEOUT: 30s
+      OUTBOX_RETENTION: 168h
+      JOBS_RECONCILE_PUBLISHES_INTERVAL: 1m
+      JOBS_ANALYTICS_RECONCILE_INTERVAL: 1m
+      JOBS_ENROLLMENT_COUNT_INTERVAL: 1h
+      JOBS_IDEMPOTENCY_PRUNE_INTERVAL: 1h
+      JOBS_OUTBOX_PRUNE_INTERVAL: 1h
     depends_on:
       postgres:
         condition: service_healthy
