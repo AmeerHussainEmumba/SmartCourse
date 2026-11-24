@@ -73,7 +73,7 @@ func pairsOf(hs []relay.Handler) []string {
 }
 
 func TestBuildRelay_RegistersExactlyTheModulesHandlers(t *testing.T) {
-	rl := buildRelay(&infra.Dependencies{})
+	rl := buildRelay(&infra.Dependencies{}, relayTestConfig())
 	got := registeredPairs(t, rl)
 
 	var want []string
@@ -108,7 +108,7 @@ func TestBuildRelay_NoDuplicateConsumerEventPairs(t *testing.T) {
 	// share a consumer name AND an event type would make the second one a
 	// silent no-op.
 	seen := map[string]bool{}
-	for _, p := range registeredPairs(t, buildRelay(&infra.Dependencies{})) {
+	for _, p := range registeredPairs(t, buildRelay(&infra.Dependencies{}, relayTestConfig())) {
 		if seen[p] {
 			t.Errorf("duplicate registration %s", p)
 		}
@@ -154,7 +154,7 @@ func TestEveryEmittedEventTypeHasAConsumer(t *testing.T) {
 		t.Fatalf("expected at least 8 emitted event types, found %d: %v", len(emitted), emitted)
 	}
 	consumed := map[string]bool{}
-	for _, p := range registeredPairs(t, buildRelay(&infra.Dependencies{})) {
+	for _, p := range registeredPairs(t, buildRelay(&infra.Dependencies{}, relayTestConfig())) {
 		consumed[strings.SplitN(p, "|", 2)[1]] = true
 	}
 	for et, file := range emitted {

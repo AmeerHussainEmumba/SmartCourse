@@ -26,6 +26,8 @@ type Config struct {
 	Temporal TemporalConfig
 	Relay    RelayConfig
 	SMTP     SMTPConfig
+	Asynq    AsynqConfig
+	Jobs     JobsConfig
 
 	JWT   JWTConfig
 	Argon Argon2Config
@@ -285,6 +287,7 @@ func Load() (*Config, error) {
 	var smtpErrs []string
 	cfg.SMTP, smtpErrs = loadSMTP()
 	errs = append(errs, smtpErrs...)
+	cfg.Asynq, cfg.Jobs = loadAsynq(optInt, optDuration, &errs)
 
 	if len(cfg.JWT.SigningKey) < 32 {
 		// Only enforced once the key is present; the presence check above

@@ -6,6 +6,7 @@
 FROM golang:1.26.11-alpine AS build
 ENV GOWORK=off CGO_ENABLED=0
 WORKDIR /src
+COPY libs/asynqx ./libs/asynqx
 COPY libs/auth ./libs/auth
 COPY libs/cache ./libs/cache
 COPY libs/config ./libs/config
