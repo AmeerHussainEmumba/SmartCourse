@@ -25,6 +25,10 @@ type Options struct {
 	// APIEnv adds to the environment of identity-api, course-api and
 	// analytics-api.
 	APIEnv map[string]string
+	// Tracing starts a Jaeger container and points every binary's
+	// OTEL_EXPORTER_OTLP_ENDPOINT at it with sampling 1 (E02). Off by
+	// default: a scenario that does not read traces does not pay for it.
+	Tracing bool
 }
 
 // Stack is a running system: containers, binaries, and the handles a scenario
@@ -39,6 +43,8 @@ type Stack struct {
 	MongoURI string
 	Mongo    *Mongo
 	Mailpit  *Mailpit
+	// Jaeger is set when Options.Tracing is on.
+	Jaeger *Jaeger
 
 	RegistryURL  string
 	TemporalAddr string
@@ -50,6 +56,7 @@ type Stack struct {
 	WorkerAdminURL, WorkerMetricsURL     string
 
 	opts       Options
+	mongoC     *mongoContainer
 	postgresDS string
 	redisAddr  string
 	jwtKey     string
@@ -75,10 +82,13 @@ func Start(t *testing.T, opts Options) *Stack {
 	s := &Stack{opts: opts, RegistryURL: si.RegistryURL, TemporalAddr: si.TemporalAddr}
 	s.Env = testenv.Setup(t)
 	s.Kafka = testenv.SetupKafka(t)
-	mongoEnv := testenv.SetupMongo(t)
-	s.MongoURI = mongoEnv.URI
+	s.mongoC = startMongo(t)
+	s.MongoURI = s.mongoC.URI
 	s.Mongo = connectMongo(t, s.MongoURI)
 	s.Mailpit = startMailpit(t)
+	if opts.Tracing {
+		s.Jaeger = startJaeger(t)
+	}
 	t.Logf("stack: containers ready after %s", time.Since(began).Round(time.Second))
 
 	d, ok := s.Env.DB.Dialector.(*postgres.Dialector)
@@ -140,6 +150,14 @@ func mustPort(t testing.TB) int {
 // baseEnv is what every binary reads: the same variables docker-compose.yml
 // sets, pointed at the containers.
 func (s *Stack) baseEnv(searchPath string) []string {
+	env := s.staticEnv(searchPath)
+	if s.Jaeger != nil {
+		env = append(env, "OTEL_EXPORTER_OTLP_ENDPOINT="+s.Jaeger.OTLPEndpoint, "OTEL_TRACES_SAMPLER_ARG=1")
+	}
+	return env
+}
+
+func (s *Stack) staticEnv(searchPath string) []string {
 	return []string{
 		"APP_ENV=development",
 		"LOG_LEVEL=info",
@@ -242,6 +260,39 @@ func (s *Stack) StartWorker(t testing.TB) {
 		}
 		return nil
 	})
+}
+
+// NewWorkerProc builds, without starting, a second worker process on the
+// stack's infrastructure with fresh admin and metrics ports and over added to
+// its environment (a second Start of a different configuration: E11 points it
+// at a registry that lacks a subject and expects it to exit). Its output is
+// dumped on failure; Stop is registered as cleanup.
+func (s *Stack) NewWorkerProc(t testing.TB, over map[string]string) *Proc {
+	t.Helper()
+	p := newProc("worker-extra", Binary(t, "worker"), mergeEnv(s.workerEnv(mustPort(t), mustPort(t)), over))
+	t.Cleanup(func() {
+		if t.Failed() {
+			p.dumpLogs(t)
+		}
+		p.Stop(10 * time.Second)
+	})
+	return p
+}
+
+// Exited waits up to timeout for the process to exit and reports whether it did.
+func (p *Proc) Exited(timeout time.Duration) bool {
+	p.mu.Lock()
+	done := p.done
+	p.mu.Unlock()
+	if done == nil {
+		return false
+	}
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // StopKafka stops the broker (data kept). StartKafka brings it back on the
