@@ -12,9 +12,11 @@ info:
     below. 8 of FR-5's 9 analytics metrics are live (DR-021; the ninth, failed events / workflow issues, has an admin route that answers 503 until a source is attached) — see /analytics/*
     below (DR-017: the last two of these had been computed since ADR-0024
     but had no read path until this spec caught up to reality). Endpoints
-    not yet built (certificates, "Most Popular Courses"/"Failed Events"
-    analytics, admin/audit beyond role change) are not listed here — an
-    absent path means "not built yet," not "undocumented."
+    not yet built (the failed-events source behind /analytics/issues,
+    admin/audit beyond role change, failed-event replay) are not listed
+    here — an absent path means "not built yet," not "undocumented."
+    Certificates (/certificates, public verification by code) and Most
+    Popular Courses (/analytics/popular-courses) are built.
 
     Cross-cutting behaviour (all services). Request bodies are capped at
     1 MiB by default (413 PAYLOAD_TOO_LARGE; MAX_BODY_BYTES). Every response
