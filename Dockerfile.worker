@@ -12,9 +12,11 @@ COPY libs/cache ./libs/cache
 COPY libs/config ./libs/config
 COPY libs/db ./libs/db
 COPY libs/errors ./libs/errors
+COPY libs/events ./libs/events
 COPY libs/httpx ./libs/httpx
 COPY libs/idempotency ./libs/idempotency
 COPY libs/infra ./libs/infra
+COPY libs/kafka ./libs/kafka
 COPY libs/logging ./libs/logging
 COPY libs/outbox ./libs/outbox
 COPY libs/ratelimit ./libs/ratelimit

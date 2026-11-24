@@ -7,8 +7,10 @@
 // PublishCourseWorkflow (services/course/workflows, ADR-0009/0025), and the
 // Asynq side (libs/asynqx, ADR-0013): one server per queue with its own
 // bounded pool (RFC §10.2) and the scheduler for the maintenance jobs in
-// services/worker/jobs. A failure in one never stops another. Kafka consumers
-// are still M3 scope (RFC §21.0). No HTTP surface at all.
+// services/worker/jobs. A failure in one never stops another. With
+// EVENT_TRANSPORT=kafka (ADR-0029) the relay publishes to Kafka instead of
+// running the handlers, and a consumer group per handler runs them from the
+// topics (transport.go). No HTTP surface at all.
 package main
 
 import (
@@ -47,14 +49,25 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	rl := buildRelay(deps, cfg)
+	// nil: no dead-letter sink yet (log-and-drop); the MongoDB wiring passes its sink here.
+	events, err := newEventTransport(ctx, logger, cfg, nil)
+	if err != nil {
+		logger.Error("event transport not ready", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer events.Close()
+	rl := buildRelay(deps, cfg, events.RelayOptions()...)
 
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
-		logger.Info("outbox relay starting")
+		logger.Info("outbox relay starting", slog.String("transport", transportMode(cfg)))
 		rl.Run(ctx) // blocks until ctx is cancelled, draining in-flight work first
+	}()
+	go func() {
+		defer wg.Done()
+		events.Run(ctx, rl, deps.DB) // kafka mode only: one consumer group per registered handler
 	}()
 	go func() {
 		defer wg.Done()

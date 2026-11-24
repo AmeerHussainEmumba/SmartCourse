@@ -25,12 +25,23 @@ import (
 // notification sweeper enqueues the pending deliveries, the Asynq delivery task
 // sends them through a capturing provider, and the completion event has issued
 // exactly one certificate. Nothing here calls a handler directly.
+//
+// It runs once per event transport (ADR-0029): with EVENT_TRANSPORT=kafka the
+// relay publishes through a real broker and consumer groups run the same
+// handlers, and the certificate and the mail must come out the same.
 func TestWorker_EventsToCertificateAndMail_EndToEnd(t *testing.T) {
+	for _, mode := range transportModes {
+		t.Run(mode, func(t *testing.T) { testWorkerEventsEndToEnd(t, mode) })
+	}
+}
+
+func testWorkerEventsEndToEnd(t *testing.T, mode string) {
 	env := testenv.Setup(t)
 	conn := env.OpenWithSearchPath(t, "platform,course,analytics,public")
 	deps := &infra.Dependencies{DB: conn, RDB: env.RDB}
 	cfg := asynqTestConfig(env.RDB.Options().Addr)
 	cfg.Relay.Workers = 3
+	useTransport(t, cfg, mode)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	student, instructor := uuid.New(), uuid.New()
@@ -85,9 +96,7 @@ func TestWorker_EventsToCertificateAndMail_EndToEnd(t *testing.T) {
 	defer scheduler.Shutdown()
 	defer servers.Shutdown()
 
-	rl := buildRelay(deps, cfg)
-	relayDone := make(chan struct{})
-	go func() { rl.Run(ctx); close(relayDone) }()
+	rl, sink, stopEvents := runEvents(t, ctx, cfg, deps)
 
 	count := func(q string, args ...any) int64 {
 		var n int64
@@ -108,11 +117,13 @@ func TestWorker_EventsToCertificateAndMail_EndToEnd(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	cancel()
-	<-relayDone
+	stopEvents()
 
 	if p, f, g := rl.Stats(); g != 0 {
 		t.Fatalf("relay gave up on %d events (processed=%d failed=%d)", g, p, f)
+	}
+	if d := sink.parked(); len(d) != 0 {
+		t.Fatalf("%d events were dead-lettered: %+v", len(d), d)
 	}
 	if n := count(`SELECT count(*) FROM certificates WHERE enrollment_id = ?`, enrollmentID); n != 1 {
 		t.Errorf("want exactly 1 certificate for the completed enrollment, got %d", n)

@@ -33,8 +33,10 @@ import (
 // when a module lands, only this list grows.
 // cfg.Relay.Workers (RELAY_WORKERS) sizes the relay's pool; Load has already
 // checked the Postgres pool can hold it (ADR-0027).
-func buildRelay(deps *infra.Dependencies, cfg *config.Config) *relay.Relay {
-	rl := relay.New(deps.DB, relay.WithWorkerCount(cfg.Relay.Workers))
+func buildRelay(deps *infra.Dependencies, cfg *config.Config, opts ...relay.Option) *relay.Relay {
+	// opts carry the event transport (transport.go): the Kafka publisher in
+	// kafka mode and the optional dead-letter sink.
+	rl := relay.New(deps.DB, append([]relay.Option{relay.WithWorkerCount(cfg.Relay.Workers)}, opts...)...)
 	for _, h := range analytics.Handlers() {
 		rl.Register(h)
 	}
