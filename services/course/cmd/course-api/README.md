@@ -24,3 +24,7 @@ This service's database connection is scoped to the `course`, `platform`, and `p
 ## Asset upload (ADR-0019, RFC §11.7)
 
 `registerRoutes` builds a `services/course/assets` store from `MINIO_*` and attaches it to the course service for `POST /assets/upload-url`. If it cannot be built the route answers `503 assets_unavailable` and nothing else is affected. Pre-signed URLs are written for `MINIO_PUBLIC_ENDPOINT` when set (the address a browser can reach), otherwise `MINIO_ENDPOINT`; inside Compose `MINIO_ENDPOINT` is `http://minio:9000`, which a browser cannot reach, so set the public one for real uploads. The `smartcourse-assets` bucket must exist (Compose's `minio-init` creates it) and, for browser uploads, allow CORS `PUT` from the client origin.
+
+## Observability
+
+`main.go` calls `deps.Observe` (tracing, RED metrics, `GET /metrics`, outbox gauges) and `temporal.Observe` (the client interceptor, so `POST /courses/{id}/publish` continues into the workflow run). `/metrics` is unauthenticated by design and on the API port; compose publishes it on `127.0.0.1` only. Tracing is a no-op without `OTEL_EXPORTER_OTLP_ENDPOINT` and never delays start-up when the collector is down. `wire_telemetry_test.go` proves a real archive request writes an outbox row with the request's trace id, span id and actor.

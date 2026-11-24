@@ -42,9 +42,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Tracing and /metrics (ADR-0032). Never fails and never blocks start-up:
+	// with no OTEL_EXPORTER_OTLP_ENDPOINT, or an unreachable collector, the
+	// service simply runs untraced.
+	obs := deps.Observe(context.Background(), cfg, infra.ObserveOptions{Service: "course-api", Outbox: true})
+
 	// Built with client.NewLazyClient (temporal.Connect) — never
 	// fails here even if Temporal isn't reachable yet; only an actual
 	// publish call would (ADR-0009/0025).
+	// The tracing interceptor makes StartWorkflow a span whose context the
+	// workflow run continues in the worker; it is added only when tracing is on.
+	temporal.Observe(temporal.Observability{Tracing: obs.TracingEnabled()})
 	temporalClient, err := temporal.Connect(cfg)
 	if err != nil {
 		logger.Error("failed to build temporal client", slog.Any("error", err))
@@ -58,12 +66,14 @@ func main() {
 		TrustedProxies: cfg.TrustedProxies,
 		MaxBodyBytes:   cfg.MaxBodyBytes,
 		HSTS:           cfg.EnableHSTS,
+		Observe:        obs.Middleware(),
 	})
 	if err != nil {
 		logger.Error("invalid router configuration", slog.Any("error", err))
 		os.Exit(1)
 	}
 	router.RegisterHealth(r, deps.HealthCheckers())
+	obs.RegisterMetricsRoute(r) // unauthenticated by design; see libs/infra Observability
 	registerRoutes(r, deps, cfg, temporalClient)
 
 	srv := router.NewServer(fmt.Sprintf(":%d", cfg.HTTPPort), r, router.ServerOptions{
@@ -90,4 +100,9 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", slog.Any("error", err))
 	}
+	// Flush buffered spans after the last request; bounded so a collector
+	// that is down cannot hold the process open.
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer flushCancel()
+	obs.Shutdown(flushCtx)
 }

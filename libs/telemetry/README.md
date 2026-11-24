@@ -1,6 +1,6 @@
 # libs/telemetry
 
-OpenTelemetry tracing, W3C trace-context helpers for the event envelope, Gin middleware and Prometheus metrics (ADR-0032, RFC §12). Pure Go, no cgo. Nothing here is wired into a service yet; that waits for the Week 3 module-layout review.
+OpenTelemetry tracing, W3C trace-context helpers for the event envelope, Gin middleware and Prometheus metrics (ADR-0032, RFC §12). Pure Go, no cgo. Wired into identity-api, course-api, analytics-api and the worker through `libs/infra` (`Dependencies.Observe`); see "Wiring" below.
 
 ## Tracing
 
@@ -115,7 +115,7 @@ The OTLP/HTTP exporter links `google.golang.org/grpc` and protobuf (for status c
 ## Limitations
 
 - Errors-always-sampled exports the failed span only, not the whole trace (see Sampling).
-- No database, Redis or Temporal instrumentation here: those are separate Phase 7 work on the call sites (`otelgorm`, `redisotel` and the Temporal interceptor would each add a dependency, so they are not pulled in by this module).
+- Database, Redis and Temporal tracing live outside this module, in `libs/db` (`EnableTracing`), `libs/cache` (`EnableTracing`) and `libs/temporal` (`Observe`), so a binary that does not enable tracing links none of that glue.
 - Metrics use no OpenTelemetry metrics SDK; Prometheus is the only metrics path.
 - `RegisterDBStats` supports one pool per registry; a second call is a no-op and keeps the first pool.
 - Only the W3C `traceparent` is carried; `tracestate` and baggage are not stored on the envelope.
@@ -124,3 +124,22 @@ The OTLP/HTTP exporter links `google.golang.org/grpc` and protobuf (for status c
 ## Testing
 
 `GOWORK=off go test -race ./...`. Tracing tests use the SDK's in-memory exporter and prove one trace id across a simulated HTTP, outbox, relay, consumer and Asynq job chain, the fresh-trace behaviour for malformed input, error promotion and the no-op disabled mode. `goleak` guards the whole package.
+
+## Wiring (Phase 7)
+
+`libs/infra.Dependencies.Observe(ctx, cfg, ObserveOptions)` builds everything from `config.Telemetry` and hands back an `Observability` with `Middleware()` (for `router.Options.Observe`), `RegisterMetricsRoute(r)` and `Shutdown(ctx)`. It has no error return: tracing off, an invalid set-up or an unreachable collector never stops or delays a service.
+
+| Concern | Behaviour |
+|---|---|
+| Tracing on | `OTEL_EXPORTER_OTLP_ENDPOINT` set and `OTEL_SDK_DISABLED` not true. Off means no provider, no hooks, no goroutine. |
+| DB / Redis spans | GORM callbacks and a go-redis hook, registered only when tracing is on, and a span only for a call made under a request span (no root trace per relay poll). Redis spans carry the command name, never the key. |
+| Temporal | `libs/temporal.Observe`: the `go.temporal.io/sdk/contrib/opentelemetry` interceptor (v0.8.1, MIT) and the `workflow_*` counters. |
+| Probes | `/metrics`, `/health/live`, `/health/ready` are not traced (a scrape every 15 s would bury real traces). They still count in RED. |
+| Metrics a binary never feeds | Not exported (analytics-api has no `outbox_backlog`; only the worker has `workflow_*`), so a constant 0 never reads as "nothing waiting". |
+| Outbox gauges | One aggregate query over the partial index of unpublished rows, run by a 15 s poller (never by a scrape, so scrape rate cannot load Postgres). Exposed by identity-api, course-api and the worker (the table is shared, aggregate with `max()`). |
+| Asynq | `Inspector.Gauges` in the worker: `asynq_queue_depth` = pending + scheduled, `asynq_retry_count` = retry set. Asynq jobs also get a span and a `job_id` logger (`libs/asynqx`). |
+| Cardinality | `CheckLabels(registry)` fails on any label outside `route, method, status, queue, group, topic, consumer, outcome`; every service integration test runs it. |
+
+`/metrics` is unauthenticated by design (Prometheus scrapes it). It exposes route templates, counters and process statistics, never request data, but it is not for the internet: compose publishes it on `127.0.0.1` only, the worker serves it on its own `METRICS_HTTP_ADDR` listener (not the authenticated admin port), and a real deployment must keep it on the internal network or filter it at the ingress.
+
+Not verified: tail sampling (not built), the relay and Kafka consumer spans (a later step), and any load or overhead measurement. Verified live on 2026-11-24 in a disposable compose project: a `POST /api/v1/courses` and an archive request through course-api each produced a Jaeger trace with the HTTP server span and Redis and Postgres child spans (the archive trace includes `INSERT outbox`), and the outbox row carried that trace id and the actor.

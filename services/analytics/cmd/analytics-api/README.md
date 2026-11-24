@@ -14,3 +14,7 @@ docker compose --profile core up -d   # or containerized, alongside identity-api
 ## Why this split out first
 
 Analytics is read-only and was already decoupled from every other module before this split — it learns about enrollments, courses, and progress through the relay/outbox (`services/analytics/analytics`'s handlers, registered in `buildRelay` in `services/worker/cmd/worker/wire.go`), never through a direct call into another module's service layer. Splitting its HTTP surface into its own binary doesn't change any of that; the relay-side consumption is unaffected and still runs inside `services/worker/cmd/worker`. See ADR-0023 for the full reasoning.
+
+## Observability
+
+`main.go` calls `deps.Observe` (tracing, RED metrics, `GET /metrics`). It does not expose `outbox_backlog`: its `POSTGRES_SEARCH_PATH` has no `platform` schema. `/metrics` is unauthenticated by design; compose publishes it on `127.0.0.1` only. See `libs/telemetry/README.md`.

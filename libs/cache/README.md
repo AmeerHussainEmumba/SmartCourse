@@ -13,3 +13,7 @@ The Redis connection. Redis holds cache, hot counters, rate-limiter state, and (
 ## Testing
 
 No dedicated test file — `Open` is exercised indirectly by every test that calls `libs/testenv.Setup`, which connects through it to a real, disposable Redis container.
+
+## Tracing
+
+`EnableTracing(client)` adds a go-redis hook: one CLIENT child span per command (or per pipeline) run under a request span, named after the command, never the key or arguments. `redis.Nil` is not an error. Hand-written instead of `redisotel` to avoid another module; `libs/infra` calls it only when tracing is on.

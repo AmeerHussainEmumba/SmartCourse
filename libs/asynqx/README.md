@@ -103,3 +103,7 @@ Run it in every worker replica. Each tick's task ID is derived from the entry `N
 `go test ./...` runs the unit tests. `go test -tags=integration ./...` needs Docker (real Redis through `libs/testenv`, which also starts Postgres) and takes about 30 seconds, most of it the retry and scheduler tests: Asynq's one-second retry resolution and a real cron minute boundary cannot be sped up.
 
 The weighted-queue test samples 500 dequeues at concurrency 1 and allows +-0.10 / +-0.10 / +-0.06 around 0.6 / 0.3 / 0.1 (4.5 to 5 standard deviations of the binomial share, see the comment on the test).
+
+## Observability
+
+Each handler attempt runs in a span (`<type> process`) and its context carries a `job_id` logger (`logging.Correlated(ctx)`). The span starts a fresh trace; continuing the trace of whatever enqueued the task needs the traceparent in the payload (a later step). `Inspector.Gauges(metrics)` feeds `asynq_queue_depth` (pending + scheduled) and `asynq_retry_count` for `telemetry.StartPoller`.

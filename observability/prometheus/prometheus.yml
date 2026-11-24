@@ -5,9 +5,11 @@
 # Targets are compose service names on the compose network, so the app
 # containers must be running (`core` profile) for the jobs to be UP.
 # Container-internal HTTP port is 8080 for the three APIs (HTTP_PORT in
-# docker-compose.yml). The worker's metrics listener port is NOT fixed yet:
-# 9100 below is an assumption until libs/telemetry / cmd/worker land;
-# change the one line marked WORKER-PORT to whatever the worker exposes.
+# docker-compose.yml), which serve /metrics on that port. The worker serves
+# /metrics on its own listener, METRICS_HTTP_ADDR (compose sets :9100); it is
+# not the authenticated admin port (8093). /metrics is unauthenticated by
+# design (RFC 12.3): these targets are on the compose network, and compose
+# publishes the ports on 127.0.0.1 only. Keep it that way outside a laptop.
 #
 # Running the Go binaries on the host (`make run-*`) instead? Swap each
 # target for host.docker.internal:<port> (compose-published host ports are
@@ -43,4 +45,4 @@ scrape_configs:
   - job_name: worker
     metrics_path: /metrics
     static_configs:
-      - targets: ["worker:9100"] # WORKER-PORT
+      - targets: ["worker:9100"] # METRICS_HTTP_ADDR of the worker

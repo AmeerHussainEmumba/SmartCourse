@@ -49,6 +49,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	defer startTelemetry(ctx, logger, deps, cfg)() // tracing, /metrics, Temporal interceptors; see telemetry_wire.go
 
 	// MongoDB (archive, dead letters) and the admin surface run beside the
 	// relay and never stop it: see mongo_wire.go.

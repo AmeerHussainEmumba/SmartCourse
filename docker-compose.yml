@@ -102,6 +102,15 @@ services:
       MINIO_ACCESS_KEY_ID: smartcourse
       MINIO_SECRET_ACCESS_KEY: smartcourse123
       JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
+      # Observability (ADR-0032). The jaeger service is in the `observability`
+      # profile; without it running this endpoint is simply unreachable and
+      # tracing is a no-op (spans are dropped, startup never waits). Remove
+      # the line to switch tracing off entirely.
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4318
+      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      METRICS_ENABLED: "true"
+      # The worker's own /metrics listener (not the authenticated admin port).
+      METRICS_HTTP_ADDR: ":9100"
       # Only read by this binary's Temporal worker (ADR-0009/0025) — not
       # identity-api/analytics-api. worker is tagged *profiles-core, same
       # as temporal itself is NOT (it's *profiles-workflow), so under
@@ -146,7 +155,9 @@ services:
       # replay. Optional: if it is not running the worker still starts, logs
       # the outage and retries, and the relay and analytics are unaffected.
       MONGO_URI: mongodb://mongodb:27017
-    ports: ["127.0.0.1:8093:8093"]
+    # 8093 admin (JWT) and 9100 /metrics (unauthenticated by design: Prometheus
+    # scrapes it), both on the loopback interface only.
+    ports: ["127.0.0.1:8093:8093", "127.0.0.1:9100:9100"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -179,6 +190,13 @@ services:
       MINIO_ACCESS_KEY_ID: smartcourse
       MINIO_SECRET_ACCESS_KEY: smartcourse123
       JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
+      # Observability (ADR-0032). The jaeger service is in the `observability`
+      # profile; without it running this endpoint is simply unreachable and
+      # tracing is a no-op (spans are dropped, startup never waits). Remove
+      # the line to switch tracing off entirely.
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4318
+      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      METRICS_ENABLED: "true"
     ports: ["127.0.0.1:8090:8080"]
     depends_on:
       postgres:
@@ -214,6 +232,13 @@ services:
       MINIO_ACCESS_KEY_ID: smartcourse
       MINIO_SECRET_ACCESS_KEY: smartcourse123
       JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
+      # Observability (ADR-0032). The jaeger service is in the `observability`
+      # profile; without it running this endpoint is simply unreachable and
+      # tracing is a no-op (spans are dropped, startup never waits). Remove
+      # the line to switch tracing off entirely.
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4318
+      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      METRICS_ENABLED: "true"
       # Service.Publish starts the publish workflow here (ADR-0009/0025) —
       # see worker's identical block above for why this is safe to boot
       # with no Temporal present (plain `core` profile).
@@ -254,6 +279,13 @@ services:
       MINIO_ACCESS_KEY_ID: smartcourse
       MINIO_SECRET_ACCESS_KEY: smartcourse123
       JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
+      # Observability (ADR-0032). The jaeger service is in the `observability`
+      # profile; without it running this endpoint is simply unreachable and
+      # tracing is a no-op (spans are dropped, startup never waits). Remove
+      # the line to switch tracing off entirely.
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4318
+      OTEL_TRACES_SAMPLER_ARG: "1.0"
+      METRICS_ENABLED: "true"
       # Failed Events metric (GET /analytics/issues) reads failed_events from
       # MongoDB (compose `events` profile). Optional: without it that one
       # route answers 503; every other route is unaffected.

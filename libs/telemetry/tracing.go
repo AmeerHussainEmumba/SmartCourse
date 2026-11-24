@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -21,6 +22,43 @@ import (
 const tracerName = "github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 
 var errorHandlerOnce sync.Once
+
+// errorLogEvery is how long a repeated exporter error is suppressed. A
+// collector that is down fails every batch (every few seconds, forever); the
+// first failure is the news, the rest would only fill the log.
+const errorLogEvery = time.Minute
+
+// newRateLimitedHandler logs an OpenTelemetry error at WARN, but the same
+// message at most once per every; the count of suppressed repeats is logged
+// with the next line.
+func newRateLimitedHandler(now func() time.Time, every time.Duration) func(error) {
+	var mu sync.Mutex
+	type seen struct {
+		at         time.Time
+		suppressed int
+	}
+	last := map[string]*seen{}
+	return func(err error) {
+		msg := err.Error()
+		mu.Lock()
+		s, ok := last[msg]
+		if ok && now().Sub(s.at) < every {
+			s.suppressed++
+			mu.Unlock()
+			return
+		}
+		suppressed := 0
+		if ok {
+			suppressed = s.suppressed
+		}
+		if len(last) > 64 { // bound the map: only a handful of distinct errors is normal
+			last = map[string]*seen{}
+		}
+		last[msg] = &seen{at: now()}
+		mu.Unlock()
+		slog.Warn("opentelemetry error", slog.String("error", msg), slog.Int("suppressed_repeats", suppressed))
+	}
+}
 
 // Provider owns the tracer provider created by Setup. The zero value and the
 // value returned for a disabled Config are valid no-ops.
@@ -80,9 +118,7 @@ func SetupWithExporter(cfg Config, exp sdktrace.SpanExporter) (*Provider, error)
 		sdktrace.WithSpanProcessor(promoteErrors{sdktrace.NewBatchSpanProcessor(exp)}),
 	)
 	errorHandlerOnce.Do(func() {
-		otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
-			slog.Warn("opentelemetry error", slog.String("error", err.Error()))
-		}))
+		otel.SetErrorHandler(otel.ErrorHandlerFunc(newRateLimitedHandler(time.Now, errorLogEvery)))
 	})
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagator)

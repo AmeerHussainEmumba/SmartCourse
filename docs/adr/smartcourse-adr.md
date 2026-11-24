@@ -1408,6 +1408,28 @@ If instrumentation overhead shows up in the latency targets (RFC §13.1), lower 
 - **Provisioning (`observability/`):** Prometheus v3.16.0, Grafana 13.3.1, Jaeger all-in-one 1.76.0, Mailpit v1.34.0; eight alert rules and one 12-panel dashboard. The alert thresholds are **development placeholders**, not tuned values. The worker's metrics port (9100 in `prometheus.yml`) is an **assumption** that must match what the worker serves once instrumented. `asynq_retry_count` is treated as a gauge.
 - Not verified: a trace through real Jaeger, the app scrape targets coming up, the dashboard rendering with data.
 
+### Implementation notes (2026-11-24, Phase 7 instrumentation: HTTP, DB, Redis, Temporal, Asynq, metrics)
+
+**What is built.** `libs/telemetry` is wired into identity-api, course-api, analytics-api and the worker through one call, `libs/infra` `Dependencies.Observe`. Configuration is `config.Telemetry` (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SDK_DISABLED`, `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER_ARG`, `METRICS_ENABLED`, `METRICS_HTTP_ADDR` default `:9100`). Tracing off (no endpoint) installs nothing; an unreachable collector never blocks start-up or a request and logs one WARN a minute; shutdown flush is bounded at 5 s.
+
+| Piece | Where | Note |
+|---|---|---|
+| HTTP tracing and RED | `router.Options.Observe` | route templates (`c.FullPath()`), `unmatched` constant; `trace_id` and `span_id` in the access log; `smartcourse.request_id` on the span; probes not traced |
+| `/metrics` | API port (three services), `METRICS_HTTP_ADDR` (worker) | **unauthenticated by design**; compose publishes on 127.0.0.1 only; the worker's is not the admin port |
+| DB, Redis spans | `db.EnableTracing`, `cache.EnableTracing` | hand-written (no `otelgorm`/`redisotel`: no extra module); only under a request span; Redis key and SQL values never recorded |
+| Temporal | `temporal.Observe` | `go.temporal.io/sdk/contrib/opentelemetry` v0.8.1 (MIT), resolves to the repo's otel v1.44.0 and sdk v1.50.0 (v0.9.0 needs otel v1.45 and sdk v1.51, which the hygiene guard would reject as skew) |
+| Trace into the outbox | `outbox.Write` | trace and span from the context span, actor through a resolver hook installed by `libs/infra` (a direct `libs/auth` import would have forced every module that requires `libs/relay` to change its go.mod) |
+| Metrics fed | outbox gauges (15 s poller, identity, course, worker), `asynq_*` (worker, Inspector), `db_connections_*` (all), `workflow_*` (worker interceptor) | a metric a binary never feeds is not exported |
+| Defined, not fed | `kafka_consumer_lag`, `event_processed_total`, `dead_letter_total` | `countParked` wraps the dead-letter store; nothing builds the sink yet |
+| Cardinality | `telemetry.CheckLabels` | fails on any label outside a bounded set; run against every service's registry |
+| Asynq jobs | `Server.Handle` | span and `job_id` logger per attempt; fresh trace (payload traceparent is a later step). Also fixes `Inspector.Stats` on a queue that never held a task |
+
+**Link-graph cost (measured with `go list -deps`).** identity-api 388 to 553 packages, analytics-api 453 to 618, course-api 655 to 725, worker 747 to 813. `scripts/check-link-graph.sh` now carries a package budget per binary (about 5% over today); identity-api and analytics-api still may not link Temporal, Asynq, Kafka or another service.
+
+**Verified live (disposable compose project, 2026-11-24).** Prometheus scraped the four targets UP; a request to course-api produced a Jaeger trace with HTTP, Postgres and Redis spans and the matching `platform.outbox` row (trace id, span id, actor); the dashboard's 13 panels' expressions ran against Prometheus. The tests run against real Postgres and Redis (testcontainers) and an in-memory span exporter.
+
+**Not verified or not built.** The relay, Kafka consumer and Asynq-enqueue spans (the trace stops at the outbox row; the relay must continue it); tail sampling (the fragment limitation above stands); a real Temporal server (workflow counters and the interceptor were tested with the SDK's test environment); alert thresholds (all placeholders); load and overhead; panels rendered in a browser; production hardening of `/metrics` (it relies on network placement).
+
 ---
 
 ## Appendix — Template for new records

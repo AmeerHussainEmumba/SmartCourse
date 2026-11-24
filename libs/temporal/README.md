@@ -7,3 +7,7 @@ Its own package, apart from `libs/infra`, so that `services/identity/cmd/identit
 ## Testing
 
 No dedicated test file — nothing here beyond constructing the client.
+
+## Observability
+
+`Observe(Observability{Tracing, Metrics})` before `Connect` adds interceptors to every client built afterwards (workers built on a client inherit them): the OpenTelemetry tracing interceptor and a counter for `workflow_started/completed/failed_total`. The counter counts a run when it first executes live on this process; replays after a restart or cache eviction are not counted, and a cancelled run counts as failed. Not verified against a real Temporal server; the tests use the SDK's test environment.

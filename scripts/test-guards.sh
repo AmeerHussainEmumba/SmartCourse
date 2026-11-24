@@ -163,6 +163,13 @@ if tidy_offline "$d/services/analytics"; then
 else skp "analytics-api imports asynqx (go mod tidy offline failed: ${TIDY_ERR##*$'\n'})"; fi
 
 echo
+echo "== telemetry in every binary is allowed, but the package budget is enforced =="
+d=$(fresh c13)
+out=$(cd "$d" && scripts/check-link-graph.sh 2>&1)
+if grep -q "^ok   identity-api" <<<"$out" && grep -q "^ok   analytics-api" <<<"$out"; then ok "link graph lets identity-api and analytics-api link libs/telemetry and its OpenTelemetry/gRPC closure"; else bad "link graph rejects telemetry in identity-api or analytics-api"; echo "$out" | tail -5 | sed 's/^/        /'; fi
+expect_fail "link graph fails when a binary exceeds its package budget" "exceeds its package budget" "$d" env LINK_BUDGET_SLACK=-200 scripts/check-link-graph.sh
+
+echo
 echo "== known weakness probe (informational, not counted as pass/fail) =="
 d=$(fresh c10)
 printf '\nrequire %s/services/course v0.0.0\n' "$mod" >>"$d/services/identity/go.mod"

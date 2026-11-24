@@ -5,6 +5,7 @@ go 1.26.5
 require (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/testenv v0.0.0
 	github.com/google/uuid v1.6.0
+	go.opentelemetry.io/otel/trace v1.44.0
 	gorm.io/gorm v1.31.2
 )
 
@@ -76,7 +77,6 @@ require (
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
-	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect

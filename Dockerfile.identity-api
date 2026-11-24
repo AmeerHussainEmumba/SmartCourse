@@ -20,6 +20,7 @@ COPY libs/logging ./libs/logging
 COPY libs/outbox ./libs/outbox
 COPY libs/ratelimit ./libs/ratelimit
 COPY libs/router ./libs/router
+COPY libs/telemetry ./libs/telemetry
 COPY libs/testenv ./libs/testenv
 COPY services/identity ./services/identity
 WORKDIR /src/services/identity

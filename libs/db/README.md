@@ -14,3 +14,7 @@ The PostgreSQL connection (RFC §5.1 — Postgres is the single system of record
 ## Testing
 
 No dedicated test file — `Open`'s behavior (pool sizing, `search_path` injection, AutoMigrate disabled) is exercised indirectly by every integration test in the repo, all of which connect through it via `libs/testenv`.
+
+## Tracing
+
+`EnableTracing(gdb)` registers GORM callbacks that make each statement run under a request span a CLIENT child span (`SELECT courses`, `INSERT outbox`, ...). Statement text carries bind placeholders, not values; an error records only its Go type, because a Postgres message can quote a row. A statement with no active span starts nothing. It is hand-written rather than `otelgorm`/the GORM OpenTelemetry plugin to avoid another module; `libs/infra` calls it only when tracing is on.

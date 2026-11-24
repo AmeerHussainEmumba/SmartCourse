@@ -11,6 +11,10 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/logging"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 )
 
 // Server defaults.
@@ -148,17 +152,33 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 // Handle registers h for task type typ. h is wrapped so that a panic is
 // recovered and returned as an error wrapping ErrPanic: the attempt fails and
 // is retried like any other failure, and the worker process survives.
+//
+// Each attempt also runs inside a CONSUMER span (libs/telemetry StartJob; a
+// no-op unless tracing was set up) and gets a logger carrying job_id in its
+// context: use logging.Correlated(ctx) in a handler to log with job_id,
+// trace_id and span_id (RFC §12.4). The span starts a fresh trace; continuing
+// the trace of the event or request that enqueued the task needs the
+// traceparent in the payload, which is a later step.
 func (s *Server) Handle(typ string, h HandlerFunc) {
 	s.mux.HandleFunc(typ, func(ctx context.Context, t *asynq.Task) (err error) {
+		ctx, span := s.startJob(ctx, typ)
 		defer func() {
 			if r := recover(); r != nil {
 				s.panics.Add(1)
-				s.log.Error("asynqx: handler panic", "type", typ, "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+				logging.Correlated(ctx).Error("asynqx: handler panic", "type", typ, "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
 				err = panicError(r)
 			}
+			telemetry.EndSpan(span, err)
 		}()
 		return h(ctx, t)
 	})
+}
+
+// startJob opens the attempt's span and attaches the job_id logger.
+func (s *Server) startJob(ctx context.Context, typ string) (context.Context, trace.Span) {
+	meta, _ := MetaFrom(ctx) // zero value outside Asynq: empty id and queue
+	ctx = logging.WithContext(ctx, logging.WithJobID(s.log, meta.ID))
+	return telemetry.StartJob(ctx, "", meta.Queue, typ, meta.ID)
 }
 
 // Start begins processing in the background. Pair it with Shutdown; most

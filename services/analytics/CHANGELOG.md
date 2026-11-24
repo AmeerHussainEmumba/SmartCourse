@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- analytics-api wires telemetry in `cmd/analytics-api/main.go`: tracing, RED metrics, `/metrics`, bounded flush on shutdown (Phase 7). It does not expose the outbox gauges (no access to the outbox table).
+
 - Added: `services/analytics/failedevents` (`Source`, `LazyStore`): the Failed Events metric over `libs/mongostore` (ADR-0031). `cmd/analytics-api/wire.go` attaches it when `MONGO_URI` is set; MongoDB connects lazily so startup and other routes never depend on it. `registerRoutes` now returns a close func. `go.mod` requires `libs/mongostore`; `Dockerfile.analytics-api` copies it; `scripts/check-link-graph.sh` no longer forbids it for analytics-api only.
 - Changed (behaviour): `GET /analytics/issues` needs only a failed-events source; `workflow_issues` is `null` when no workflow source is attached (none is built). The failed-events section gained `replayed`, `by_consumer` and `oldest_unresolved_age_seconds`. A source error wrapping the new `analytics.ErrSourceUnavailable` answers 503 instead of 500. `FailedEventsSummary` gained `Replayed`, `ByConsumer`, `OldestUnresolvedAgeSeconds`. `api/openapi.yaml` does not yet describe the new response fields of `/analytics/issues`.
 

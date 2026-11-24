@@ -6,7 +6,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "editable": false,
   "refresh": "30s",
   "time": {
@@ -18,7 +18,7 @@
       "id": 1,
       "type": "timeseries",
       "title": "Request rate by route",
-      "description": "",
+      "description": "RED rate. The label is the route template, never a raw path or id. Source: identity-api, course-api and analytics-api (on their API port); the worker has no HTTP API metrics.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -168,7 +168,7 @@
       "id": 5,
       "type": "timeseries",
       "title": "Outbox backlog (unpublished rows)",
-      "description": "Rising means the relay is failing or Kafka is unreachable.",
+      "description": "Rows not yet published. One table read by three binaries, so max() across jobs. Source: identity-api, course-api and worker (outbox gauges, refreshed every 15s).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -192,8 +192,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "outbox_backlog",
-          "legendFormat": "{{job}}"
+          "expr": "max(outbox_backlog)",
+          "legendFormat": "backlog"
         }
       ]
     },
@@ -201,7 +201,7 @@
       "id": 6,
       "type": "timeseries",
       "title": "Outbox oldest unpublished age",
-      "description": "",
+      "description": "Age of the oldest unpublished row, 0 when empty. A row the relay gave up on stays unpublished and keeps this high until it is handled.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -225,8 +225,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "outbox_oldest_unpublished_seconds",
-          "legendFormat": "{{job}}"
+          "expr": "max(outbox_oldest_unpublished_seconds)",
+          "legendFormat": "oldest"
         }
       ]
     },
@@ -234,7 +234,7 @@
       "id": 7,
       "type": "timeseries",
       "title": "Kafka consumer lag",
-      "description": "",
+      "description": "NO DATA until the Kafka consumers fill kafka_consumer_lag: the metric is defined, nothing feeds it yet.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -267,7 +267,7 @@
       "id": 8,
       "type": "timeseries",
       "title": "Asynq queue depth and retries",
-      "description": "",
+      "description": "Source: worker (Asynq Inspector, every 15s). Depth = pending + scheduled (not yet started); retry = tasks waiting for their next attempt. Running and archived tasks are in neither.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -309,7 +309,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Dead-letter rate by consumer",
-      "description": "Alert on rate, not existence (RFC 6.9).",
+      "description": "NO DATA until the Kafka transport parks events: dead_letter_total has no series before the first dead letter. Alert: DeadLetterRateHigh.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -342,7 +342,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "Events processed by consumer and outcome",
-      "description": "",
+      "description": "NO DATA until the Kafka consumers record outcomes (event_processed_total).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -375,7 +375,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "Workflows started / completed / failed (rate)",
-      "description": "",
+      "description": "Source: worker. Counts runs first executed live on a worker process; replays after a restart are not counted.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -426,7 +426,7 @@
       "id": 12,
       "type": "timeseries",
       "title": "DB connections in use vs max",
-      "description": "",
+      "description": "Source: every service (db.Stats read at scrape time). db_connections_max is 0 for an unlimited pool.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -461,6 +461,39 @@
           },
           "expr": "db_connections_max",
           "legendFormat": "max {{job}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Scrape targets up (1 = scraped)",
+      "description": "Prometheus up per job: identity-api, course-api, analytics-api, worker. Alert: ScrapeTargetDown.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 12,
+        "h": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "up{job=~\"identity-api|course-api|analytics-api|worker\"}",
+          "legendFormat": "{{job}}"
         }
       ]
     }

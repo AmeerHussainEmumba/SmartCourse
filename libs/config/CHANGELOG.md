@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Added `Config.Telemetry` (`TelemetryConfig`, new file `telemetry.go`): `OTEL_EXPORTER_OTLP_ENDPOINT` (host:port or http(s) URL; empty means tracing off), `OTEL_SDK_DISABLED`, `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER_ARG` (0 to 1, default 1), `METRICS_ENABLED` (default true), `METRICS_HTTP_ADDR` (default `:9100`, the worker). All optional; shape-validated at `Load`, never dialled; a URL's credentials are refused and never echoed.
+
 - Added `Config.Mongo` (new file `mongo.go`): `MONGO_URI` (optional; `mongodb://` or `mongodb+srv://`, never echoed in errors), `MONGO_DATABASE` (default `smartcourse`), `MONGO_CONNECT_TIMEOUT` (5s), `MONGO_SERVER_SELECTION_TIMEOUT` (3s), `MONGO_OP_TIMEOUT` (5s); timeouts must be above zero and at most 2m. And `Config.Admin` (new file `admin.go`): `ADMIN_HTTP_ADDR`, a `host:port`, default `:8093`. `Load` fails for a bad value in every binary; defaults are unaffected. Additive.
 - Added `Config.Kafka` (new file `kafka.go`): `EVENT_TRANSPORT` (`inprocess` default, or `kafka`; any other value fails `Load` in every binary), `KAFKA_BROKERS` (comma-separated host:port) and `SCHEMA_REGISTRY_URL` (http or https), both required and validated only when the transport is `kafka`, and the tuning `KAFKA_CONSUMER_MAX_IN_FLIGHT` (1 to 256, default 4), `KAFKA_CONSUMER_MAX_ATTEMPTS` (1 to 100, default 5), `KAFKA_CONSUMER_BACKOFF_BASE` (200ms) and `KAFKA_CONSUMER_BACKOFF_MAX` (10s, at least the base), `KAFKA_CONSUMER_SHUTDOWN_TIMEOUT` (30s), `KAFKA_PRODUCE_TIMEOUT` (20s, at most 25s). `KafkaConfig.KafkaEnabled()`. The defaults leave behaviour unchanged. Additive.
 

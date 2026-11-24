@@ -32,6 +32,8 @@ type Config struct {
 	Admin    AdminConfig
 	Kafka    KafkaConfig
 
+	Telemetry TelemetryConfig
+
 	JWT   JWTConfig
 	Argon Argon2Config
 
@@ -294,6 +296,9 @@ func Load() (*Config, error) {
 	var mongoErrs, adminErrs []string
 	cfg.Mongo, mongoErrs = loadMongo(os.Getenv, optDuration)
 	cfg.Admin, adminErrs = loadAdmin(os.Getenv)
+	var telemetryErrs []string
+	cfg.Telemetry, telemetryErrs = loadTelemetry(os.Getenv, optBool)
+	errs = append(errs, telemetryErrs...)
 	errs = append(errs, mongoErrs...)
 	errs = append(errs, adminErrs...)
 	cfg.Kafka = loadKafka(os.Getenv, optInt, optDuration, &errs)

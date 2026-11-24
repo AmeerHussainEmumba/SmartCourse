@@ -28,3 +28,15 @@ Fail-fast environment configuration (RFC §11.8). `Load()` reads every `cmd/*` b
 ## Event transport
 
 `EVENT_TRANSPORT` selects how outbox events reach their handlers (ADR-0029): `inprocess` (default; the relay runs the handlers) or `kafka` (the relay publishes to Kafka and consumer groups run them). Any other value is a startup error, so a typo cannot silently leave events off the broker. In `kafka` mode `KAFKA_BROKERS` (comma-separated host:port) and `SCHEMA_REGISTRY_URL` are required and checked for shape; in `inprocess` mode they are ignored. The consumer tuning (`KAFKA_CONSUMER_MAX_IN_FLIGHT`, `..._MAX_ATTEMPTS`, `..._BACKOFF_BASE`, `..._BACKOFF_MAX`, `..._SHUTDOWN_TIMEOUT`) and `KAFKA_PRODUCE_TIMEOUT` have defaults and are range-checked in every mode. `KAFKA_PRODUCE_TIMEOUT` is capped at 25s because the relay gives one row 30s to claim, publish and record the result. `KAFKA_CONSUMER_MAX_IN_FLIGHT` is per consumer group and each running handler holds a Postgres connection, so the worst case is groups x that value; the pool queues the excess rather than failing, and `Load` does not check it against `POSTGRES_MAX_OPEN_CONNS`.
+## Telemetry (Phase 7)
+
+All optional; validated at `Load`, never dialled (an unreachable collector must not stop a service).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | empty (tracing off) | OTLP/HTTP collector, `host:port` or an `http(s)` URL without credentials. |
+| `OTEL_SDK_DISABLED` | `false` | `true` turns tracing off even with an endpoint. |
+| `OTEL_SERVICE_NAME` | the binary's own name | `service.name`; no whitespace. |
+| `OTEL_TRACES_SAMPLER_ARG` | `1` | Head-sampling ratio from 0 to 1. |
+| `METRICS_ENABLED` | `true` | Off: no `/metrics`, no collectors, no request metrics. |
+| `METRICS_HTTP_ADDR` | `:9100` | The worker's own metrics listener (`host:port`); the HTTP services serve `/metrics` on their API port. |

@@ -21,6 +21,7 @@ COPY libs/mongostore ./libs/mongostore
 COPY libs/outbox ./libs/outbox
 COPY libs/relay ./libs/relay
 COPY libs/router ./libs/router
+COPY libs/telemetry ./libs/telemetry
 COPY libs/testenv ./libs/testenv
 COPY services/analytics ./services/analytics
 WORKDIR /src/services/analytics

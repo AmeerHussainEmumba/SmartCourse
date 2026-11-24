@@ -9,3 +9,7 @@ Structured JSON logging via `log/slog` (RFC §12.4). Every line carries `request
 ## Testing
 
 No dedicated test file — this package has no business logic to verify beyond "does `slog` get configured the way the code says it does," which is better proven by reading actual JSON log output during development than by a unit test asserting on `slog`'s internal handler configuration.
+
+## Correlation helpers (RFC section 12.4)
+
+`Correlated(ctx)` returns the context logger plus `trace_id` and `span_id` of the active span (nothing extra when there is none). `WithEventID` and `WithJobID` add `event_id` and `job_id`; the Asynq server attaches a `job_id` logger to each handler context, and the relay and Kafka steps are meant to use `WithEventID`. The key names are constants (`KeyTraceID`, ...).

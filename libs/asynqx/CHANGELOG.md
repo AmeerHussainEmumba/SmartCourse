@@ -4,6 +4,11 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- `Server.Handle` runs each attempt in a CONSUMER span (`libs/telemetry.StartJob`) and puts a logger carrying `job_id` in the handler context (`logging.Correlated(ctx)`); the panic log line carries job_id and trace ids. Additive: handlers that ignore the context behave as before.
+- Added `Inspector.Gauges(*telemetry.Metrics)` for `asynq_queue_depth` (pending + scheduled) and `asynq_retry_count`.
+- Fixed `Inspector.Stats` failing on a queue that never held a task: asynq v0.26.0's `GetQueueInfo` returns an internal NOT_FOUND error that `errors.Is(err, asynq.ErrQueueNotFound)` misses, so the documented zero-values answer never happened.
+- New dependencies: `libs/telemetry`, `libs/logging`.
+
 - Added `Servers`: one `Server` per queue, so each queue has its own bounded pool (RFC §10.2: `DefaultPoolSizes` critical 10, default 5, low 3). `Register(taskType, queue, fn)` takes a plain `func(ctx, payload []byte) error`, so packages plug handlers in without importing Asynq; `Start`/`Run` start every pool and `Shutdown` drains them concurrently (one `ShutdownTimeout` in total). Backoff, retry delay and `OnExhausted` apply to every pool. Additive: `Server` is unchanged.
 - Added `BackoffConfig.Validate` (negative values, `Max` below `Base`, `Jitter` outside [0,1)); `NewServers` calls it, `NewServer` does not.
 
