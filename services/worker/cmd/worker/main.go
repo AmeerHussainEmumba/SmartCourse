@@ -8,7 +8,7 @@
 // Asynq side (libs/asynqx, ADR-0013): one server per queue with its own
 // bounded pool (RFC §10.2) and the scheduler for the maintenance jobs in
 // services/worker/jobs. A failure in one never stops another. Kafka consumers
-// are still M3 scope (RFC §21.0). No HTTP surface at all.
+// are still M3 scope (RFC §21.0). The only HTTP surface is the admin port (services/worker/admin: health and failed-event replay).
 package main
 
 import (
@@ -49,8 +49,19 @@ func main() {
 
 	rl := buildRelay(deps, cfg)
 
+	// MongoDB (archive, dead letters) and the admin surface run beside the
+	// relay and never stop it: see mongo_wire.go.
+	mg := newMongoWiring(cfg)
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(5)
+	go func() {
+		defer wg.Done()
+		mg.run(ctx, logger)
+	}()
+	go func() {
+		defer wg.Done()
+		serveAdmin(ctx, logger, deps, cfg, mg, consumerHandlers())
+	}()
 	go func() {
 		defer wg.Done()
 		logger.Info("outbox relay starting")
@@ -65,7 +76,7 @@ func main() {
 		startAsynq(ctx, logger, deps, cfg)
 	}()
 
-	wg.Wait() // all three goroutines return once ctx is cancelled
+	wg.Wait() // every goroutine returns once ctx is cancelled
 	logger.Info("shutting down worker")
 }
 

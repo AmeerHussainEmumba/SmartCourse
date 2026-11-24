@@ -131,6 +131,14 @@ services:
       JOBS_ENROLLMENT_COUNT_INTERVAL: 1h
       JOBS_IDEMPOTENCY_PRUNE_INTERVAL: 1h
       JOBS_OUTBOX_PRUNE_INTERVAL: 1h
+      # Admin surface (failed-event list and replay, health), admin JWT only
+      # (ADR-0031). Published on the loopback interface only.
+      ADMIN_HTTP_ADDR: ":8093"
+      # MongoDB (compose `events` profile): the archive, dead letters and
+      # replay. Optional: if it is not running the worker still starts, logs
+      # the outage and retries, and the relay and analytics are unaffected.
+      MONGO_URI: mongodb://mongodb:27017
+    ports: ["127.0.0.1:8093:8093"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -238,6 +246,10 @@ services:
       MINIO_ACCESS_KEY_ID: smartcourse
       MINIO_SECRET_ACCESS_KEY: smartcourse123
       JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
+      # Failed Events metric (GET /analytics/issues) reads failed_events from
+      # MongoDB (compose `events` profile). Optional: without it that one
+      # route answers 503; every other route is unaffected.
+      MONGO_URI: mongodb://mongodb:27017
     ports: ["127.0.0.1:8092:8080"]
     depends_on:
       postgres:
