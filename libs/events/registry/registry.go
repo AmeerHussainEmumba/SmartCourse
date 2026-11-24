@@ -124,6 +124,32 @@ func (c *Client) LatestVersion(ctx context.Context, subject string) (int, error)
 	return out.Version, nil
 }
 
+// ErrSubjectNotFound is returned by LatestSchema when the registry has no
+// versions under the subject (error_code 40401) or no such subject.
+var ErrSubjectNotFound = errors.New("schema registry: subject not found")
+
+// Latest is the newest registered version of a subject.
+type Latest struct {
+	Subject string `json:"subject"`
+	Version int    `json:"version"`
+	ID      int    `json:"id"`
+	Schema  string `json:"schema"`
+}
+
+// LatestSchema returns the newest version of subject with its global id: what a
+// producer needs to frame a message (the id) and to fill Envelope.schema_version
+// (the version) without registering anything. It returns ErrSubjectNotFound
+// when the subject has not been registered.
+func (c *Client) LatestSchema(ctx context.Context, subject string) (Latest, error) {
+	var out Latest
+	err := c.do(ctx, http.MethodGet, "/subjects/"+url.PathEscape(subject)+"/versions/latest", nil, &out)
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+		return Latest{}, fmt.Errorf("%w: %s", ErrSubjectNotFound, subject)
+	}
+	return out, err
+}
+
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
 	var rdr io.Reader
 	if in != nil {
