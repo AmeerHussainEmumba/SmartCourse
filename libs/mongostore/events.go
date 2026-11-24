@@ -104,6 +104,9 @@ type AuditEntry struct {
 	UserAgent    string    `bson:"user_agent,omitempty"`
 	At           time.Time `bson:"at"`
 	TraceID      string    `bson:"trace_id,omitempty"`
+	// EventID is the domain event this record was derived from, set by
+	// AppendAuditOnce; it is what makes that call idempotent.
+	EventID string `bson:"event_id,omitempty"`
 }
 
 // AppendAudit appends an audit record and returns its id. Audit records are
@@ -126,4 +129,47 @@ func (s *Store) AppendAudit(ctx context.Context, a AuditEntry) (string, error) {
 	}
 	oid, _ := res.InsertedID.(bson.ObjectID)
 	return oid.Hex(), nil
+}
+
+// AppendAuditOnce appends an audit record derived from the event a.EventID,
+// at most once per event: a redelivered event reports inserted=false and
+// changes nothing (the first write wins). Use it from consumers, which see
+// at-least-once delivery; AppendAudit is for one-off administrative records.
+func (s *Store) AppendAuditOnce(ctx context.Context, a AuditEntry) (inserted bool, err error) {
+	if err := s.ready(); err != nil {
+		return false, err
+	}
+	if a.EventID == "" || a.ActorID == "" || a.Action == "" || a.ResourceType == "" {
+		return false, fmt.Errorf("%w: event id, actor, action and resource type are required", ErrInvalid)
+	}
+	if a.At.IsZero() {
+		a.At = time.Now().UTC()
+	}
+	doc := bson.D{
+		{Key: "actor_id", Value: a.ActorID},
+		{Key: "actor_role", Value: a.ActorRole},
+		{Key: "action", Value: a.Action},
+		{Key: "resource_type", Value: a.ResourceType},
+		{Key: "resource_id", Value: a.ResourceID},
+		{Key: "before", Value: a.Before},
+		{Key: "after", Value: a.After},
+		{Key: "ip", Value: a.IP},
+		{Key: "user_agent", Value: a.UserAgent},
+		{Key: "at", Value: a.At},
+		{Key: "trace_id", Value: a.TraceID},
+	}
+	ctx, cancel := s.withTimeout(ctx)
+	defer cancel()
+	var res *mongo.UpdateResult
+	for range 3 { // a concurrent upsert of the same event can report a duplicate key; retry as an update
+		res, err = s.audit.UpdateOne(ctx, bson.D{{Key: "event_id", Value: a.EventID}},
+			bson.D{{Key: "$setOnInsert", Value: doc}}, options.UpdateOne().SetUpsert(true))
+		if err == nil || !mongo.IsDuplicateKeyError(err) {
+			break
+		}
+	}
+	if err != nil {
+		return false, fmt.Errorf("mongostore: append audit once: %w", err)
+	}
+	return res.UpsertedCount > 0, nil
 }

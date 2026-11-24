@@ -33,14 +33,24 @@ type ErrorEntry struct {
 // empty on values returned by ParkFailedEvent and ListFailedEvents; use
 // GetFailedEvent for the bytes. ID is the document id, the pagination key.
 type FailedEvent struct {
-	ID            string       `bson:"-"`
-	EventID       string       `bson:"event_id"`
-	Consumer      string       `bson:"consumer"`
-	EventType     string       `bson:"event_type"`
-	Topic         string       `bson:"topic,omitempty"`
-	AggregateType string       `bson:"aggregate_type,omitempty"`
-	AggregateID   string       `bson:"aggregate_id,omitempty"`
-	Payload       []byte       `bson:"payload,omitempty"`
+	ID            string `bson:"-"`
+	EventID       string `bson:"event_id"`
+	Consumer      string `bson:"consumer"`
+	EventType     string `bson:"event_type"`
+	Topic         string `bson:"topic,omitempty"`
+	AggregateType string `bson:"aggregate_type,omitempty"`
+	AggregateID   string `bson:"aggregate_id,omitempty"`
+	Payload       []byte `bson:"payload,omitempty"`
+	// Replay metadata, written once with the payload: what a replayer needs to
+	// rebuild the event the consumer saw. Zero on documents parked before these
+	// fields existed.
+	OutboxID      int64        `bson:"outbox_id,omitempty"`
+	SchemaID      int32        `bson:"schema_id,omitempty"`
+	SchemaVersion int32        `bson:"schema_version,omitempty"`
+	OccurredAt    time.Time    `bson:"occurred_at,omitempty"`
+	TraceID       string       `bson:"trace_id,omitempty"`
+	SpanID        string       `bson:"span_id,omitempty"`
+	ActorID       string       `bson:"actor_id,omitempty"`
 	Attempts      int          `bson:"attempts"`
 	Errors        []ErrorEntry `bson:"errors"`
 	FirstFailedAt time.Time    `bson:"first_failed_at"`
@@ -71,6 +81,16 @@ type ParkInput struct {
 	AggregateType string
 	AggregateID   string
 	Payload       []byte
+	// OutboxID, SchemaID, SchemaVersion, OccurredAt, TraceID, SpanID and ActorID
+	// are kept from the first parking, like Payload, so the event can be rebuilt
+	// for replay (handlers order mirror updates by OutboxID).
+	OutboxID      int64
+	SchemaID      int32
+	SchemaVersion int32
+	OccurredAt    time.Time
+	TraceID       string
+	SpanID        string
+	ActorID       string
 	Attempts      int
 	Err           string
 	FailedAt      time.Time
@@ -79,7 +99,7 @@ type ParkInput struct {
 // ParkFailedEvent records that consumer gave up on an event. It is idempotent
 // per (EventID, Consumer): the first call creates the document; later calls
 // append to its error history and add to attempts instead of duplicating.
-// Safe under concurrency. The payload is stored from the first call only.
+// Safe under concurrency. The payload and replay metadata are stored from the first call only.
 func (s *Store) ParkFailedEvent(ctx context.Context, in ParkInput) (*FailedEvent, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
@@ -102,6 +122,13 @@ func (s *Store) ParkFailedEvent(ctx context.Context, in ParkInput) (*FailedEvent
 			{Key: "aggregate_type", Value: in.AggregateType},
 			{Key: "aggregate_id", Value: in.AggregateID},
 			{Key: "payload", Value: in.Payload},
+			{Key: "outbox_id", Value: in.OutboxID},
+			{Key: "schema_id", Value: in.SchemaID},
+			{Key: "schema_version", Value: in.SchemaVersion},
+			{Key: "occurred_at", Value: in.OccurredAt},
+			{Key: "trace_id", Value: in.TraceID},
+			{Key: "span_id", Value: in.SpanID},
+			{Key: "actor_id", Value: in.ActorID},
 		}},
 		{Key: "$set", Value: bson.D{{Key: "status", Value: StatusParked}}},
 		{Key: "$unset", Value: bson.D{{Key: "replayed_at", Value: ""}}},
@@ -262,6 +289,69 @@ func (s *Store) ListFailedEvents(ctx context.Context, f FailedFilter, cursor str
 		page.Items = append(page.Items, d.toEvent())
 	}
 	return page, nil
+}
+
+// FailedSummary is the failed-event backlog at a glance (RFC §9.1's "Failed
+// Events" metric): counts by lifecycle state, consumer and event type, and
+// how long the oldest event has waited.
+type FailedSummary struct {
+	Total    int64
+	Parked   int64
+	Replayed int64
+	// ByConsumer and ByEventType count parked events only: the backlog.
+	ByConsumer  map[string]int64
+	ByEventType map[string]int64
+	// OldestParkedAt is when the longest-waiting parked event first failed;
+	// nil when nothing is parked.
+	OldestParkedAt *time.Time
+}
+
+// SummarizeFailed aggregates failed_events in one pass. It reads only
+// status, consumer, event type and first_failed_at, never payloads.
+func (s *Store) SummarizeFailed(ctx context.Context) (*FailedSummary, error) {
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := s.withTimeout(ctx)
+	defer cancel()
+	cur, err := s.failed.Aggregate(ctx, bson.A{
+		bson.D{{Key: "$group", Value: bson.D{
+			{Key: "_id", Value: bson.D{{Key: "status", Value: "$status"}, {Key: "consumer", Value: "$consumer"}, {Key: "event_type", Value: "$event_type"}}},
+			{Key: "n", Value: bson.D{{Key: "$sum", Value: 1}}},
+			{Key: "oldest", Value: bson.D{{Key: "$min", Value: "$first_failed_at"}}},
+		}}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("mongostore: summarize failed events: %w", err)
+	}
+	var groups []struct {
+		ID struct {
+			Status    Status `bson:"status"`
+			Consumer  string `bson:"consumer"`
+			EventType string `bson:"event_type"`
+		} `bson:"_id"`
+		N      int64     `bson:"n"`
+		Oldest time.Time `bson:"oldest"`
+	}
+	if err := cur.All(ctx, &groups); err != nil {
+		return nil, fmt.Errorf("mongostore: summarize failed events: %w", err)
+	}
+	sum := &FailedSummary{ByConsumer: map[string]int64{}, ByEventType: map[string]int64{}}
+	for _, g := range groups {
+		sum.Total += g.N
+		if g.ID.Status != StatusParked {
+			sum.Replayed += g.N
+			continue
+		}
+		sum.Parked += g.N
+		sum.ByConsumer[g.ID.Consumer] += g.N
+		sum.ByEventType[g.ID.EventType] += g.N
+		if sum.OldestParkedAt == nil || g.Oldest.Before(*sum.OldestParkedAt) {
+			o := g.Oldest
+			sum.OldestParkedAt = &o
+		}
+	}
+	return sum, nil
 }
 
 // CountFailedSince counts failed events whose last failure is at or after
