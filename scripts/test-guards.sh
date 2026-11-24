@@ -8,6 +8,7 @@
 #   scripts/check-module-graph.sh       go.mod-level rules (who may require whom)
 #   scripts/check-link-graph.sh         what each binary actually links
 #   scripts/check-dockerfile-modules.sh Dockerfile COPY list vs replace closure
+#   scripts/check-pending-e2e.sh        no E1 to E14 spec skipped as pending past its phase
 #   GOWORK=off go build ./...           a module must build on its own
 #
 # Needs the Go module cache to already hold the repo's dependencies (the
@@ -168,6 +169,19 @@ d=$(fresh c13)
 out=$(cd "$d" && scripts/check-link-graph.sh 2>&1)
 if grep -q "^ok   identity-api" <<<"$out" && grep -q "^ok   analytics-api" <<<"$out"; then ok "link graph lets identity-api and analytics-api link libs/telemetry and its OpenTelemetry/gRPC closure"; else bad "link graph rejects telemetry in identity-api or analytics-api"; echo "$out" | tail -5 | sed 's/^/        /'; fi
 expect_fail "link graph fails when a binary exceeds its package budget" "exceeds its package budget" "$d" env LINK_BUDGET_SLACK=-200 scripts/check-link-graph.sh
+
+echo
+echo "== check-pending-e2e: a spec that goes back to a skip, a stale allowlist entry, a deleted spec =="
+expect_pass "check-pending-e2e on the clean tree" "$work/base" scripts/check-pending-e2e.sh
+d=$(fresh c14)
+perl -0pi -e 's/(func TestE2E_E03_DuplicateDelivery\(t \*testing\.T\) \{\n)/$1\tt.Skip("pending: Phase 3 - back to a skip")\n/' "$d/test/e2e/scenarios_pipeline_e2e_test.go"
+expect_fail "pending-e2e guard fails when E03 goes back to a skip" "FAIL E03 is still skipped as pending" "$d" scripts/check-pending-e2e.sh
+d=$(fresh c15)
+perl -0pi -e 's/(func TestE2E_E08_CounterDrift\(t \*testing\.T\) \{\n)\tt\.Skip\([^\n]*\n/$1/' "$d/test/e2e/scenarios_correctness_test.go"
+expect_fail "pending-e2e guard fails when an allowlisted spec is implemented but still listed" "FAIL E08 is implemented .* remove its line" "$d" scripts/check-pending-e2e.sh
+d=$(fresh c16)
+perl -0pi -e 's/func TestE2E_E05_KafkaDownThenUp/func notASpec_E05_KafkaDownThenUp/' "$d/test/e2e/scenarios_resilience_e2e_test.go"
+expect_fail "pending-e2e guard fails when a spec is deleted" "FAIL E05: found 0 spec functions" "$d" scripts/check-pending-e2e.sh
 
 echo
 echo "== known weakness probe (informational, not counted as pass/fail) =="

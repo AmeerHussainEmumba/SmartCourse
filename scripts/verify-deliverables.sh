@@ -400,13 +400,27 @@ check_P1_3() {
   [ "$n" = 1 ] && pass "replay returns the stored response; 10 concurrent requests with one key left $n enrollment" \
     || fail "10 concurrent requests with one key left $n enrollments, want 1"
 }
-check_E01() { pending "Phase 8 (needs Phases 2-7): go test -run TestE2E_E01_ in test/e2e"; }
+# run_e2e <test name>: the container-tier scenario of test/e2e (build tag e2e).
+# Unlike the other checks it does not use the stack at the URLs above: it
+# builds the service binaries and starts its own containers through
+# testcontainers, so it needs Docker and a few minutes per scenario.
+run_e2e() {
+  local out rc start=$SECONDS
+  if ! docker info >/dev/null 2>&1; then skip "Docker is not reachable: go test -tags=e2e -run $1 in test/e2e needs it"; return; fi
+  out=$(cd "$(dirname "$0")/../test/e2e" && GOWORK=off go test -tags=e2e -count=1 -timeout 30m -run "$1" ./... 2>&1); rc=$?
+  if [ "$rc" -eq 0 ]; then
+    pass "go test -tags=e2e -run $1 ok ($((SECONDS - start))s)"
+  else
+    fail "go test -tags=e2e -run $1 failed: $(grep -E '^\s*(--- FAIL|.*PRODUCT DEFECT|.*timed out|.*e2e_test.go:[0-9]+:)' <<<"$out" | head -4 | tr -s ' ' | tr '\n' ';' | cut -c1-600)"
+  fi
+}
+check_E01() { run_e2e '^TestE2E_E01_'; }
 check_E02() { pending "Phase 7: go test -run TestE2E_E02_ in test/e2e"; }
-check_E03() { pending "Phase 3: go test -run TestE2E_E03_ in test/e2e"; }
-check_E04() { pending "Phase 4: go test -run TestE2E_E04_ in test/e2e"; }
-check_E05() { pending "Phase 3: go test -run TestE2E_E05_ in test/e2e"; }
-check_E06() { pending "Phase 3: go test -run TestE2E_E06_ in test/e2e"; }
-check_E07() { pending "Phase 5: go test -run TestE2E_E07_ in test/e2e"; }
+check_E03() { run_e2e '^TestE2E_E03_'; }
+check_E04() { run_e2e '^TestE2E_E04_'; }
+check_E05() { run_e2e '^TestE2E_E05_'; }
+check_E06() { run_e2e '^TestE2E_E06_'; }
+check_E07() { run_e2e '^TestE2E_E07_'; }
 check_E08() { pending "Phase 5/6: go test -run TestE2E_E08_ in test/e2e"; }
 check_E09() { pending "Phase 3: go test -run TestE2E_E09_ in test/e2e"; }
 check_E10() { pending "Phase 3: go test -run TestE2E_E10_ in test/e2e"; }
