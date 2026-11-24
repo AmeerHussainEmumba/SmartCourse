@@ -104,7 +104,7 @@ func TestRelay_ManyDuplicateEventsAcrossWorkers_OneCertificate(t *testing.T) {
 		t.Fatalf("expected exactly 1 certificate from 20 duplicate events, got %d", n)
 	}
 	var published, failed int64
-	env.DB.Raw(`SELECT count(*) FROM outbox WHERE published_at IS NOT NULL AND last_error IS NULL`).Row().Scan(&published)
+	env.DB.Raw(`SELECT count(*) FROM outbox WHERE event_type = 'progress.course_completed' AND published_at IS NOT NULL AND last_error IS NULL`).Row().Scan(&published)
 	env.DB.Raw(`SELECT count(*) FROM outbox WHERE last_error IS NOT NULL`).Row().Scan(&failed)
 	if published != 20 || failed != 0 {
 		t.Fatalf("every duplicate must be a clean no-op: published=%d with_error=%d", published, failed)

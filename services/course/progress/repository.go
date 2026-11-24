@@ -110,13 +110,16 @@ func (r *Repository) ensureProgressRows(ctx context.Context, tx *gorm.DB, enroll
 }
 
 // markLessonComplete is idempotent by construction (RFC §8.3): it only sets
-// completed_at when currently NULL, so a second call affects zero rows.
-func (r *Repository) markLessonComplete(ctx context.Context, tx *gorm.DB, enrollmentID, lessonKey uuid.UUID) error {
+// completed_at when currently NULL, so a second call affects zero rows. It
+// reports whether a row changed so the caller emits progress.lesson_completed
+// once per completion, with the same completed_at the row now holds.
+func (r *Repository) markLessonComplete(ctx context.Context, tx *gorm.DB, enrollmentID, lessonKey uuid.UUID) (time.Time, bool, error) {
 	now := time.Now().UTC()
-	return tx.WithContext(ctx).Exec(`
+	res := tx.WithContext(ctx).Exec(`
 		UPDATE lesson_progress SET completed_at = ?, updated_at = ?
 		WHERE enrollment_id = ? AND lesson_key = ? AND completed_at IS NULL`,
-		now, now, enrollmentID, lessonKey).Error
+		now, now, enrollmentID, lessonKey)
+	return now, res.RowsAffected > 0, res.Error
 }
 
 // isFullyComplete compares completed lesson_progress rows against the

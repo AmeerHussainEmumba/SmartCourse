@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 )
 
 // Outcome says what Issue did, so the relay handler and tests can tell a
@@ -99,12 +100,28 @@ func (s *Service) IssueForCompletion(ctx context.Context, tx *gorm.DB, enrollmen
 		StudentName:      name,
 		CourseTitle:      *src.Title,
 	}
-	inserted, err := s.repo.insertIfAbsent(ctx, tx, cert)
+	issuedAt, inserted, err := s.repo.insertIfAbsent(ctx, tx, cert)
 	if err != nil {
 		return "", err
 	}
 	if !inserted {
 		return OutcomeAlreadyIssued, nil
+	}
+	// Same transaction as the row (ADR-0006), and only on the inserting path:
+	// a replay or a concurrent delivery that lost the race writes nothing, so
+	// the event is emitted once per certificate. The verification code is not
+	// part of the payload (it is a bearer token).
+	if err := outbox.Write(ctx, tx, outbox.Event{
+		AggregateType: "enrollment",
+		AggregateID:   enrollmentID,
+		EventType:     EventCertificateIssued,
+		SchemaVersion: 1,
+		Payload: CertificateIssuedPayload{
+			CertificateID: cert.ID, EnrollmentID: enrollmentID, StudentID: cert.StudentID,
+			CourseID: cert.CourseID, CourseTitle: cert.CourseTitle, IssuedAt: issuedAt,
+		},
+	}); err != nil {
+		return "", fmt.Errorf("write %s: %w", EventCertificateIssued, err)
 	}
 	return OutcomeIssued, nil
 }
