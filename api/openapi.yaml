@@ -183,6 +183,94 @@ paths:
         '404': { description: "Unknown user id. Nothing is written (no cache key, no outbox event).", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '409': { description: "last_admin: the change would leave the platform with no active admin", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
+  /admin/failed-events:
+    get:
+      summary: List failed (dead-lettered) events, newest first (admin only; ADR-0031)
+      description: >
+        Served by the worker's admin port (ADMIN_HTTP_ADDR, default 8093, published on
+        127.0.0.1 only in Compose), not by the three HTTP services. Requires an admin token
+        whose token version is current (RequireFreshPrivilege). Keyset-paginated; payloads are
+        omitted from the list (use the detail route). 503 while MongoDB is unreachable.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [parked, replayed] } }
+        - { name: consumer, in: query, schema: { type: string, maxLength: 128 }, description: Exact consumer name, for example analytics }
+        - { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+        - { name: cursor, in: query, schema: { type: string }, description: Opaque cursor from a previous response's next_cursor }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/FailedEvent' } }
+                  next_cursor: { type: string, description: "Empty on the last page" }
+        '400': { description: "Bad status, limit or cursor", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: "Missing, invalid or stale token", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: Not an admin, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: MongoDB is unreachable, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/failed-events/{event_id}:
+    get:
+      summary: One event's failed records (one per consumer that gave up on it), with payload and error history
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: event_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event_id: { type: string, format: uuid }
+                  records: { type: array, items: { $ref: '#/components/schemas/FailedEvent' } }
+        '400': { description: event_id is not a UUID, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: "Missing, invalid or stale token", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: Not an admin, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: No failed record for that event id, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: MongoDB is unreachable, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/failed-events/{event_id}/replay:
+    post:
+      summary: Replay a failed event through its consumer's normal idempotent path (admin only)
+      description: >
+        Re-runs each consumer's own handler for the parked event in a transaction together with
+        its processed_events marker, then marks the record replayed, exactly once however many
+        callers race. Replaying an already replayed event is a 200 with replayed=false and
+        status already_replayed: nothing is applied again. If a handler fails again the record
+        stays parked with the new error appended and the answer is 422. Takes no request body.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: event_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Replayed, or already replayed (no-op)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event_id: { type: string, format: uuid }
+                  replayed: { type: boolean, description: "True when this call moved a record to replayed" }
+                  outcomes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        consumer: { type: string }
+                        status: { type: string, enum: [replayed, already_replayed] }
+                        applied: { type: boolean, description: "True when the handler ran in this call; false when the consumer had already processed the event" }
+        '400': { description: event_id is not a UUID, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: "Missing, invalid or stale token", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: Not an admin, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: No failed record for that event id, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { description: "replay_failed: a consumer failed again (details.outcomes lists each consumer); the record stays parked", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: MongoDB is unreachable, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
   /courses:
     get:
       summary: Catalogue — published courses, keyset-paginated (RFC §13.2), filterable
@@ -595,6 +683,40 @@ components:
         code: { type: string }
         message: { type: string }
         details: {}
+
+    FailedEvent:
+      type: object
+      description: >
+        An event a consumer gave up on, unique per (event_id, consumer). errors, payload and
+        payload_base64 appear on the detail route only.
+      properties:
+        id: { type: string, description: "Record id, the pagination key" }
+        event_id: { type: string, format: uuid }
+        consumer: { type: string }
+        event_type: { type: string }
+        topic: { type: string }
+        aggregate_type: { type: string }
+        aggregate_id: { type: string }
+        status: { type: string, enum: [parked, replayed] }
+        attempts: { type: integer }
+        schema_id: { type: integer }
+        schema_version: { type: integer }
+        occurred_at: { type: string, format: date-time }
+        first_failed_at: { type: string, format: date-time }
+        last_failed_at: { type: string, format: date-time }
+        replayed_at: { type: string, format: date-time }
+        last_error: { type: string }
+        errors:
+          type: array
+          description: "Error history, oldest first, capped at the newest 100"
+          items:
+            type: object
+            properties:
+              at: { type: string, format: date-time }
+              attempt: { type: integer }
+              message: { type: string }
+        payload: { description: "The event payload when it is JSON" }
+        payload_base64: { type: string, description: "The payload bytes when they are not JSON" }
 
     RegisterRequest:
       type: object
