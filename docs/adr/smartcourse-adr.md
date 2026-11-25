@@ -1237,6 +1237,8 @@ If publishes legitimately approach the lease (longer activities, queueing behind
 ## ADR-0029 — Two event transports behind one seam: in-process and Kafka
 
 > **Superseded in part by ADR-0033 (2026-11-25):** the in-process transport is removed; Kafka is the only transport and each service consumes independently.
+>
+> **Code note (2026-11-26):** the in-process path is also gone from `libs/relay`. `WithPublisher`, `Handlers()`, `Publishing()` and the unclaused original claim query named below no longer exist; the publisher is `relay.New`'s second argument and every relay claims per aggregate. Read the text below as the history of the bridge, not as a description of the code.
 
 **Status:** Accepted (project owner, 2026-11-26) · **Date:** 2026-11-18 · **RFC:** §6.2, §6.3 · **Would amend:** ADR-0021's reversal trigger, ADR-0027
 
@@ -1334,7 +1336,7 @@ These record what was built and chosen. The ADR was `Proposed` until the Kafka c
 - **A test found a default that matters:** franz-go does not retry an EOF on the first read of a connection (it assumes a TLS or SASL misconfiguration), and a restarting broker behind a port proxy produces exactly that. Both clients set `kgo.AlwaysRetryEOF()`. Revisit this when TLS or SASL is introduced.
 - **Not verified:** multi-broker behaviour (replication, leader election, `min.insync.replicas`); TLS and SASL; throughput and consumer lag under load; a Confluent-format consumer reading `libs/events` bytes through this transport (still the Phase 3 interop item above); crash recovery when the broker also loses its producer-state snapshot; `govulncheck` on the new dependencies.
 - **Topic list** is in `libs/kafka/topics` (RFC §6.5, three partitions, replication factor one) and equals docker-compose's `kafka-init` (a unit test compares them). The partition count is still the RFC §20 (D5) placeholder.
-- **Was open when written (now accepted, 2026-11-26; the relay and consumers use this module):** what a consumer does when `OnExhausted` cannot park (ADR-0031's open item) is left to the hook, which has no error return and always lets the offset advance.
+- **Was open when written (now accepted, 2026-11-26; the relay and consumers use this module):** what a consumer does when `OnExhausted` cannot park (ADR-0031's open item) was left to the hook, which had no error return and always let the offset advance. *(Closed 2026-11-26, B-06/B-07: `OnExhausted` now returns an error and the `libs/eventbus` hook holds the record until the sink accepts it; see `libs/eventbus/README.md`.)*
 
 ---
 
@@ -1382,7 +1384,7 @@ If the archive's only users are replay and the failed-events metric, and operati
 - analytics-api serves the Failed Events metric from `failed_events` (`services/analytics/failedevents`).
 - `libs/mongostore` gained replay metadata on parked events (including the outbox id, because mirror handlers order updates by it), `AppendAuditOnce` and `SummarizeFailed`.
 
-**Resolves the open items above:** replay is **apply, then mark** (a crash between them leaves the record parked and the next replay finds the marker and only marks it; the reverse order would risk a lost replay). When parking fails because MongoDB is down, `Sink.Park` returns an error and the transport must keep the event retryable; the transport's behaviour on that error is still its own decision and is **not built here**.
+**Resolves the open items above:** replay is **apply, then mark** (a crash between them leaves the record parked and the next replay finds the marker and only marks it; the reverse order would risk a lost replay). When parking fails because MongoDB is down, `Sink.Park` returns an error and the transport must keep the event retryable; the transport's behaviour on that error is still its own decision and is **not built here**. *(Update 2026-11-26: built for the Kafka consumers, B-06/B-07. A consumer whose sink refuses a record holds it and retries the sink with backoff, the offset not advanced, until the sink accepts it or the consumer stops; "a parked event is never dropped" now also holds during a MongoDB outage, at the price of the held partition waiting. Not verified end to end against a real MongoDB outage; the E2E `TestAdversarial_MongoOutage_BeyondDefaultRetryBudget_LosesEvents` was not re-run.)*
 
 **Deviations and decisions:**
 

@@ -12,7 +12,7 @@ schemas, err := eventbus.Prepare(ctx, k.Brokers, k.SchemaRegistryURL)
 
 // Publishing: the relay only publishes. No handler is registered on it.
 pub, _ := eventbus.NewPublisherFor(k, schemas, obs.TracingEnabled())
-rl := relay.New(db, relay.WithPublisher(pub), relay.WithObserver(eventbus.RelayObserver()), relay.WithDeadLetterSink(sink))
+rl := relay.New(db, pub, relay.WithObserver(eventbus.RelayObserver()), relay.WithDeadLetterSink(sink))
 
 // Consuming: built from the service's own handlers, no *relay.Relay involved.
 consumers, _ := eventbus.NewConsumers(k, handlers, db,
@@ -29,11 +29,11 @@ consumers, _ := eventbus.NewStreamConsumers(k, handlers, eventbus.WithSink(sink)
 
 `Publisher.Publish` (the relay's `relay.Publisher`) encodes the outbox row into a registry-framed Envelope, keys it by aggregate id and returns nil only after the broker acknowledged it (`acks=all`), which is when the relay marks the row published. With tracing on it starts a PRODUCER span (a child of the relay's) and puts its `traceparent` in the record header. An unencodable row returns its error unmarked, so the relay spends the row's attempt budget and dead-letters it; a broker problem is `relay.Transient` (an outage does not use up the budget of good events), except records the broker rejects itself. `Publisher.PublishRetry` produces a stored event to a consumer's retry topic (below).
 
-A relay with **no handlers** is a supported, tested mode (`libs/relay` `TestRelayPublishOnly_*`): publish mode never runs handlers, per-aggregate order is enforced by the claim query, and a row nobody here handles is published like any other.
+A relay takes no handlers (`relay.New(db, publisher, opts...)`; `libs/relay` has no in-process mode any more, see its README): per-aggregate order is enforced by the claim query, and a row nobody here handles is published like any other (`libs/relay` `TestRelayPublishOnly_*`). `Codec.Encode` refuses an empty payload (one that sets none of the event's fields) as `ErrUnencodable`, so a malformed row is parked at the producer (B-04).
 
 ## Consumers
 
-`NewConsumers(cfg, handlers, db, opts...)` starts one consumer group per `ConsumerName` (group id = consumer name; several handlers under one name become one group on the union of their topics). Each record is decoded to a `relay.DecodedEvent` and run through `relay.DeliverEvent`: the handler and the `processed_events` marker commit in one transaction, and only then does `libs/kafka` commit the offset. At most `KAFKA_CONSUMER_MAX_IN_FLIGHT` handlers run per group. A handler that fails past `KAFKA_CONSUMER_MAX_ATTEMPTS` is parked through the `relay.DeadLetterSink` (retried three times, one history entry per attempt) and the offset advances, so a poison record never stalls its partition; with no sink the record is logged in full and dropped (the documented gap). The handler's context carries the record's `relay.Source` (topic, partition, offset, key, schema id) for handlers that keep it (`relay.SourceFrom`).
+`NewConsumers(cfg, handlers, db, opts...)` starts one consumer group per `ConsumerName` (group id = consumer name; several handlers under one name become one group on the union of their topics). Each record is decoded to a `relay.DecodedEvent` and run through `relay.DeliverEvent`: the handler and the `processed_events` marker commit in one transaction, and only then does `libs/kafka` commit the offset. At most `KAFKA_CONSUMER_MAX_IN_FLIGHT` handlers run per group. A handler that fails past `KAFKA_CONSUMER_MAX_ATTEMPTS` is parked through the `relay.DeadLetterSink` (one history entry per attempt) and the offset advances, so a poison record never stalls its partition. **If the sink refuses the record (MongoDB down), the record is held, not dropped** (B-06, B-07): the consumer keeps retrying the sink with a doubling pause (200 ms up to 30 s, `WithParkBackoff`), the offset does not advance and the records behind it on that partition wait (order is kept), until the sink accepts the record or the consumer stops; on shutdown the record stays uncommitted and the next consumer of the group gets it again with a fresh budget. Every refused try is counted (`ParkFailures()`) and logged at ERROR with the hold time, `HeldRecords()` is the number held now, and consumer lag grows meanwhile. The cost is that a sink outage stalls the partitions that hit a poison record, and a held record keeps a `KAFKA_CONSUMER_MAX_IN_FLIGHT` slot. With no sink the record is logged in full and dropped (the documented gap). The handler's context carries the record's `relay.Source` (topic, partition, offset, key, schema id) for handlers that keep it (`relay.SourceFrom`).
 
 **Retry topic.** Every group also subscribes to `retry.<consumer-name>` (`topics.Retry`). A record from there takes exactly the same path, so a replay of an event the consumer already processed is absorbed by `processed_events`. A group creates its own retry topic at start (idempotent) so a new consumer name works before it is added to `topics.Consumers`.
 
@@ -56,7 +56,7 @@ err = pub.PublishRetry(ctx, consumer, schemaID, evt)         // produce it; nil 
 
 ## Codec and routing
 
-`Codec.Encode` (outbox row to message), `Decode` (record to event, needs no registry state), `TopicFor(eventType)` (the topic follows the event type's prefix, not the aggregate type), `TopicsFor(handler)`, `LoadSchemas`, `Schemas`. Record headers: `event_id`, `event_type`, `outbox_id`, `traceparent`. `RelayObserver()` and `HandlerCounter(m)` are the relay's observability seams.
+`Codec.Encode` (outbox row to message), `Decode` (record to event, needs no registry state), `TopicFor(eventType)` (the topic follows the event type's prefix, not the aggregate type), `TopicsFor(handler)`, `LoadSchemas`, `Schemas`. Record headers: `event_id`, `event_type`, `outbox_id`, `traceparent`. `RelayObserver()` is the relay's observability seam (`HandlerCounter` went with the in-process relay; consumers count `event_processed_total` themselves).
 
 ## transporttest
 

@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Comment only: `Prune` no longer says a row that failed and later succeeded keeps its `last_error`; the relay clears it on success (B-09), so such rows are pruned. A row the relay gave up on still keeps its `last_error` and is never pruned.
+
 - `Write` fills `TraceID`/`SpanID` from the span in `ctx` and `ActorID` from an `ActorResolver` when the caller left them unset (a value the caller sets wins; nothing in `ctx` keeps the columns NULL). New `SetActorResolver`; `libs/infra` installs the `libs/auth` identity resolver, so this module does not import `libs/auth` (the relay links it). New dependency: `go.opentelemetry.io/otel/trace` (API only).
 
 - Added `Prune(ctx, db, olderThan)` (new file `prune.go`): deletes published rows whose `published_at` is older than `olderThan`, in batches, and returns the count. It never deletes an unpublished row, and keeps rows with a `last_error` (the relay's give-ups, which have no other record until a dead-letter store exists). A non-positive `olderThan` is an error. The module now has `libs/testenv` as a test dependency (integration tests for `Prune`).

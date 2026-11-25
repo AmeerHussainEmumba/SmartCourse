@@ -17,6 +17,8 @@
 > | Reproducer file | `services/worker/deadletter/deadletter_bugrepro_test.go` | not found at any path in the current tree (not located) |
 > | E2E adversarial files | `test/e2e/adversarial_{mongo,replicas,certificate}_e2e_test.go` | `test/e2e/legacy/` (the old four-binary harness; the E2E tier now runs the ten-binary topology) |
 
+> **Status update, 2026-11-26 (libs/relay, libs/eventbus, libs/kafka).** Re-checked against the current tree and fixed, each with a regression test: **B-09** (`libs/relay` now clears `last_error` on a successful publish; `TestBugrepro_RowsPublishedAfterATransientFailure_AreNeverPruned`, `TestRelay_RetriesAcrossFailures_PublishesOnceAndClearsLastError`), **B-04** (`libs/eventbus` `Codec.Encode` rejects a payload that sets none of the event's fields; `TestBugrepro_Codec_EmptyPayloadIsEncodedForEveryEventType`), **B-06 and B-07** (a consumer whose dead-letter sink refuses a record now holds it, offset not advanced, instead of dropping it after three tries; `TestExhausted_SinkDown_*`, `TestModes_SinkThatRefusesHoldsTheRecordUntilItRecovers`, `TestKafka/ExhaustedHookErrorLeavesTheRecordUncommitted`; the E2E reproducer `TestAdversarial_MongoOutage_BeyondDefaultRetryBudget_LosesEvents` was not re-run). The in-process mode that B-09's text also mentions no longer exists. B-01, B-02, B-03 are not touched by this change. The register below is kept as written.
+
 Production code was not changed. Reproducers are new test files behind the build tag `bugrepro` (and `integration` or `e2e`); they fail today by design. Everything below was run on the worktree branch; "held" means a test that tried to break an invariant and could not. Severity is the tester's assessment.
 
 ## Summary
