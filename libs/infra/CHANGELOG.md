@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- README and comments updated for the split: consumers listed per binary; the outbox-gauge option now refers to the service's own outbox table (identity, course), not `platform.outbox`. No behaviour change.
+
 - **Breaking.** `Observability.RegisterMetricsRoute` is removed: every binary serves `/metrics` on the internal listener (`libs/runtime`), never on the public router. `MetricsHandler()` stays.
 - New package `libs/infra/observe`: the database-free tracing and metrics runtime (`observe.New`, `Observability`, `Options` with `SQLDB` and `OnTracing`). `infra.Observability` and `infra.ObserveOptions` are now aliases of its types, and `Dependencies.Observe` is a thin wrapper that supplies the database and the client hooks. `QueryOutboxStats` is no longer exported (it had no other caller).
 - `Dependencies` gains `ReadinessChecks()` (plain func map), `Close()` and `Of(any) *Dependencies`, so `libs/runtime` can hold it behind an interface (`runtime.WithDependencies(infra.Connect)`) without importing this package.

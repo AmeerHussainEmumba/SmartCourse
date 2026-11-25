@@ -2,7 +2,9 @@
 
 A thin wrapper over [Asynq](https://pkg.go.dev/github.com/hibiken/asynq) (Redis-backed job queue) for SmartCourse background jobs: ADR-0013 (why Asynq), ADR-0014 (Kafka to Asynq handoff for notifications only), RFC §6.6, §6.7, §10.2, §12.3.
 
-Built against Asynq v0.26.0 (MIT). Pure Go, no cgo. It depends on no other SmartCourse module (testenv only in tests), and not on `libs/telemetry` or `libs/mongostore`: callers wire metrics and failed-event parking through the hooks below.
+Built against Asynq v0.26.0 (MIT). Pure Go, no cgo. Its non-test imports of other SmartCourse modules are `libs/logging` and `libs/telemetry` (spans, the `traceparent` task header, `Inspector.Gauges`); it does not import `libs/mongostore`: callers wire failed-event parking through the hooks below. (`testenv` is test-only.)
+
+**Used by** the workers that run Asynq: `identity-worker`, `course-worker`, `analytics-worker` and `notification-worker` (each in its own queue namespace, see below), directly and through `libs/jobs`.
 
 ## Client: idempotent enqueue
 

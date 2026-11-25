@@ -15,10 +15,10 @@ import (
 // supported so pointing the same code at one later is configuration, not a
 // rewrite.
 //
-// Like Temporal, this is all-optional at Load: only the worker sends mail,
-// and identity-api, course-api and analytics-api must keep booting without
-// SMTP_HOST set. Host == "" means "not configured"; the worker decides what
-// that implies for it.
+// Like Temporal, this is all-optional at Load: only notification-worker sends mail,
+// and every other binary must keep booting without SMTP_HOST set.
+// Host == "" means "not configured"; the worker decides what that implies for
+// it.
 type SMTPConfig struct {
 	Host string
 	Port int

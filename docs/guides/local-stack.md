@@ -98,4 +98,4 @@ Not verified: a cold run including image builds and the Go module download; Wind
 - `identity-admin` logs a GORM `record not found` line at error level when it creates the first admin (the lookup that precedes the insert); the command succeeds. Cosmetic.
 - Starting without the `observability` profile still logs one `opentelemetry error ... no such host` warning a minute per binary (the OTLP endpoint is set to `jaeger:4318`); remove `OTEL_EXPORTER_OTLP_ENDPOINT` from `x-env-base` to silence it.
 - Temporal's auto-setup logs `Namespace default is not found` errors while it creates the namespace on first start; they stop once it is created.
-- The Makefile `seed` target still uses the old combined search path (`identity,course,platform,public`) and belongs to the seed rewrite; it is not part of this stack's checks.
+- `make seed` is a plain HTTP client of the published ports (`tools/seed/README.md`); it creates the first admin with `identity-admin` first. It was not part of the 2026-11-25 verification run above and has not been re-verified on this stack.

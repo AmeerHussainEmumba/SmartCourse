@@ -15,7 +15,7 @@ import (
 // prepareTimeout bounds startup provisioning and the registry check.
 const prepareTimeout = 60 * time.Second
 
-// Prepare is the worker's start-up in kafka mode: create the topics that are
+// Prepare is a service's Kafka start-up: create the topics that are
 // missing (idempotent, RFC §6.5) and read the schema ids and versions the
 // producer frames messages with. It fails with a message that names the
 // problem when the broker or the registry is unreachable or a subject has not

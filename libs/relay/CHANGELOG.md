@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- README rewritten for the per-service topology (ADR-0033): every relay is publish-only (`identity-worker`, `course-worker`); the in-process path (a relay with no `Publisher`) is documented as a legacy, unused code path kept only in this library and its tests, pending an owner decision on removal. Package comment updated; `EVENT_TRANSPORT` no longer exists. No behaviour change.
+
 - Tests: publish-only operation is a supported mode. `relay.New(db, relay.WithPublisher(p))` with no handler registered publishes every row in per-aggregate order, marks it published after the acknowledgement, never calls the handler hook or writes `processed_events`, and parks a poison row as the relay's own dead letter (`RelayConsumer`). No code change was needed. `Handlers()` is now only for in-process mode and tests; a service builds its Kafka consumers from its own handlers with `eventbus.NewConsumers`.
 
 - Added `Source`, `WithSource` and `SourceFrom`: the Kafka coordinates (topic, partition, offset, key) and registry schema id of the record an event arrived in, carried in the handler's context by a broker transport. In-process delivery sets none. Additive; imports only `context`.

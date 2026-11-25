@@ -32,7 +32,7 @@ Workflow and activity names and the JSON field names of `PublishWorkflowInput` a
 
 `go test -race ./...` in this module, no Docker: the workflow under Temporal's test environment with activities registered by name, the replayer over a built history, the wiring through `runtime.Run`, and a guard (`independence_test.go`) that fails if this module requires or imports any other service.
 
-Not verified here: the workflow against a live Temporal server together with the real activities (the container E2E scenarios in Wave C cover that), and the replay history is built by the test, not recorded from a server.
+Not verified here: the workflow against a live Temporal server together with the real activities (the container E2E scenario E01 runs a publish through both workers; the failure scenario E12 is still pending, `test/README.md`; the 2026-11-25 compose run in `docs/guides/local-stack.md` also published a course to `ready`), and the replay history is built by the test, not recorded from a server.
 
 ## Image and budget
 

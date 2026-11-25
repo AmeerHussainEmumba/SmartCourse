@@ -29,9 +29,9 @@ type TelemetryConfig struct {
 	// MetricsEnabled is METRICS_ENABLED (default true). When false no
 	// /metrics route, no collectors and no request metrics are installed.
 	MetricsEnabled bool
-	// MetricsAddr is METRICS_HTTP_ADDR, the worker's own metrics listener
-	// (default ":9100"). The three HTTP services serve /metrics on their API
-	// port instead and ignore it. It is unauthenticated: bind it to a private
+	// MetricsAddr is METRICS_HTTP_ADDR, the internal listener every binary
+	// serves /metrics and the health probes on (libs/runtime; default
+	// ":9100"). /metrics is never served on an API port. It is unauthenticated: bind it to a private
 	// interface (RFC §12.3).
 	MetricsAddr string
 }

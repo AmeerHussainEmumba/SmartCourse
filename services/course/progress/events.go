@@ -9,7 +9,7 @@ import (
 // Event types written to the outbox by this module. The payload structs below
 // are the producing side of the contracts in libs/events (progress.v1): the
 // JSON field names are the proto field names, which the transport decodes
-// strictly. services/worker's payload contract test keeps the two in step
+// strictly. a payload contract test (lost in the split, see services/course/progress/README.md) used to keep the two in step
 // (this module does not import libs/events, so course-api does not link
 // Protobuf).
 const (

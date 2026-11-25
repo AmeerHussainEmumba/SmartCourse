@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- README: states which service binaries use the module (microservices split). No code change.
+
 - Doc only: `/metrics` is never served on the public router (the `infra.RegisterMetricsRoute` mounting was removed). No code change. `Checker` is the `HealthCheckers` shape; `libs/runtime` takes plain funcs through `infra.Dependencies.ReadinessChecks`.
 
 - `Options.Observe`: middleware mounted after the request ID and security headers and before the access logger and `Recovery` (tracing and RED metrics). The access log line carries `trace_id` and `span_id` when a request span is active.

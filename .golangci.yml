@@ -7,7 +7,7 @@
 # can't import any service.
 #
 # What's left for depguard is the boundary INSIDE one module: services/course
-# holds course, enrollment, progress and workflows together (ADR-0012 needs
+# holds course, enrollment, progress and the publish activities together (ADR-0012 needs
 # them in one process), so Go can't separate them. No package there imports
 # another's repository, domain, or GORM models. Cross-package reads go through
 # a consumer-declared interface; cross-package writes go through events. A
@@ -34,8 +34,8 @@ linters:
               desc: "course must not import enrollment directly (RFC §4.4) — declare a consumer-side interface"
             - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/progress
               desc: "course must not import progress directly (RFC §4.4) — declare a consumer-side interface"
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/workflows
-              desc: "course must not import workflows (the dependency runs one way: workflows imports course) — start the workflow by course.PublishWorkflowName"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/activities
+              desc: "course must not import activities (the dependency runs one way: activities imports course) — start the workflow by course.PublishWorkflowName"
         enrollment:
           files: ["**/services/course/enrollment/**"]
           deny:
@@ -43,8 +43,8 @@ linters:
               desc: "enrollment must not import course's repository/domain directly — declare a CourseReader-style interface (RFC §4.4 example)"
             - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/progress
               desc: "enrollment must not import progress directly (RFC §4.4) — declare a consumer-side interface"
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/workflows
-              desc: "enrollment must not import workflows"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/activities
+              desc: "enrollment must not import activities"
         progress:
           files: ["**/services/course/progress/**"]
           deny:
@@ -52,5 +52,5 @@ linters:
               desc: "progress must not import course directly (RFC §4.4) — declare a consumer-side interface"
             - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/enrollment
               desc: "progress must not import enrollment directly (RFC §4.4) — declare a consumer-side interface"
-            - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/workflows
-              desc: "progress must not import workflows"
+            - pkg: github.com/AmeerHussainEmumba/SmartCourse/services/course/activities
+              desc: "progress must not import activities"

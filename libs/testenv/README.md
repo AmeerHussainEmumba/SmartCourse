@@ -2,6 +2,8 @@
 
 Real Postgres, Redis, Kafka and MongoDB containers for integration tests (testcontainers-go, Docker required). No mocks for the database: constraint violations, transactions and grants are what the tests check.
 
+**Used by** the integration tests of every service module and of the libs that touch Postgres, Redis, Kafka or MongoDB (`libs/outbox`, `relay`, `idempotency`, `eventbus`, `kafka`, `mongostore`, `asynqx`, `jobs`, `runtime`, ...), and by `test/e2e`. No binary imports it. Roles exist only for the four Postgres-owning services; `audit` (MongoDB) and `publishing` (no store) have none.
+
 ## Postgres: `Setup`, `Env.DB`, `Env.ServiceDB`
 
 ```go

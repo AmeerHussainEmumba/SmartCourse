@@ -1,6 +1,6 @@
 # libs/kafka
 
-A pure-Go Kafka transport for SmartCourse: ADR-0030 (client choice), ADR-0021 (the relay), RFC §6.2, §6.5, §6.6, §6.9. `libs/eventbus` (formerly `services/worker/transport`) is its one user (ADR-0029): the relay's producer and the services' consumer groups are built on `Producer`, `Consumer`, `topics` and `HealthCheck`. `libs/relay` does not import it.
+A pure-Go Kafka transport for SmartCourse: ADR-0030 (client choice), ADR-0021 (the relay), RFC §6.2, §6.5, §6.6, §6.9. `libs/eventbus` (formerly `services/worker/transport`) is the library that builds on it (ADR-0029, ADR-0033): each service's relay producer and consumer groups are built on `Producer`, `Consumer`, `topics` and `HealthCheck`. `libs/relay` does not import it. **Used directly (non-test imports) by** `identity-worker`, `course-worker`, `analytics-worker`, `notification-worker`, `audit-worker` and `audit-api` (the readiness `HealthCheck` and `topics`), and indirectly through `libs/eventbus` by the same binaries and `libs/jobs`. The APIs of identity, course and analytics do not use Kafka.
 
 Built against franz-go v1.22.3 (`pkg/kgo`) with `pkg/kadm` v1.20.0 for topic administration, both BSD-3-Clause. Pure Go, `CGO_ENABLED=0`. It depends on no other SmartCourse module (`testenv` only in tests), and not on `libs/telemetry` or `libs/mongostore`: callers wire metrics and dead-letter parking through `Stats` and the `OnExhausted` hook.
 

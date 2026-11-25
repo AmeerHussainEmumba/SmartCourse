@@ -42,8 +42,7 @@ func Connect(cfg *config.Config) (*Dependencies, error) {
 
 // HealthCheckers returns the dependency checks for /health/ready
 // (libs/router). Shared because every service has the same
-// dependencies, even though services/worker/cmd/worker doesn't expose an HTTP health
-// endpoint today.
+// dependencies; libs/runtime serves them on each binary's internal listener.
 func (d *Dependencies) HealthCheckers() map[string]router.Checker {
 	return map[string]router.Checker{
 		"postgres": func(ctx context.Context) error { return db.Ping(ctx, d.DB) },

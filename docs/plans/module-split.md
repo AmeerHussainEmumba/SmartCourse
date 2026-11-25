@@ -3,6 +3,8 @@
 **Status:** Phases 1 to 8 implemented locally (nothing pushed or tagged); Phase 0 (supervisor alignment) still open. Started 2026-11-16 on branch `refactor/module-split`, branched from `feat/m2-publish-workflow` (the Week 2 PR); work is stacked across `-libs`, `-services`, `-tooling`, `-docs` and `-tests` branches.
 **Origin:** Week 2 review feedback on PR #11. Estimates below are working estimates (medium confidence), not measurements.
 
+> **Superseded in part by the microservices split (ADR-0033..0035, `docs/plans/microservices-split.md`), 2026-11-26.** This plan is kept as the record of the module split. What changed afterwards: `services/worker` was deleted and replaced by per-service workers (11 binaries in six services: identity, course, analytics, notification, publishing, audit); no service imports another service (the worker exception named below is gone, services require only `libs/*`, and `tools/seed` and `test/e2e` require no service either); the `platform` schema was removed; Kafka is the only transport; the repository now has 33 Go modules (the "13 libraries", "19", "20" module counts below are historical). Package counts per binary below are the pre-split measurements.
+
 ## Purpose
 
 ADR-0022, ADR-0023 and ADR-0024 made the services deployable independently (four binaries, schema-per-service) but left one build graph: every `cmd/*` imports `internal/platform/bootstrap`, which imports every domain module. Measured on `refactor/module-split` before any change, each binary links the same 6 domain packages, 589 packages in total, 61 of them `go.temporal.io/sdk`. So `identity-api` builds course, enrollment, analytics and Temporal code it never runs, and a compile error in `internal/course` breaks `identity-api`.
@@ -33,13 +35,13 @@ libs/testenv/        the integration-test environment (was test/integration/test
 services/identity/   identity/ + cmd/identity-api            (module .../services/identity)
 services/course/     course/ enrollment/ progress/ workflows/ + cmd/course-api
 services/analytics/  analytics/ + cmd/analytics-api
-services/worker/     cmd/worker; audit/ notification/ search/ (README-only plans)
-tools/seed/          the seed tool (needs identity and course)
+services/worker/     cmd/worker; audit/ notification/ search/ (README-only plans)   [2026-11-26: deleted; see the note at the top]
+tools/seed/          the seed tool (needs identity and course)                       [2026-11-26: now drives the HTTP APIs, requires no service]
 ```
 
 Constraints:
 
-- **Course, enrollment and progress stay in one module and one service** (ADR-0012 row lock needs one process and one transaction).
+- **Course, enrollment and progress stay in one module and one service** (ADR-0012 row lock needs one process and one transaction; still true after the split).
 - **Go's `internal/` rule.** `services/worker` and `tools/seed` cannot import another module's `internal/...` packages. Decision taken in Phase 3: domain packages are *not* under `internal/`; they are ordinary exported packages (`services/course/course`, ...). Cross-service imports are prevented by `go.mod` requires plus `scripts/check-module-graph.sh`, not by Go's `internal/` rule. A narrower alternative (keep `internal/`, export small facade packages for the worker and seed) was rejected because seed needs most of each service's surface.
 - **`replace` directives are not inherited.** Every service `go.mod` repeats the `replace` for each library it depends on, including indirect ones. `go.work` hides this locally, so CI builds with `GOWORK=off`.
 - **Library dependency graph (no cycles):** `httpx -> errors`, `router -> httpx`, `auth -> config, errors, httpx`, `ratelimit -> errors, httpx`, `cache -> config`, `db -> config`; `outbox`, `relay`, `logging`, `errors`, `config` have no internal dependencies.
@@ -80,13 +82,13 @@ Phases 2 and 3 are separate PRs so that a change in direction after review only 
 
 ## Requirements re-check
 
-Compare the result against `docs/baseline/SmartCourse.md`, `docs/baseline/Execution Guidelines.md` and `docs/prd/smartcourse-prd.md`. Output: a table of requirement, where it is implemented, status after the split. Invariants to confirm: three API services plus worker still deployable independently; schema-per-service; seat-limit transaction; outbox and relay semantics; Week 1 and Week 2 acceptance criteria. Any deviation is logged as a DR entry.
+Compare the result against `docs/baseline/SmartCourse.md`, `docs/baseline/Execution Guidelines.md` and `docs/prd/smartcourse-prd.md`. Output: a table of requirement, where it is implemented, status after the split. Invariants to confirm (as written in 2026-11): three API services plus worker still deployable independently; schema-per-service; seat-limit transaction; outbox and relay semantics; Week 1 and Week 2 acceptance criteria. Any deviation is logged as a DR entry.
 
 ## Risks
 
 - **Version skew and cascades:** a change to `errors` touches `httpx`, `auth`, `ratelimit` and every service. Invisible with `replace`, real release work with tags.
 - **Overhead:** about 16 `go.mod` files for roughly 1,765 lines of platform code.
-- **Worker coupling:** the worker imports other services' handler packages. Needs an owner and, long term, per-service consumption (M3).
+- **Worker coupling:** the worker imports other services' handler packages. Needs an owner and, long term, per-service consumption (M3). *(Resolved 2026-11-26 by ADR-0033: each service runs its own consumers and relay; no service imports another.)*
 - **`config` coupling (unverified):** 26 importers. If it holds every service's settings in one struct, split it per service in Phase 2.
 - **Docker caching** gets worse with a repo-root context unless Dockerfiles copy selectively.
 - **Shared blast radius:** a break in a library still breaks its consumers.

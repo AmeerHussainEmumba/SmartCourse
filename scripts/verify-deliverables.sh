@@ -363,7 +363,7 @@ check_TS_MONGO() { pending "Phase 4: db.events.countDocuments() increases after 
 check_TS_ASYNQ() { pending "Phase 5: three queues weighted 6:3:1; processed count increases"; }
 check_TS_PROM()  { pending "Phase 7: /metrics on every service (RED plus outbox_backlog, kafka_consumer_lag, asynq_queue_depth, dead_letter_total); Prometheus targets up"; }
 check_TS_GRAF()  { pending "Phase 7: GET /api/search?type=dash-db on Grafana lists the provisioned dashboard"; }
-check_TS_JAEGER(){ pending "Phase 7: GET /api/services on Jaeger lists identity-api, course-api, analytics-api, worker"; }
+check_TS_JAEGER(){ pending "Phase 7: GET /api/services on Jaeger lists the ten service names (identity-api, identity-worker, course-api, course-worker, analytics-api, analytics-worker, notification-worker, publishing-worker, audit-api, audit-worker)"; }
 check_TS_OTEL()  { pending "Phase 7: covered by E02; instrumentation present in HTTP, DB, Redis, Kafka, Asynq, Temporal"; }
 check_AD_3()     { pending "Phase 5: Asynq scheduler has a 60 s analytics reconciliation task"; }
 check_P1_3() {

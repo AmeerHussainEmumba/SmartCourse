@@ -14,9 +14,11 @@ The background half of the course service, built on `libs/runtime` (`main.go` is
 
 Readiness: Postgres and Redis are fatal, Kafka (`kafka.HealthCheck`) is non-fatal, because the outbox buffers an outage (RFC §6.2). Start-up fails, and nothing runs, when topics cannot be provisioned or a schema subject is missing from the registry (`eventbus.Prepare`). The `workflow_*` counters (`runtime.WithWorkflows`) are not enabled: they belong to the process that runs the workflow worker.
 
+**Asynq queue namespace.** This worker's queues are prefixed `course:` (`course:low`; `asynqx.Namespace`) because every worker shares one Redis database and the same logical queue names; without the prefix a worker would dequeue and archive another service's tasks. The `queue` label of the `asynq_*` gauges carries the prefixed name.
+
 ## Dead letters
 
-A consumer that spends its retry budget, or a row the relay cannot publish, is parked in MongoDB `failed_events` (`deadletter.go`) when `MONGO_URI` is set, idempotently per (event, consumer), with `dead_letter_total{consumer}` counted only for events really parked. A failed park returns an error, so the event stays retryable instead of being dropped. Without `MONGO_URI` there is no sink: the transport logs the event in full and drops it (the documented gap). `audit-api` lists and replays parked records by republishing to `retry.<consumer>`; this worker only writes them. Ported from `services/worker/deadletter` and `cmd/worker/mongo_wire.go` (the same park-before-drop contract, with unit and MongoDB tests).
+A consumer that spends its retry budget, or a row the relay cannot publish, is parked in MongoDB `failed_events` (`deadletter.go`) when `MONGO_URI` is set, idempotently per (event, consumer), with `dead_letter_total{consumer}` counted only for events really parked. A failed park returns an error, so the event stays retryable instead of being dropped. Without `MONGO_URI` there is no sink: the transport logs the event in full and drops it (the documented gap). `audit-api` lists and replays parked records by republishing to `retry.<consumer>`; this worker only writes them. This is the park-before-drop contract of the retired shared worker, with unit and MongoDB tests.
 
 ## Configuration
 

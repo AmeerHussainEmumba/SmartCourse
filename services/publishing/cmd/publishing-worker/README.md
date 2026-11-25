@@ -18,4 +18,4 @@ docker build -f Dockerfile.publishing-worker .
 
 ## Health
 
-`/health/live` is 200 while the process runs. `/health/ready` is 200 `ready` once the worker started and Temporal answers, 200 `degraded` while Temporal is unreachable or the worker has not started (the process retries), 503 only while starting or shutting down. The compose profile that runs it is `workflow` (Wave C); host port 9115.
+`/health/live` is 200 while the process runs. `/health/ready` is 200 `ready` once the worker started and Temporal answers, 200 `degraded` while Temporal is unreachable or the worker has not started (the process retries), 503 only while starting or shutting down. The compose profile that runs it is `workflow` (not `core`: publishing needs Temporal); host port 9115 for the internal listener.

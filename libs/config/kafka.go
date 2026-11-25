@@ -22,7 +22,7 @@ type KafkaConfig struct {
 
 	// ConsumerMaxInFlight is KAFKA_CONSUMER_MAX_IN_FLIGHT: how many handlers one
 	// consumer group runs at once. Each holds a Postgres connection for its
-	// transaction, and the worker runs one group per handler, so the worst case
+	// transaction, and a worker runs one group per handler, so the worst case
 	// is groups x this value; the pool queues the excess, it does not fail it.
 	ConsumerMaxInFlight int
 	// ConsumerMaxAttempts is KAFKA_CONSUMER_MAX_ATTEMPTS: tries per record

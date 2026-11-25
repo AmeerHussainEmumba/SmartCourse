@@ -5,14 +5,14 @@ import (
 	"time"
 )
 
-// AsynqConfig sizes the worker's Asynq pools and retry policy (libs/asynqx,
-// RFC §10.2, ADR-0013). Only the worker binary runs Asynq, but every binary
+// AsynqConfig sizes the Asynq pools and retry policy (libs/asynqx,
+// RFC §10.2, ADR-0013). Only the workers run Asynq, but every binary
 // reads the same environment, so the checks below run in Load for all of them.
 type AsynqConfig struct {
 	// Per-queue pool sizes (ASYNQ_CRITICAL_CONCURRENCY, ASYNQ_DEFAULT_CONCURRENCY,
 	// ASYNQ_LOW_CONCURRENCY): RFC §10.2's 10 / 5 / 3. The pools that touch
 	// Postgres count against POSTGRES_MAX_OPEN_CONNS; Load does not enforce
-	// that, because which handlers use the database is the worker's wiring.
+	// that, because which handlers use the database is each worker's wiring.
 	CriticalConcurrency int
 	DefaultConcurrency  int
 	LowConcurrency      int
@@ -29,8 +29,8 @@ type AsynqConfig struct {
 	ShutdownTimeout time.Duration
 }
 
-// JobsConfig holds the scheduled jobs' intervals and retention (the worker's
-// services/worker/jobs). Intervals are whole minutes that divide the hour, or
+// JobsConfig holds the scheduled jobs' intervals and retention (libs/jobs,
+// run by each service's worker). Intervals are whole minutes that divide the hour, or
 // whole hours that divide the day, because the scheduler runs cron
 // expressions that every worker replica must agree on (CronSpec).
 type JobsConfig struct {

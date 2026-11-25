@@ -5,7 +5,7 @@ The notification service: it turns events into email without ever blocking the e
 | | |
 |---|---|
 | Module | `github.com/AmeerHussainEmumba/SmartCourse/services/notification` |
-| Binary | `cmd/notification-worker` (no HTTP API; internal listener on `METRICS_HTTP_ADDR`, host port 9114 in compose, Wave C) |
+| Binary | `cmd/notification-worker` (no HTTP API; internal listener on `METRICS_HTTP_ADDR`, host port 9114 in compose) |
 | Package | `notification/` (handlers, dispatcher, delivery task, sweeper, SMTP provider, templates, sanitizer; its README has the detail) |
 | Schema | `notification` (migrations `migrations/notification`): `recipients`, `course_titles`, `enrollment_courses`, `deliveries`, `processed_events` |
 | Postgres role | `svc_notification`, `search_path` `notification,public` |
@@ -44,12 +44,13 @@ Readiness (`/health/ready` on the internal listener): `postgres` and `redis` are
 
 - **Dead letters.** An event that exhausts `KAFKA_CONSUMER_MAX_ATTEMPTS` is parked in MongoDB `failed_events` (one history entry per attempt) before the offset advances, only when `MONGO_URI` is set. Without Mongo it is logged in full and dropped (the documented gap), and the partition moves on. While Mongo is down `Park` fails and the consumer keeps the record retryable.
 - **Provider.** `SMTP_HOST` unset: no provider, no delivery task, no sweeper; deliveries stay `pending` and a warning says so at start-up. Locally the provider points at Mailpit (SMTP 1025, UI 8025). No real mail provider is integrated, by decision (DR-008, DR-015).
+- **Asynq namespace.** Queues are prefixed `notification:` (`notification:critical` for the delivery task), so workers of other services sharing the Redis database never take its tasks.
 - **Housekeeping.** `PruneProcessedEvents` (`libs/jobs`) on the `low` queue, cadence `JOBS_OUTBOX_PRUNE_INTERVAL` (default 1 h, the shared prune cadence; `libs/config` has no dedicated variable), retention `PROCESSED_EVENTS_RETENTION` (default 336h). The marker is the duplicate window: keep it longer than the Kafka topic retention and than the longest wait before a parked event is replayed.
 
 ## Running it locally
 
 ```
-docker compose --profile core up -d      # Postgres, Redis, Kafka, Mongo, Mailpit (compose is reworked in Wave C)
+docker compose --profile core up -d      # Postgres, Redis, Kafka, Mongo, Mailpit and every other service of the core profile (docs/guides/local-stack.md)
 SMTP_HOST=localhost SMTP_PORT=1025 ... go run ./services/notification/cmd/notification-worker
 open http://localhost:8025               # Mailpit UI
 ```
@@ -60,4 +61,4 @@ Environment: `POSTGRES_DSN` (the `svc_notification` login), `POSTGRES_SEARCH_PAT
 
 `go test ./...` (unit, no Docker) and `go test -race -tags=integration ./...` (Docker: Postgres as `svc_notification`, Redis, Kafka, MongoDB, the Mailpit image). The package tests are described in `notification/README.md`. `cmd/notification-worker` has unit tests (delivery task id bucket, delivery registered on the critical queue, no provider registers nothing and warns, retention parsing, the job set) and integration tests that run the real `wire` through `runtime.Run`: events produced to a source topic and to the retry topic are consumed, swept and mailed through a fake SMTP server and recorded in `notification.processed_events`; readiness and `/metrics` on the internal listener; no provider leaves deliveries pending; a permanent SMTP failure is archived once and never retried; an exhausted event is parked in Mongo, or logged and dropped when Mongo is not configured.
 
-Not verified: behaviour on a multi-broker cluster, a real Schema Registry (the tests use the `transporttest` stand-in), a real SMTP provider with TLS and credentials beyond the package's fake-server tests, container start-up of `Dockerfile.notification-worker` (the build was not run; only the module and link-graph checks), and rolling restarts under load.
+Not verified: behaviour on a multi-broker cluster, a real Schema Registry (the tests use the `transporttest` stand-in), a real SMTP provider with TLS and credentials beyond the package's fake-server tests, container start-up of `Dockerfile.notification-worker` beyond the single compose run recorded in `docs/guides/local-stack.md` (2026-11-25), and rolling restarts under load.

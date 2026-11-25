@@ -139,7 +139,7 @@ migrate-create:
 	@if [ -z "$(service)" ]; then echo "usage: make migrate-create service=<$(MIGRATION_SERVICES)> name=<name>"; exit 1; fi
 	$(MIGRATE) create -ext sql -dir migrations/$(service) -seq $(name)
 
-## --- Running the binaries (ADR-0022 + ADR-0023: four services) -----------
+## --- Running the binaries (ADR-0022 + ADR-0023: eleven binaries, six services) -----------
 #
 # Two ways to run the app:
 #   - Natively (fastest iteration): `make dev-core` for infra only, then

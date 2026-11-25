@@ -1,6 +1,8 @@
 # libs/router
 
-Assembles the Gin engine every module registers routes on (`New`), and the two health endpoints every binary exposes (`RegisterHealth`).
+Assembles the Gin engine every module registers routes on (`New`), and the two health endpoints every API binary exposes (`RegisterHealth`; the internal listener of `libs/runtime` serves the probes for every binary).
+
+**Used by** the four API binaries: `identity-api`, `course-api`, `analytics-api` and `audit-api` (also `libs/infra`, for the readiness checker type).
 
 ## What `New` wires in
 

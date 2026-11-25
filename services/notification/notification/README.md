@@ -1,6 +1,6 @@
 # services/notification/notification
 
-The notification-dispatcher (RFC §6.5, §6.7, ADR-0014): turns events into email without ever blocking the event stream on a mail server. This package is the library; `cmd/notification-worker` wires it (see the service README and "What the worker wires"). Moved here from `services/worker/notification` in the microservices split.
+The notification-dispatcher (RFC §6.5, §6.7, ADR-0014): turns events into email without ever blocking the event stream on a mail server. This package is the library; `cmd/notification-worker` wires it (see the service README and "What the worker wires"). Moved here from the retired `services/worker` in the microservices split.
 
 There is deliberately **no real mail provider** (Week 3 decision D6, DR-008, DR-015): the SMTP provider points at the self-hosted Mailpit sink (`docker-compose.yml`, SMTP 1025, UI/API 8025). The `Provider` interface is the seam if that ever changes.
 
@@ -60,7 +60,7 @@ The accepted trade-off is a rare duplicate rather than a lost mail. `Message-ID`
 
 ## Trace continuation (ADR-0032)
 
-The sweeper enqueues a delivery seconds after the handler wrote its row, from a loop that is in no trace, so the trace has to travel on the row. `InsertDelivery` stores the traceparent of the span the handler runs under (the Kafka consume span, or the relay span in-process, both descendants of the originating request) in `deliveries.traceparent` (migration `000002`, nullable: NULL for older rows and when tracing is off). `EnqueuePending` enqueues each task under `telemetry.ContinueFromEvent(ctx, row.traceparent)`; `libs/asynqx`'s client then starts the enqueue span and puts the traceparent in the task headers, and the delivery job span is its child. Without the column the job would be the root of a new trace and "one trace across the pipeline" would stop at the sweeper. The queue payload (`DeliveryPayload(id)`) is unchanged, so `NewDeliveryHandler`, tasks already in Redis and the deterministic task id are unaffected.
+The sweeper enqueues a delivery seconds after the handler wrote its row, from a loop that is in no trace, so the trace has to travel on the row. `InsertDelivery` stores the traceparent of the span the handler runs under (the Kafka consume span, a descendant of the originating request) in `deliveries.traceparent` (migration `000002`, nullable: NULL for older rows and when tracing is off). `EnqueuePending` enqueues each task under `telemetry.ContinueFromEvent(ctx, row.traceparent)`; `libs/asynqx`'s client then starts the enqueue span and puts the traceparent in the task headers, and the delivery job span is its child. Without the column the job would be the root of a new trace and "one trace across the pipeline" would stop at the sweeper. The queue payload (`DeliveryPayload(id)`) is unchanged, so `NewDeliveryHandler`, tasks already in Redis and the deterministic task id are unaffected.
 
 ## Safety of the rendered message
 

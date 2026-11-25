@@ -10,6 +10,8 @@ Identity's background process (`docs/plans/microservices-split.md` §6). `main.g
 
 Internal listener `METRICS_HTTP_ADDR` (`:9100`; compose publishes it on 9111): `/metrics`, `/health/live`, `/health/ready`. Postgres and Redis fatal; Kafka non-fatal. A component failing is shown degraded and never stops the others. Connects as `svc_identity`.
 
+**Asynq queue namespace.** This worker's queues are prefixed `identity:` (`identity:low`; `asynqx.Namespace`) because every worker shares one Redis database and the same logical queue names; without the prefix a worker would dequeue and archive another service's tasks. The `queue` label of the `asynq_*` gauges carries the prefixed name.
+
 Tests: unit wiring guards (`wire_test.go`: publish-only relay, worker count, job set, Asynq pools); `-tags=integration` (`wire_integration_test.go`): real Postgres and Redis through `runtime.Run`, a recording publisher in place of Kafka (relay publishes and marks rows published in `identity.outbox`, re-seeder writes the key, an enqueued prune task deletes an old published row, Kafka down degrades readiness, a panicking relay leaves the others running). Not covered here: a live Kafka broker and schema registry (see `libs/eventbus` and the E2E harness).
 
 ## Configuration

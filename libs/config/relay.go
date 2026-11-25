@@ -24,7 +24,7 @@ const (
 // handlers' contexts expire, attempts are burned and events are eventually
 // given up on (ADR-0021), so this is rejected at startup (RFC §11.8,
 // fail-fast) rather than warned about. 2N is the floor, not a recommendation:
-// the worker's Temporal activities share the same pool.
+// course-worker's Temporal activities share the same pool.
 func relayPoolError(maxOpenConns, workers int) string {
 	if workers < 1 || workers > maxRelayWorkers || maxOpenConns < 1 {
 		return "" // range errors are reported on their own

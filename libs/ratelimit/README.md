@@ -2,6 +2,8 @@
 
 GCRA rate limiting (ADR-0020) via `go-redis/redis_rate` — one atomic Redis call per check, replacing the naive `INCR`+`EXPIRE` fixed-window approach that allows roughly double the intended rate for traffic straddling a window boundary. That specific flaw is why this got a dedicated ADR rather than being three lines of ad-hoc Redis code.
 
+**Used by** `identity-api` (per-IP middleware and the per-account login limit) and `course-api`.
+
 This is the concrete case RFC §10.3 names as the one kind of shared state that must never live behind a `sync.Mutex`/`RWMutex`: rate-limit state is shared across every API replica, not one process, so it lives in Redis.
 
 ## What's here

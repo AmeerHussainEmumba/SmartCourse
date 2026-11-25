@@ -24,6 +24,8 @@ docker build -f Dockerfile.notification-worker .
 - `PROCESSED_EVENTS_RETENTION` (default 336h) comes from `libs/config` (`cfg.Jobs.ProcessedEventsRetention`); zero, negative or unparsable stops startup.
 - The pools, retries and backoff come from the existing `ASYNQ_*` settings; the delivery task timeout (2 minutes) stays below the claim lease (5 minutes).
 
+**Asynq queue namespace.** This worker's queues are prefixed `notification:` (`notification:critical`, `notification:default`, `notification:low`; `asynqx.Namespace`) because every worker shares one Redis database and the same logical queue names; without the prefix a worker would dequeue and archive another service's tasks. The `queue` label of the `asynq_*` gauges carries the prefixed name.
+
 The service and flow are described in `services/notification/README.md`.
 
 ## Configuration

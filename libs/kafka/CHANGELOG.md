@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- README: current users after the split (six worker/audit binaries, via `libs/eventbus`); the old "formerly services/worker" user statement is replaced. No code change.
+
 - `topics`: one retry topic per known consumer, `retry.<consumer-name>` (`Retry`, `IsRetry`, `Consumers`, `RetryTopics`, `Provisioned`, `ProvisionedNames`); `Ensure` creates them with the event topics, `EnsureNamed` creates named topics (a consumer uses it for its own retry topic). The compose test now compares the whole provisioned set, and a second test checks every consumer name declared in `services/` has a retry topic. `All`/`Names` still list only the four event topics.
 
 - `OnExhausted` now receives an `*ExhaustedError` that reads and unwraps as the last attempt's error and carries every attempt's error (`AttemptErrors(err)`), so a dead-letter store can keep one history entry per attempt. Callers that only read the error are unaffected. Found by E2E scenario E04.

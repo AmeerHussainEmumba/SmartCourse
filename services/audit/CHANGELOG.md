@@ -4,6 +4,7 @@ Versioning policy: `docs/guides/versioning.md`.
 
 ## [Unreleased]
 
+- `services/worker` no longer exists; every concern it ran now lives in the owning service's binaries (microservices split, ADR-0033). The failed-event list and replay that used to be the worker's admin HTTP surface on :8093 are `audit-api` (host port 8093); `api/openapi.yaml` lists them with their own server entry.
 - Wave C5: `audit-worker` uses `eventbus.NewStreamConsumers` (new in `libs/eventbus`); the `consume` package is deleted. The `auditconfig` stopgap is deleted: both binaries load through `config.LoadWith` with only the groups they use, so no `POSTGRES_*`/`MINIO_*` placeholder is needed. The `EVENT_TRANSPORT` and `SCHEMA_REGISTRY_URL` workaround is gone: the config now has Kafka-brokers and Mongo requirement groups. The binaries pass no `WithDependencies` (they link no Postgres code through `libs/runtime`: audit-api 650 to 624 packages, audit-worker 651 to 600).
 
 - New module (microservices split, Wave B6; `docs/plans/microservices-split.md` §2, §4.1). Lifted from `services/worker`: `archive` (archiver handler and audit list), `deadletter` (park sink), `admin` (HTTP). `services/worker` is untouched until Wave C removes it.

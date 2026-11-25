@@ -4,14 +4,14 @@ Schema lives here as versioned SQL, applied by [`golang-migrate`](https://github
 
 ## Schema-per-service (ADR-0024)
 
-Four independent migration sets, one per Postgres schema, matching ADR-0023's service boundaries — all still one database, one set of credentials:
+Six migration sets: one per Postgres schema of the four services that use Postgres, the `platform` set for the extensions, and `cutover` (below). Publishing and audit have no Postgres tables (audit's store is MongoDB). All of it is still one database; each service connects with its own role (ADR-0024, ADR-0033):
 
 | Directory | Schema | Owns |
 |---|---|---|
-| `platform/` | `platform` | **Transitional.** `000001` installs the `citext`/`pg_trgm` extensions into `public` (stays). `000002`/`000003` still create `platform.outbox` (with `trace_id`, `span_id`, `actor_id`), `platform.processed_events` and `platform.idempotency_keys` on a fresh database; `cutover/` removes them. History, never edited. |
+| `platform/` | (none left) | `000001` installs the `citext`/`pg_trgm` extensions into `public` (stays; this is all `platform/` provides now). `000002`/`000003` are history, never edited: on a fresh database they still create `platform.outbox` (with `trace_id`, `span_id`, `actor_id`), `platform.processed_events` and `platform.idempotency_keys`, and `cutover/` then moves their rows and drops them, so after `make migrate-up` **no `platform` schema exists**. |
 | `identity/` | `identity` | `users`, `refresh_tokens`, `password_reset_tokens`, `email_verification_tokens`, and (`000002_outbox`) `outbox`. |
-| `course/` | `course` | `courses`, `course_versions`, `course_prerequisites`, `modules`, `lessons`, `enrollments`, `lesson_progress`, `certificates`, `course_search_index`, and (`000008_outbox_inbox_idempotency`) `outbox`, `processed_events`, `idempotency_keys` — course, enrollment, and progress share one schema because enrollment locks the `courses` row in the same transaction it writes an enrollment row in (ADR-0012's seat-limit guarantee); `course_search_index` stays here until `services/worker/search` actually exists. |
-| `analytics/` | `analytics` | Three mirror tables (`user_role_mirror`, `course_mirror`, `enrollment_mirror`, fed from relay events) plus the aggregate read models (`platform_snapshot`, `course_stats`, `daily_enrollments`), and (`000005_processed_events`) `processed_events`. |
+| `course/` | `course` | `courses`, `course_versions`, `course_prerequisites`, `modules`, `lessons`, `enrollments`, `lesson_progress`, `certificates`, `course_search_index`, and (`000008_outbox_inbox_idempotency`) `outbox`, `processed_events`, `idempotency_keys` — course, enrollment, and progress share one schema because enrollment locks the `courses` row in the same transaction it writes an enrollment row in (ADR-0012's seat-limit guarantee); `course_search_index` lives here because indexing and search are part of the course service's publish activities (ADR-0025). |
+| `analytics/` | `analytics` | Three mirror tables (`user_role_mirror`, `course_mirror`, `enrollment_mirror`, fed from Kafka events) plus the aggregate read models (`platform_snapshot`, `course_stats`, `daily_enrollments`), the workflow-issue tables (`publish_failures`, `workflow_issue_stats`, `000004`), and (`000005_processed_events`) `processed_events`. |
 | `notification/` | `notification` | `recipients`, `course_titles`, `enrollment_courses`, `deliveries`, and (`000003_processed_events`) `processed_events`. |
 | `cutover/` | (none) | Runs LAST. `000001_split_platform` moves the old shared `platform` rows to the owning service and drops `platform` (below). |
 
@@ -34,7 +34,7 @@ It is idempotent (guards on `to_regclass`, `ON CONFLICT DO NOTHING`) and on a fr
 
 ## Warning: the name-collision hazard
 
-`outbox`, `processed_events` and `idempotency_keys` now exist in more than one schema. Postgres resolves an unqualified name to the **first** schema on the `search_path` that has it, silently. A connection with a combined path (the old worker path `platform,course,analytics,public` is the example) would read and write the wrong service's tables without any error. Every binary and every test connection must have exactly one service schema on its path (`<schema>,public`); owner-side SQL qualifies the name. `libs/testenv` makes `Env.DB` (the owner) use `public` only so unqualified use fails loudly; see its README.
+`outbox`, `processed_events` and `idempotency_keys` now exist in more than one schema. Postgres resolves an unqualified name to the **first** schema on the `search_path` that has it, silently. A connection with a combined path (the retired shared-worker path `platform,course,analytics,public` is the example) would read and write the wrong service's tables without any error. Every binary and every test connection must have exactly one service schema on its path (`<schema>,public`); owner-side SQL qualifies the name. `libs/testenv` makes `Env.DB` (the owner) use `public` only so unqualified use fails loudly; see its README.
 
 **No foreign key crosses a schema boundary.** `courses.instructor_id`, `enrollments.student_id`, and `idempotency_keys.user_id` are plain `UUID` columns, not `REFERENCES identity.users(id)` — none of them were ever read across that boundary by application code (callers are authorized via JWT claims), and there's no user-delete feature, so nothing relied on the database catching a dangling reference. See ADR-0024 for the full reasoning, including why `platform` is a deliberate exception (it's integration infrastructure, not domain data).
 
@@ -50,7 +50,7 @@ make migrate-down-all                        # full teardown, all sets, reverse 
 make migrate-create service=course name=add_something
 ```
 
-`make migrate-up`'s order is fixed and matters: `platform` first (its migration installs `citext`/`pg_trgm`, which `identity` and `course` need), then `identity`, `course`, `analytics`, `notification`, and `cutover` last (it needs every service's own tables to exist). Order everywhere: `platform identity course analytics notification cutover`. Each service is tracked by its own `x-migrations-table` (e.g. `course_schema_migrations`) so the four independent sequences don't collide on a single shared `schema_migrations` row.
+`make migrate-up`'s order is fixed and matters: `platform` first (its migration installs `citext`/`pg_trgm`, which `identity` and `course` need), then `identity`, `course`, `analytics`, `notification`, and `cutover` last (it needs every service's own tables to exist). Order everywhere: `platform identity course analytics notification cutover`. Each service is tracked by its own `x-migrations-table` (e.g. `course_schema_migrations`) so the independent sequences don't collide on a single shared `schema_migrations` row.
 
 Under the hood these call `golang-migrate`'s CLI via `go run`, against `$POSTGRES_DSN` (see `.env.example`). Migrations run as an explicit step, never automatically on service start (RFC §5.8) — an API replica starting mid-rolling-restart must not race another replica to alter a table.
 

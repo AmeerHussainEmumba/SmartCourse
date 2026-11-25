@@ -189,8 +189,8 @@ jobs:
 
   # The container tier of the Week 3 end-to-end scenarios (test/e2e/harness,
   # build tag `e2e`): real Postgres, Redis, Kafka, Schema Registry, MongoDB,
-  # Mailpit and Temporal in Docker, and the ten service binaries run as
-  # subprocesses or containers, as the harness decides. Separate from
+  # Mailpit and Temporal in Docker, and the ten long-running service binaries run as
+  # subprocesses built by the harness (testcontainers for the infrastructure). Separate from
   # build-lint-test on purpose: it takes many minutes and a dozen containers,
   # and runs in parallel with it. Only tests carrying the `e2e` tag run here
   # (the main job's -tags=integration never selects them).

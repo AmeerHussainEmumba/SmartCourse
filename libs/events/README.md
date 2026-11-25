@@ -2,6 +2,8 @@
 
 Event contracts (ADR-0030, RFC §6.4, §6.5, §6.8): the `.proto` files, the generated Go code (committed), the envelope, a codec for the Confluent Schema Registry wire format, a small registry client, and the bootstrap command that registers every subject. Pure Go (`CGO_ENABLED=0` builds); the only dependency is `google.golang.org/protobuf`. It imports no service and no Kafka client.
 
+**Used by** `libs/eventbus` (encoding, decoding, schema ids) and the audit service (`services/audit/archive`, `replay`; binaries `audit-worker` and `audit-api`); `test/e2e` uses it in tests. Each producing service writes its payloads through `libs/outbox` and the relay encodes them with this module via `libs/eventbus`.
+
 ## What is defined
 
 The eleven events the services write to the outbox today. Each payload's fields were derived from the `outbox.Write` call sites, not from the RFC's wider list. RFC §6.5 names 13 events; three of them (`CourseCreated`, `CourseVersionCreated`, `CoursePublishRequested`) are not written by any service and have no consumer in the RFC's own consumer table, so they get a message when a service starts writing them. `identity.user_profile_updated` is in this catalogue but not in the RFC's §6.5 list.

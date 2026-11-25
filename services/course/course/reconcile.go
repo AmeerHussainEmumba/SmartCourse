@@ -54,7 +54,7 @@ type ReconcileResult struct {
 // two replicas is harmless. A Temporal error other than not-found leaves the
 // version untouched (Temporal being down must not fail healthy publishes).
 //
-// Scheduled by the worker (services/worker/jobs, every 60 s by default).
+// Scheduled by course-worker (services/course/cmd/course-worker/jobs.go, every 60 s by default).
 func (s *Service) ReconcileStalePublishes(ctx context.Context) (ReconcileResult, error) {
 	var res ReconcileResult
 	stale, err := s.repo.ListStalePublishes(ctx, publishReconcileGrace, reconcileBatch)

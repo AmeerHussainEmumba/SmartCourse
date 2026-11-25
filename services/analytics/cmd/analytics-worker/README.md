@@ -18,6 +18,8 @@ Jobs: `maintenance:analytics-reconcile` (the reconciler over `analytics.NewRecon
 
 Without `MONGO_URI` there is no sink: an exhausted event is logged in full and dropped, as the old worker did (logged at start-up with a warning).
 
+**Asynq queue namespace.** This worker's queues are prefixed `analytics:` (`analytics:low`; `asynqx.Namespace`) because every worker shares one Redis database and the same logical queue names; without the prefix a worker would dequeue and archive another service's tasks. The `queue` label of the `asynq_*` gauges carries the prefixed name.
+
 ## Readiness and observability
 
 Internal listener only (`METRICS_HTTP_ADDR`, default `:9100`, host 9113 in compose): `/metrics`, `/health/live`, `/health/ready`. Postgres and Redis are fatal checks (503); `kafka` and `mongodb` are non-fatal (200 `degraded`). `event_processed_total{consumer,outcome}`, `kafka_consumer_lag`, `dead_letter_total` and the DB pool series are exported.

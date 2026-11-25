@@ -34,12 +34,12 @@ type Options struct {
 	// overrides it.
 	Service string
 	// Outbox adds outbox_backlog and outbox_oldest_unpublished_seconds, a
-	// query over platform.outbox. Set it only for binaries whose
-	// POSTGRES_SEARCH_PATH includes platform (identity-api, course-api,
-	// worker); analytics-api has no access to the table.
+	// query over the service's own outbox table (unqualified, resolved by
+	// the connection's search_path). Set it only for binaries of a service that
+	// owns an outbox (identity and course); analytics has none.
 	Outbox bool
 	// Workflows keeps workflow_started/completed/failed_total, which only the
-	// binary running the Temporal worker feeds (the worker). Without it the
+	// binary running the Temporal workflow worker feeds (publishing-worker). Without it the
 	// three counters are left out of /metrics instead of reading a permanent
 	// zero that looks like "no workflows ran".
 	Workflows bool
@@ -216,7 +216,7 @@ func (o *Observability) Middleware() []gin.HandlerFunc {
 }
 
 // MetricsHandler is the /metrics handler for a binary that serves it on its
-// own listener (the worker), or nil when metrics are disabled.
+// own internal listener (libs/runtime), or nil when metrics are disabled.
 func (o *Observability) MetricsHandler() http.Handler {
 	if o == nil || o.reg == nil {
 		return nil

@@ -17,4 +17,6 @@ No dedicated test file — `Connect` is exercised indirectly by every test that 
 
 `libs/runtime` makes the one call (`deps.Observe(ctx, cfg, infra.ObserveOptions{Service, Outbox, Workflows})`, or `observe.New` without dependencies); a binary does not call it itself except in tests. See `libs/telemetry/README.md` ("Wiring") for what it installs and `libs/config/README.md` for the environment. Run `Shutdown` with a deadline at exit. Importing this package also installs the `libs/auth` identity as the outbox actor resolver.
 
-`/metrics` is served by the internal listener of `libs/runtime` (`Observability.MetricsHandler()`); there is no public mounting (`RegisterMetricsRoute` was removed in Wave C5).
+`/metrics` is served by the internal listener of `libs/runtime` (`Observability.MetricsHandler()`); there is no public mounting (`RegisterMetricsRoute` was removed).
+
+**Used by** every binary that has a database: `identity-api`, `identity-worker`, `identity-admin`, `course-api`, `course-worker`, `analytics-api`, `analytics-worker`, `notification-worker`. `publishing-worker` and the audit binaries do not import it.

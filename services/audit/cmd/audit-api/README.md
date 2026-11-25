@@ -5,7 +5,7 @@ The audit service's admin HTTP surface (`GET/POST /api/v1/admin/failed-events...
 | Variable | Use |
 |---|---|
 | `HTTP_PORT` | API port (default 8080; host 8093 in Compose) |
-| `METRICS_HTTP_ADDR` | internal listener: `/metrics`, `/health/*` (never the API port) |
+| `METRICS_HTTP_ADDR` | internal listener: `/metrics`, `/health/*` (never the API port; host 9104 in Compose) |
 | `MONGO_URI`, `MONGO_DATABASE`, `MONGO_*_TIMEOUT` | the store (required) |
 | `REDIS_ADDR`, `REDIS_PASSWORD`, `REDIS_DB` | token-version check (required) |
 | `JWT_SIGNING_KEY`, `JWT_ISSUER` | same key as every service (required) |

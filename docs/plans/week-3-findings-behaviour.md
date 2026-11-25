@@ -2,6 +2,21 @@
 
 **Date:** 2026-11-25 · **Companion to:** `docs/plans/week-3.md` (Phase 8), `docs/plans/module-split-findings.md` (the first pass; same register format) · **Scope:** the finished Week 3 layer (dual transport, libs/kafka, dead letters and replay, archiver, jobs, notifications, certificates, idempotency).
 
+> **Superseded in part by the microservices split (ADR-0033..0035, `docs/plans/microservices-split.md`), 2026-11-26.** This register describes the code as of 2026-11-25 and is kept as written. `services/worker` no longer exists; its transport and dead-letter code moved, and the "dual transport" and "replay re-runs the consumer's handler" designs it attacked were replaced (Kafka only; replay is republish to `retry.<consumer>` through `audit-api`, and a record that cannot be decoded is never replayed). Paths moved as follows (verified in the tree on 2026-11-26; whether each finding is fixed after the move is **not** re-verified here, the split's Wave D lists the survivors to fix):
+>
+> | Finding | Old path | Now |
+> |---|---|---|
+> | B-01 (undecodable stand-in event) | `services/worker/transport/runner.go` (`stubEvent`), `services/worker/deadletter/replay.go` (`replayOne`/`apply`) | `libs/eventbus/consumers.go` (`stubEvent`); replay is `services/audit/replay/replay.go` (`replayOne`), which refuses a record it cannot decode or encode instead of running a handler |
+> | B-06, B-07 (Mongo outage loses events) | `services/worker/transport/runner.go` (`exhausted`), `libs/kafka/consumer.go` | `libs/eventbus/consumers.go` (`exhausted`), `libs/kafka/consumer.go`; the archiver is `audit-worker`, each service's worker parks its own events (`services/*/cmd/*-worker/deadletter.go`, `services/audit/deadletter`) |
+> | B-04 (lenient codec) | `services/worker/transport/codec.go` | `libs/eventbus/codec.go` |
+> | B-09 (`last_error` never cleared, outbox never pruned) | `libs/relay/relay.go`, `libs/outbox/prune.go` | same paths; the outbox is now `identity.outbox` and `course.outbox`, pruned by `identity-worker` and `course-worker` |
+> | B-02, B-03 (idempotency) | `libs/idempotency/idempotency.go`, shared `platform.idempotency_keys` | same path; the table is `course.idempotency_keys` |
+> | Observations 3, 4, 7 (`notification/dispatcher.go`, sweeper) | `services/worker/notification/` | `services/notification/notification/`, run by `notification-worker` |
+> | Observation 6 ("replay is not audit-logged") | ADR-0031 | replay is now audit-logged with the admin's user id (ADR-0034) |
+> | Reproducer files | `services/worker/transport/{codec_bugrepro,adversarial_integration,fuzz}_test.go` | `libs/eventbus/{codec_bugrepro,adversarial_integration,fuzz}_test.go` |
+> | Reproducer file | `services/worker/deadletter/deadletter_bugrepro_test.go` | not found at any path in the current tree (not located) |
+> | E2E adversarial files | `test/e2e/adversarial_{mongo,replicas,certificate}_e2e_test.go` | `test/e2e/legacy/` (the old four-binary harness; the E2E tier now runs the ten-binary topology) |
+
 Production code was not changed. Reproducers are new test files behind the build tag `bugrepro` (and `integration` or `e2e`); they fail today by design. Everything below was run on the worktree branch; "held" means a test that tried to break an invariant and could not. Severity is the tester's assessment.
 
 ## Summary

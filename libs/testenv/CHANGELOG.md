@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- README: states who uses the module and which services have a Postgres role. No code change.
+
 - Per-service Postgres roles (microservices split, wave A1). `Setup` now runs `scripts/db-roles.sh` in the container and applies `platform identity course analytics notification cutover`; the `platform` schema no longer exists afterwards. Added `Env.ServiceDB(t, service)` (connects as `svc_<service>` with search_path `<service>,public`), `Env.ServiceDSN`, `Env.Owner`, `Qualify`, `Services` and `OwnerSearchPath`. `Env.DB` is still the owner connection, but BREAKING: its search_path is now `public` only (was `identity,course,analytics,platform,public`), so unqualified service tables, and above all `outbox`, `processed_events` and `idempotency_keys`, which now exist in several schemas, fail with "relation does not exist" instead of silently resolving to the first schema. Qualify them (`course.outbox`) or use `ServiceDB`. `OpenWithSearchPath` is unchanged. See README "Name-collision hazard".
 - Added the enforcement tests (`isolation_integration_test.go`) and the cutover tests (`cutover_integration_test.go`).
 

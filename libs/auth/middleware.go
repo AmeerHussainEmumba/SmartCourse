@@ -98,8 +98,8 @@ func RequireFreshPrivilege(rdb *redis.Client) gin.HandlerFunc {
 }
 
 // RequireFreshPrivilegeStrict is RequireFreshPrivilege for admin-only routes
-// of a service that cannot read the durable token version (the worker admin
-// API and analytics-api cannot read identity's tables, ADR-0022 to 0024). A
+// of a service that cannot read the durable token version (audit-api and
+// analytics-api cannot read identity's tables, ADR-0022 to 0024). A
 // Redis miss on the token-version key FAILS CLOSED: 401 token_stale, never
 // "version 1". The key comes back when identity's re-seeder rewrites every
 // version above 1 (within one tick of its interval after a flush) or the admin

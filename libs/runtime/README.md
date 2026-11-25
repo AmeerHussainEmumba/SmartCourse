@@ -16,6 +16,8 @@ func main() {
 }
 ```
 
+**Used by** every long-running binary: `identity-api`, `identity-worker`, `course-api`, `course-worker`, `analytics-api`, `analytics-worker`, `notification-worker`, `publishing-worker`, `audit-api`, `audit-worker` (not the `identity-admin` CLI). Which options each passes: `WithDependencies(infra.Connect)` in every binary except `publishing-worker` and the two audit binaries; `WithOutbox()` in identity-api, identity-worker, course-api, course-worker; `WithWorkflows()` in publishing-worker; `WithConfig(...)` in each binary that needs custom requirements.
+
 **Dependencies are opt-in.** A binary that has a database passes `runtime.WithDependencies(infra.Connect)`; a binary without one (the publishing worker, the audit binaries) passes nothing and links no database driver: `libs/runtime` imports `libs/infra/observe` (telemetry) but never `libs/infra` (which pulls in `libs/db`, `libs/cache`, pgx, GORM and go-redis). `WithDependencies` is generic over anything implementing `runtime.Dependencies` (`Observe`, `ReadinessChecks`, `Close`), `*infra.Dependencies` being the one that exists. Inside the wiring function `p.Deps` is that value behind the interface; `infra.Of(p.Deps)` returns the `*infra.Dependencies` (nil without the option). `scripts/check-link-graph.sh` proves it: `publishing-worker` forbids pgx, gorm and go-redis.
 
 ## What Main does
@@ -40,11 +42,11 @@ A component is `func(ctx) error` registered with `p.Go(name, fn, opts...)`. A pa
 
 ## Reuse
 
-`runtime.NewInternalServer(addr, metricsHandler, health)`, `runtime.ServeInternal(ctx, logger, srv)` and `runtime.NewHealth()` are the listener's parts; `services/worker` (until Wave B removes it) serves its listener through them.
+`runtime.NewInternalServer(addr, metricsHandler, health)`, `runtime.ServeInternal(ctx, logger, srv)` and `runtime.NewHealth()` are the listener's parts; `services/identity/cmd/identity-admin` is a CLI and does not use the runtime; every other binary goes through `runtime.Main`.
 
 ## /metrics is never on a public port
 
-`/metrics` is served only by the internal listener. `libs/infra`'s `RegisterMetricsRoute` (which mounted it on the API router) was removed in Wave C5; each API binary has a test that its public router answers 404 for it.
+`/metrics` is served only by the internal listener. `libs/infra`'s `RegisterMetricsRoute` (which mounted it on the API router) was removed; each API binary has a test that its public router answers 404 for it.
 
 ## Tests
 

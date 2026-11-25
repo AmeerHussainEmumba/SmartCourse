@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Living document |
-| Last updated | 2026-11-18 |
+| Last updated | 2026-11-26 |
 | Related | `smartcourse-rfc.md` |
 
 ## Review status (2026-09-24)
@@ -25,6 +25,7 @@ The distinction matters when something changes. Six months from now, a contribut
 - Options that were considered and rejected stay in the record. The rejected option is often the more useful half.
 - New decisions during implementation get a new ADR. The register is expected to grow.
 - Paths in records dated before ADR-0026 (`internal/...`, `cmd/...`, `internal/platform/...`) describe the layout at the time of the decision. Since ADR-0026 they live under `services/`, `libs/` and `tools/`; see `services/README.md`.
+- Records dated before ADR-0033 (2026-11-25) that mention `services/worker`, `cmd/worker`, `platform.outbox` or a shared worker describe the layout at the time; since ADR-0033 there is no `services/worker` and each service has its own outbox. See `docs/plans/microservices-split.md`.
 
 **Statuses:** `Accepted` · `Superseded by ADR-NNNN` · `Deprecated` · `Proposed`
 
@@ -50,17 +51,17 @@ The distinction matters when something changes. Six months from now, a contribut
 | [0016](#adr-0016--postgresql-full-text-search-over-a-dedicated-engine) | PostgreSQL full-text search over a dedicated engine | Accepted | §19.2 |
 | [0017](#adr-0017--analytics-aggregates-in-postgresql-with-scheduled-reconciliation) | Analytics aggregates in PostgreSQL with scheduled reconciliation | Accepted | §9.3 |
 | [0018](#adr-0018--docker-compose-profiles-for-tiered-local-development) | Docker Compose profiles for tiered local development | Accepted | §17.1 |
-| [0019](#adr-0019--minio-for-learning-asset-object-storage) | MinIO for learning-asset object storage | Accepted | §2.3 (A1), §4.7 |
+| [0019](#adr-0019--minio-for-learning-asset-object-storage) | MinIO for learning-asset object storage | Accepted — image source amended 2026-11-25 (`pgsty/minio` fork) | §2.3 (A1), §4.7 |
 | [0020](#adr-0020--gcra-rate-limiting-over-fixed-window-counters) | GCRA rate limiting over fixed-window counters | Accepted | §5.7, §11.3 |
-| [0021](#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka) | In-process outbox relay with a worker pool, ahead of Kafka | Accepted — claim mechanism amended by ADR-0027 | §6.3, §21.0 |
+| [0021](#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka) | In-process outbox relay with a worker pool, ahead of Kafka | Accepted — claim mechanism amended by ADR-0027; superseded in part by ADR-0033 | §6.3, §21.0 |
 | [0022](#adr-0022--separate-api-and-worker-binaries-one-shared-codebase-and-database) | Separate API and worker binaries, one shared codebase and database | Accepted — extended by ADR-0026 | §4.2 |
 | [0023](#adr-0023--split-cmdapi-into-identity-api-course-api-and-analytics-api) | Split cmd/api into identity-api, course-api, and analytics-api | Accepted — extended by ADR-0026 | §4.2 |
-| [0024](#adr-0024--schema-per-service-within-one-shared-database) | Schema-per-service within one shared database | Accepted — deferred `go.mod` item resolved by ADR-0026 | §5.3 |
+| [0024](#adr-0024--schema-per-service-within-one-shared-database) | Schema-per-service within one shared database | Accepted — deferred `go.mod` item resolved by ADR-0026; superseded in part by ADR-0033 (`platform` schema removed) | §5.3 |
 | [0025](#adr-0025--course-publishing-as-a-temporal-workflow-m2) | Course publishing as a Temporal workflow (M2) | Accepted — amended by ADR-0028 | §7.4 |
-| [0026](#adr-0026--one-go-module-per-service-and-per-shared-library) | One Go module per service and per shared library | Accepted | §4.1, §4.2, §4.4 |
+| [0026](#adr-0026--one-go-module-per-service-and-per-shared-library) | One Go module per service and per shared library | Accepted — superseded in part by ADR-0033 (the worker's coupling) | §4.1, §4.2, §4.4 |
 | [0027](#adr-0027--the-relay-holds-each-rows-claim-through-handling) | The relay holds each row's claim through handling | Accepted | §6.3 |
 | [0028](#adr-0028--publish-claims-the-version-before-starting-the-workflow) | Publish claims the version before starting the workflow | Accepted | §7.5 |
-| [0029](#adr-0029--two-event-transports-behind-one-seam-in-process-and-kafka) | Two event transports behind one seam: in-process and Kafka | Proposed | §6.2, §6.3 |
+| [0029](#adr-0029--two-event-transports-behind-one-seam-in-process-and-kafka) | Two event transports behind one seam: in-process and Kafka | Proposed — superseded in part by ADR-0033 (in-process transport removed) | §6.2, §6.3 |
 | [0030](#adr-0030--event-contracts-protobuf-generated-code-and-client-library-selection) | Event contracts: Protobuf, generated code, and client library selection | Proposed | §6.4, §6.8 |
 | [0031](#adr-0031--mongodb-archive-dead-letter-parking-and-replay) | MongoDB archive, dead-letter parking, and replay | Proposed | §5.4, §6.9 |
 | [0032](#adr-0032--observability-in-week-3-trace-context-through-the-event-envelope) | Observability in Week 3: trace context through the event envelope | Proposed | §12 |
@@ -1533,7 +1534,7 @@ The outbox row (producer) and the `processed_events` marker (consumer) are writt
 
 **Positive.** Services can be built, tested, scaled and (later) deployed independently; the guarantees no longer depend on every service sharing one schema; the database proves the boundary.
 
-**Negative.** Ten binaries instead of four. Kafka and the Schema Registry are required for any cross-service effect, including in development. Cross-service causal order is not guaranteed (an event may arrive before the one it depends on): consumers must tolerate a missing dependency by retrying for long enough (the default budget is about a minute) or by keeping a pending state. "Published" now means the broker acknowledged; how far a consumer is behind is Kafka lag. Each worker prunes its own tables.
+**Negative.** Eleven binaries (ten long-running plus the identity-admin CLI) instead of four. Kafka and the Schema Registry are required for any cross-service effect, including in development. Cross-service causal order is not guaranteed (an event may arrive before the one it depends on): consumers must tolerate a missing dependency by retrying for long enough (the default budget is about a minute) or by keeping a pending state. "Published" now means the broker acknowledged; how far a consumer is behind is Kafka lag. Each worker prunes its own tables.
 
 ### Alternatives considered
 
@@ -1544,7 +1545,7 @@ The outbox row (producer) and the `processed_events` marker (consumer) are writt
 
 ### Reversal trigger
 
-If operating ten binaries proves too costly for the team, merge API and worker per service into one binary (a runtime role flag) without changing the data model.
+If operating ten long-running binaries proves too costly for the team, merge API and worker per service into one binary (a runtime role flag) without changing the data model.
 
 ---
 

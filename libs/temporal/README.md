@@ -2,7 +2,7 @@
 
 `Connect` builds a Temporal client with `client.NewLazyClient`, not `client.Dial` — it never fails at boot because Temporal is unreachable, only an actual publish call would (ADR-0009: "Temporal down means publishing unavailable — though nothing else is affected").
 
-Its own package, apart from `libs/infra`, so that `services/identity/cmd/identity-api` and `services/analytics/cmd/analytics-api` don't link the Temporal SDK. Only `services/course/cmd/course-api` (to start the publish workflow), `services/worker/cmd/worker` (to run it) and `tools/seed` import it. `scripts/check-link-graph.sh` enforces that for the two APIs.
+Its own package, apart from `libs/infra`, so that binaries that never touch Temporal (for example `services/identity/cmd/identity-api` and `services/analytics/cmd/analytics-api`) don't link the Temporal SDK. Importers: `services/course/cmd/course-api` (to start the publish workflow), `services/course/cmd/course-worker` (the activities worker) and `services/publishing/cmd/publishing-worker` (the orchestrating workflow worker); `test/e2e` imports it in tests. `tools/seed` does not (it drives the HTTP APIs). `scripts/check-link-graph.sh` enforces the no-Temporal rule for the other binaries, including the identity and analytics APIs.
 
 ## Testing
 

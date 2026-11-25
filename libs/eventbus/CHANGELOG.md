@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- README: consumers listed per binary (identity-worker, course-worker, analytics-worker, notification-worker, audit-worker, audit-api); wording from the Wave labels removed. No code change.
+
 - `NewStreamConsumers(cfg, handlers, opts...)`: the consumer runner for a service with no Postgres. A handler is delivered without a transaction or `processed_events` marker (nil `*gorm.DB`), so it must be idempotent itself. Same group per consumer, retry topic, bounded in-flight, retry budget, parking with history, `relay.Source`, tracing and metrics as `NewConsumers`, which is now a thin wrapper over the same runner. It replaces the `services/audit/consume` copy.
 - The dead-letter sink's context now carries the record's `relay.Source` (in both modes), so a sink can store topic, partition, offset and schema id as the handlers can.
 - Tests: both modes covered in `modes_integration_test.go`; the Postgres stack now acts as the course service (`testenv.Env.ServiceDB`), because the owner connection no longer resolves `outbox` and `processed_events`. `go.mod`: `client_golang` and the OTel SDK are direct (test imports).

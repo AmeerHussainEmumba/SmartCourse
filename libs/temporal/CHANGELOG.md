@@ -4,6 +4,7 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- README importers corrected for the split: course-api, course-worker and publishing-worker (the shared `services/worker` no longer exists). No code change.
 - Queue semantics documented (README): `cfg.Temporal.TaskQueue` is the workflow queue and `cfg.Temporal.ActivityQueue` the activity queue (`libs/contracts/publishing`). No code change.
 
 - Added `Observe(Observability{Tracing, Metrics})`, applied by `Connect` to every client built afterwards (and so to workers built on them): the `go.temporal.io/sdk/contrib/opentelemetry` tracing interceptor (v0.8.1, MIT; resolves to the repo's existing otel v1.44.0 and sdk v1.50.0) and a workflow counter interceptor for `workflow_started/completed/failed_total` (replays are not counted). The zero value adds nothing. New dependency: `libs/telemetry`.

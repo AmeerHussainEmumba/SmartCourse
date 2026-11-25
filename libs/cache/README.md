@@ -2,6 +2,8 @@
 
 The Redis connection. Redis holds cache, hot counters, rate-limiter state, and (eventually) Asynq's queues — never a source of truth (RFC §5.1). Every key written anywhere in this codebase must be reconstructible from PostgreSQL.
 
+**Used by** `libs/infra` (`Connect` opens Redis for every binary that has dependencies: identity, course, analytics and notification binaries) and directly by `audit-api` (token-version checks). `publishing-worker` and `audit-worker` do not use Redis.
+
 `Open` connects and pings with a bounded timeout, the same fail-fast-at-boot shape as `libs/db.Open` — a misconfigured `REDIS_ADDR` fails loudly at startup rather than surfacing as a mysterious failure on first use.
 
 ## Who uses it, and for what

@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | Approved by the project owner on 2026-11-25; in progress |
+| Status | Approved by the project owner on 2026-11-25; implemented on branch `week3/microservices` (the eleven binaries, per-service tables, roles, compose profiles and the E2E harness are in the tree); Wave D (documentation, adversarial re-run, remaining behaviour fixes) in progress as of 2026-11-26. Decision records: ADR-0033, ADR-0034, ADR-0035. Where this plan and the code differ, the code and the notes marked *(2026-11-26)* below win |
 | Origin | Supervisor feedback on the Week 2 PR: the worker still imports `course` and `analytics` code, so Temporal workflows move into their own service and each service runs its own relay; each service needs its own outbox table instead of `platform.outbox` |
 | Decisions confirmed | One Postgres database (confirmed by the supervisor); a separate `-api` and `-worker` binary per service; Kafka in the default dev profile; an independent audit service with its own ADR; the seed tool drives the HTTP APIs |
 | Supersedes in part | ADR-0021 (in-process relay), ADR-0024 (the shared `platform` schema), ADR-0026 (worker coupling), ADR-0029 (dual transport), DR-009 (the single worker) |
@@ -29,7 +29,7 @@ No service imports another service's code. They share only `libs/*` (the kernel 
 | `services/publishing` | `publishing-worker` | none | none | none | none | Temporal workflow queue only |
 | `services/audit` | `audit-api`, `audit-worker` | MongoDB | none | idempotent by event id in Mongo | none | every topic and its retry topics |
 
-Ten binaries. `services/worker` is deleted. `tools/seed` and `test/e2e` require no service module.
+Eleven binaries (ten long-running processes plus the `identity-admin` CLI). `services/worker` is deleted. `tools/seed` and `test/e2e` require no service module.
 
 `libs/*` stays the shared kernel. New shared libraries: `libs/eventbus` (the Kafka publisher, consumer runner, codec and schema loader that used to be `services/worker/transport`), `libs/runtime` (process bootstrap shared by every binary: signal handling, config, telemetry, internal listener, graceful shutdown), and `libs/contracts/publishing` (the workflow and activity contract: names, task queues and DTO structs).
 
@@ -75,6 +75,7 @@ Migration order in `make migrate-up` and `libs/testenv`: `platform identity cour
 - **Replay is republish, not re-invoke.** `audit-api` replays a parked event by encoding it from the stored payload and schema id and producing it to `retry.<consumer>`; the consuming service's own consumer group handles the retry topic through its normal idempotent path. Order: produce first, then mark replayed. A failure in between leaves the record parked, and a second replay is absorbed by `processed_events`.
 - A parked record that cannot be decoded is never replayed (it stays parked with a clear error).
 - Replay is audit-logged with the admin's user id.
+- `analytics-api` reads the failed-event counts from the same Mongo collection through `libs/mongostore`: a documented read-only exception to independence (ADR-0034). *(2026-11-26)*
 
 ## 5. Temporal
 
@@ -88,7 +89,10 @@ Migration order in `make migrate-up` and `libs/testenv`: `platform identity cour
 
 - Every binary serves `/metrics`, `/health/live` and `/health/ready` on an **internal** listener (`METRICS_HTTP_ADDR`, default `:9100`). API binaries also serve their public health routes on the API port, but `/metrics` is never on the public port.
 - Host ports (all `127.0.0.1`): `identity-api` 8090, `course-api` 8091, `analytics-api` 8092, `audit-api` 8093. Internal listeners published as: `identity-api` 9101, `course-api` 9102, `analytics-api` 9103, `audit-api` 9104, `identity-worker` 9111, `course-worker` 9112, `analytics-worker` 9113, `notification-worker` 9114, `publishing-worker` 9115, `audit-worker` 9116.
-- One `Dockerfile.<binary>` per binary. Compose profiles: `core` now contains Postgres, Redis, MinIO, Mailpit, Kafka, Schema Registry and MongoDB plus every service except the publishing worker; `workflow` adds Temporal and `publishing-worker`; `observability` as before.
+- One `Dockerfile.<binary>` per long-running binary (ten); the `identity-admin` CLI is built into the `identity-api` image (`Dockerfile.identity-api`), and `Dockerfile.schema-init` is the migration image. *(2026-11-26)*
+- Asynq queues are namespaced per service (`identity:`, `course:`, `analytics:`, `notification:` prefixes) so services sharing one Redis never consume each other's tasks. *(2026-11-26; each worker's `asynqNamespace` constant)*
+- The MinIO and `mc` images are the `pgsty` fork pinned by tag and digest (ADR-0019 amendment). *(2026-11-26)*
+- `make dev-events` is only an alias of `make dev-core`; there is no `events` profile. *(2026-11-26)* Compose profiles: `core` now contains Postgres, Redis, MinIO, Mailpit, Kafka, Schema Registry and MongoDB plus every service except the publishing worker; `workflow` adds Temporal and `publishing-worker`; `observability` as before.
 - Worker concerns by service:
   - `identity-worker`: the identity relay; the token-version re-seeder moves here from `identity-api`.
   - `course-worker`: the course relay, consumers (instructor mirror, enrollment archival, certificate issuer), jobs (stale-publish reconciliation, enrollment counters, idempotency and outbox pruning, `processed_events` pruning), the Temporal activities worker.

@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- README: states which service binaries use the module (microservices split). No code change.
+
 - Module created (Week 3 plan, ADR-0026).
 - Protobuf contracts for the eight events services emit today (identity, course, enrollment, progress) and the `Envelope` (RFC §6.4); `course_published` carries `instructor_id`. Generated Go committed under `gen/`; `generate.sh` pins buf v1.75.0 and protoc-gen-go v1.36.11.
 - Codec for the Confluent Schema Registry Protobuf wire format (`Encode`, `Decode`, `DecodeInto`), with a fuzz target for the decoder.
