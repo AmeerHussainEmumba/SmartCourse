@@ -113,9 +113,6 @@ func TestBuildRelay_PublishesCourseOutboxAndRunsNoHandlers(t *testing.T) {
 
 	pub := &recordingPublisher{}
 	rl := buildRelay(db, &config.Config{Relay: config.RelayConfig{Workers: 2}}, pub, nil, false)
-	if n := len(rl.Handlers()); n != 0 {
-		t.Fatalf("the relay has %d handlers registered, want a publish-only relay", n)
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { rl.Run(ctx); close(done) }()

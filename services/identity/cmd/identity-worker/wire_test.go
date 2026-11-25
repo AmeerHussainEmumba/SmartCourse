@@ -43,13 +43,11 @@ func field(v reflect.Value, names ...string) reflect.Value {
 	return v
 }
 
-// The identity relay only publishes: it carries a publisher and not one handler
-// (identity consumes nothing), so it can never run another service's code.
+// The identity relay only publishes: it carries a publisher and no handler can
+// be given to it (identity consumes nothing), so it can never run another
+// service's code.
 func TestBuildRelay_IsPublishOnly(t *testing.T) {
 	rl := buildRelay(nil, testConfig("x"), nopPublisher{}, false)
-	if hs := rl.Handlers(); len(hs) != 0 {
-		t.Fatalf("identity relay has %d handlers, want none", len(hs))
-	}
 	if field(reflect.ValueOf(rl), "publisher").IsNil() {
 		t.Fatal("identity relay has no publisher")
 	}

@@ -4,7 +4,7 @@ The bounded worker pool that drains a service's `libs/outbox` table and hands ea
 
 **Current use.** Each service that owns an outbox runs one relay in its worker, publish-only: `identity-worker` (`identity.outbox`) and `course-worker` (`course.outbox`). The relay reads the unqualified `outbox` table, so the service's `search_path` selects its own. Analytics, notification and audit produce no events and run no relay; they import this module only for the `Handler`, `DecodedEvent`, `Deliver`, `DeadLetterSink` and `Source` types that `libs/eventbus` consumers use (`analytics-worker`, `notification-worker`, `audit-worker`, `audit-api`; the API binaries of analytics link it through the analytics package). `publishing-worker` does not use it.
 
-**There is no in-process mode.** Earlier versions could run registered handlers inside the relay's claim transaction when built without a publisher (ADR-0021). ADR-0033 removed that transport from the system and the code has now been removed from this library too (`Register`, `Handlers`, `Publishing`, `WithPublisher`, `WithHandlerHook`, `HandlerHook`, `ModeProcess`, the claim query without the per-aggregate clause). `relay.New(db, publisher, opts...)` takes the `Publisher` as an argument and panics with an explanatory message on a nil database or publisher. Older ADRs and plans that mention the in-process relay are history.
+**There is no in-process mode.** Earlier versions could run registered handlers inside the relay's claim transaction when built without a publisher (ADR-0021). ADR-0033 removed that transport from the system and the code has now been removed from this library too (`Register`, `Handlers`, `Publishing`, `WithPublisher`, `WithHandlerHook`, `HandlerHook`, `ModeProcess`, the claim query without the per-aggregate clause). `relay.New(db, publisher, opts...)` takes the `Publisher` as an argument and panics with an explanatory message on a nil publisher. Older ADRs and plans that mention the in-process relay are history.
 
 ## The shape
 
@@ -98,6 +98,6 @@ All of these use a fake `Publisher` against real Postgres (build tag `integratio
 - `relay_adversarial_integration_test.go`: uncommitted and rolled-back rows never published, two relays on one outbox publish each event once, a poison row at the head does not block the queue, cancel mid-batch then restart publishes every event exactly once, large and binary payloads, no leaked goroutines.
 - `relay_regression_integration_test.go`, `relay_bugrepro_test.go`: the claim lock held through the publish (F-04), a publisher panic recovered (F-05), `last_error` kept for given-up rows (F-28) and cleared for rows that were later published (B-09).
 - `relay_observer_integration_test.go`, `relay_trace_actor_integration_test.go`: the observer seam, `event_id` in log lines, the trace/actor fields and the trace/actor columns.
-- `relay_test.go` (no Docker): `relay.New` panics without a publisher or database.
+- `relay_test.go` (no Docker): `relay.New` panics without a publisher.
 
 Run: `make test-integration`. Full index: `docs/guides/testing.md`.

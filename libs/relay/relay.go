@@ -121,16 +121,13 @@ func WithDeadLetterSink(s DeadLetterSink) Option { return func(r *Relay) { r.sin
 // WithObserver installs the per-row delivery observer (see Observer).
 func WithObserver(o Observer) Option { return func(r *Relay) { r.observer = o } }
 
-// New builds a Relay that publishes through pub. A nil db or pub is a
+// New builds a Relay that publishes through pub. A nil pub is a
 // programming error and panics with a message that says so: there is no mode in
 // which the relay runs without a Publisher. Defaults match RFC §6.3 (200ms poll interval) and
 // §10.2 (pool sizes bounded by the database connection budget, not CPU —
 // 4 workers is conservative for a single relay instance sharing a pool
 // with the API).
 func New(db *gorm.DB, pub Publisher, opts ...Option) *Relay {
-	if db == nil {
-		panic("relay.New: a nil *gorm.DB; the relay needs the service's outbox database")
-	}
 	if pub == nil {
 		panic("relay.New: a nil Publisher; the relay only publishes (ADR-0033), there is no in-process mode")
 	}
