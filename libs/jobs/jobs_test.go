@@ -13,7 +13,9 @@ type fakeScheduler struct{ entries []asynqx.Entry }
 
 func (f *fakeScheduler) Register(e asynqx.Entry) error { f.entries = append(f.entries, e); return nil }
 
-type fakeRegistry struct{ handlers map[string]func(context.Context, []byte) error }
+type fakeRegistry struct {
+	handlers map[string]func(context.Context, []byte) error
+}
 
 func (f *fakeRegistry) Register(t, q string, fn func(context.Context, []byte) error) error {
 	if f.handlers == nil {
