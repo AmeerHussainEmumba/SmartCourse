@@ -246,7 +246,19 @@ func (s *Stack) NewCourse(t testing.TB, inst *User, lessons, enrollmentLimit int
 // StartPublish asks to publish (202) and returns without waiting.
 func (s *Stack) StartPublish(t testing.TB, inst *User, c *Course) {
 	t.Helper()
-	call(t, http.StatusAccepted, "POST", s.CourseURL+"/api/v1/courses/"+c.ID.String()+"/publish", inst.Token, nil)
+	// The shared Temporal can answer 503 (workflow start failed) for a moment
+	// after a scenario that killed workers or terminated workflows; the claim
+	// is released on that failure, so a retry is safe.
+	Eventually(t, 45*time.Second, "publish to be accepted (202)", func() error {
+		code, raw, err := Do("POST", s.CourseURL+"/api/v1/courses/"+c.ID.String()+"/publish", inst.Token, nil)
+		if err != nil {
+			return err
+		}
+		if code != http.StatusAccepted {
+			return Errf("HTTP %d %s", code, raw)
+		}
+		return nil
+	})
 }
 
 // PublishState is the state publish-status reports ("running", "ready", ...).
