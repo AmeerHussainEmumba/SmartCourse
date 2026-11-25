@@ -21,6 +21,13 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/services/identity/identity"
 )
 
+// asynqNamespace prefixes every Asynq queue this worker uses (identity:critical,
+// identity:default, identity:low). Workers of different services share one Redis database
+// and the same logical queue names; without the prefix they consume and archive
+// each other's tasks ("handler not found"). Servers, scheduler, client and
+// queue gauges must all use it.
+const asynqNamespace = "identity"
+
 const (
 	// reseedInterval is how often the re-seeder checks its sentinel key (one
 	// Redis SET NX per tick while the sentinel exists).
@@ -146,7 +153,8 @@ func buildAsynq(cfg *config.Config, logger *slog.Logger, js []jobs.Job) (*asynqx
 	redis := asynqx.RedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
 	a := cfg.Asynq
 	servers, err := asynqx.NewServers(asynqx.ServersConfig{
-		Redis: redis,
+		Redis:     redis,
+		Namespace: asynqNamespace,
 		Pools: map[string]int{
 			asynqx.QueueCritical: a.CriticalConcurrency,
 			asynqx.QueueDefault:  a.DefaultConcurrency,
@@ -163,7 +171,7 @@ func buildAsynq(cfg *config.Config, logger *slog.Logger, js []jobs.Job) (*asynqx
 	if err != nil {
 		return nil, nil, fmt.Errorf("build asynq servers: %w", err)
 	}
-	scheduler, err := asynqx.NewScheduler(asynqx.SchedulerConfig{Redis: redis, Logger: logger})
+	scheduler, err := asynqx.NewScheduler(asynqx.SchedulerConfig{Redis: redis, Namespace: asynqNamespace, Logger: logger})
 	if err != nil {
 		return nil, nil, fmt.Errorf("build scheduler: %w", err)
 	}
@@ -187,7 +195,7 @@ func runJobs(ctx context.Context, logger *slog.Logger, deps *infra.Dependencies,
 		return fmt.Errorf("asynq not started: %w", err)
 	}
 	if obs.Metrics != nil {
-		inspector := asynqx.NewInspector(asynqx.RedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB))
+		inspector := asynqx.NewInspector(asynqx.RedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB), asynqx.WithNamespace(asynqNamespace))
 		stopPoll := telemetry.StartPoller(ctx, queueGaugeInterval, inspector.Gauges(obs.Metrics))
 		defer func() {
 			stopPoll()

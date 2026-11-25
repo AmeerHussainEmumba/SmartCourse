@@ -320,7 +320,7 @@ func TestWorker_PermanentFailureIsArchivedNotRetried(t *testing.T) {
 	w.ready(s)
 	s.publish(register(s, "gone@example.com"))
 
-	insp := asynqx.NewInspector(asynqx.RedisClient(s.env.RDB.Options().Addr, "", 0))
+	insp := asynqx.NewInspector(asynqx.RedisClient(s.env.RDB.Options().Addr, "", 0), asynqx.WithNamespace("notification"))
 	t.Cleanup(func() { _ = insp.Close() })
 	s.eventually(90*time.Second, "the task to be archived on the critical queue", func() bool {
 		st, err := insp.Stats(asynqx.QueueCritical)

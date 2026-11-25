@@ -130,7 +130,10 @@ func TestBuildAsynq_RegistersEveryJobOnTheLowQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer scheduler.Shutdown()
-	if q := servers.Queues(); len(q) != 1 || q[0] != "low" {
-		t.Errorf("queues = %v, want only the maintenance (low) queue", q)
+	if q := servers.Queues(); len(q) != 1 || q[0] != "course:low" {
+		t.Errorf("queues = %v, want only the course-namespaced maintenance queue [course:low]", q)
+	}
+	if servers.Namespace() != "course" || scheduler.Namespace() != "course" {
+		t.Errorf("namespaces: servers %q, scheduler %q, want course", servers.Namespace(), scheduler.Namespace())
 	}
 }

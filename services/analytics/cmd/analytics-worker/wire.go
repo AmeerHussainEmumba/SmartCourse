@@ -23,6 +23,13 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/services/analytics/analytics"
 )
 
+// asynqNamespace prefixes every Asynq queue this worker uses (analytics:critical,
+// analytics:default, analytics:low). Workers of different services share one Redis database
+// and the same logical queue names; without the prefix they consume and archive
+// each other's tasks ("handler not found"). Servers, scheduler, client and
+// queue gauges must all use it.
+const asynqNamespace = "analytics"
+
 const (
 	// TypeReconcile is the reconciler's task type and scheduler entry name: the
 	// same string on every replica (it was jobs.TypeAnalyticsReconcile).
@@ -193,7 +200,8 @@ func buildAsynq(cfg *config.Config, logger *slog.Logger, js []jobs.Job) (*asynqx
 	rc := asynqx.RedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
 	a := cfg.Asynq
 	servers, err := asynqx.NewServers(asynqx.ServersConfig{
-		Redis: rc,
+		Redis:     rc,
+		Namespace: asynqNamespace,
 		Pools: map[string]int{
 			asynqx.QueueCritical: a.CriticalConcurrency,
 			asynqx.QueueDefault:  a.DefaultConcurrency,
@@ -210,7 +218,7 @@ func buildAsynq(cfg *config.Config, logger *slog.Logger, js []jobs.Job) (*asynqx
 	if err != nil {
 		return nil, nil, fmt.Errorf("build asynq servers: %w", err)
 	}
-	scheduler, err := asynqx.NewScheduler(asynqx.SchedulerConfig{Redis: rc, Logger: logger})
+	scheduler, err := asynqx.NewScheduler(asynqx.SchedulerConfig{Redis: rc, Namespace: asynqNamespace, Logger: logger})
 	if err != nil {
 		return nil, nil, fmt.Errorf("build scheduler: %w", err)
 	}
