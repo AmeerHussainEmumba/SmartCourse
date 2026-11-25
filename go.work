@@ -28,6 +28,7 @@ use (
 	./services/analytics
 	./services/course
 	./services/identity
+	./services/notification
 	./services/worker
 	./test/e2e
 	./tools/guardcheck
