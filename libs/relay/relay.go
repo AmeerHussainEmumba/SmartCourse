@@ -7,12 +7,15 @@
 // synthetic example: without this package, every outbox row written by
 // identity/course/enrollment/progress just accumulates, unread.
 //
-// By default (in-process transport) it dispatches to in-process Go handlers
-// (ADR-0021). With WithPublisher (ADR-0029, EVENT_TRANSPORT=kafka) the per-row
-// step becomes "hand the row to a Publisher and mark it published only once the
-// Publisher returned nil", and the registered handlers are run by Kafka
-// consumers instead, through Deliver. This package imports no Kafka client: the
-// Publisher is the seam, implemented in the worker.
+// In the per-service topology (ADR-0033) every relay is built WithPublisher
+// (ADR-0029): the per-row step is "hand the row to a Publisher and mark it
+// published only once the Publisher returned nil", and the handlers are run by
+// Kafka consumers in libs/eventbus, through Deliver. This package imports no
+// Kafka client: the Publisher is the seam, implemented by libs/eventbus.
+//
+// A Relay built without WithPublisher still runs registered handlers
+// in-process (the original ADR-0021 behaviour, superseded by ADR-0033). No
+// service uses that path; it remains only in this library and its tests.
 package relay
 
 import (
@@ -122,7 +125,7 @@ func WithMaxAttempts(n int) Option            { return func(r *Relay) { r.maxAtt
 
 // WithPublisher switches the relay to publish mode (ADR-0029). Registered
 // handlers are then not run by the relay: consumers run them from the broker.
-// A nil publisher keeps in-process delivery.
+// A nil publisher keeps the legacy in-process delivery (unused by any service).
 func WithPublisher(p Publisher) Option { return func(r *Relay) { r.publisher = p } }
 
 // WithPublishBackoff sets how long a row that failed to publish for a
@@ -164,8 +167,8 @@ func (r *Relay) Register(h Handler) {
 	r.handlers = append(r.handlers, h)
 }
 
-// Handlers returns the registered handlers. In publish mode the worker starts
-// one consumer per entry.
+// Handlers returns the registered handlers. In publish mode the
+// service's consumers (libs/eventbus) are built from these handlers.
 func (r *Relay) Handlers() []Handler {
 	return append([]Handler(nil), r.handlers...)
 }

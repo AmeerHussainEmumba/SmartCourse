@@ -1,6 +1,6 @@
 //go:build integration
 
-// identity-api with telemetry wired the way main.go does it: a registration
+// identity-api with telemetry wired the way wire.go does it: a registration
 // writes an outbox row carrying the request's trace, and /metrics exposes the
 // route-template RED series and the outbox and DB gauges.
 package main
@@ -19,14 +19,15 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/router"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 func TestIdentityAPI_RegisterTracesToOutboxAndExposesMetrics(t *testing.T) {
 	env := testenv.Setup(t)
-	deps := &infra.Dependencies{DB: env.DB, RDB: env.RDB}
+	db := env.ServiceDB(t, "identity")
+	deps := &infra.Dependencies{DB: db, RDB: env.RDB}
 	cfg := &config.Config{
 		Env:   "test",
 		JWT:   config.JWTConfig{SigningKey: "integration-test-signing-key-32-bytes!!", AccessTokenTTL: 15 * time.Minute, RefreshTokenTTL: time.Hour, Issuer: "smartcourse-test"},
@@ -37,15 +38,16 @@ func TestIdentityAPI_RegisterTracesToOutboxAndExposesMetrics(t *testing.T) {
 	}
 	exp := tracetest.NewInMemoryExporter()
 	obs := deps.Observe(context.Background(), cfg, infra.ObserveOptions{Service: "identity-api", Outbox: true, OutboxPollInterval: 100 * time.Millisecond, SpanExporter: exp})
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(func() { cancel(); obs.Shutdown(context.Background()) })
+	t.Cleanup(func() { obs.Shutdown(context.Background()) })
 
-	r, err := router.NewWithOptions(router.Options{Env: "test", Observe: obs.Middleware()})
+	r, err := newRouter(cfg, deps, obs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	obs.RegisterMetricsRoute(r)
-	registerRoutes(ctx, r, deps, cfg)
+	// /metrics is the internal listener's (libs/runtime), not the public router's.
+	health := runtime.NewHealth()
+	health.Started()
+	internal := runtime.NewInternalServer("127.0.0.1:0", obs.MetricsHandler(), health).Handler
 
 	const traceID = "0af7651916cd43dd8448eb211c80319c"
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register",
@@ -59,7 +61,7 @@ func TestIdentityAPI_RegisterTracesToOutboxAndExposesMetrics(t *testing.T) {
 	}
 
 	var row outbox.Row
-	if err := env.DB.Where("event_type = ?", "identity.user_registered").First(&row).Error; err != nil {
+	if err := db.Where("event_type = ?", "identity.user_registered").First(&row).Error; err != nil {
 		t.Fatalf("no outbox row: %v", err)
 	}
 	if row.TraceID == nil || *row.TraceID != traceID || row.SpanID == nil {
@@ -70,7 +72,7 @@ func TestIdentityAPI_RegisterTracesToOutboxAndExposesMetrics(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		m := httptest.NewRecorder()
-		r.ServeHTTP(m, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		internal.ServeHTTP(m, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 		b, _ := io.ReadAll(m.Body)
 		body = string(b)
 		if strings.Contains(body, "outbox_backlog 1") || time.Now().After(deadline) {
@@ -84,7 +86,7 @@ func TestIdentityAPI_RegisterTracesToOutboxAndExposesMetrics(t *testing.T) {
 		"db_connections_in_use", "db_connections_max",
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("identity-api /metrics lacks %q", want)
+			t.Errorf("identity-api internal /metrics lacks %q", want)
 		}
 	}
 	if strings.Contains(body, "trace@example.com") {

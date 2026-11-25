@@ -1,91 +1,31 @@
 // Command identity-api serves services/identity/identity's HTTP routes only
-// (ADR-0023 — splitting cmd/api into per-domain services, extending
-// ADR-0022's two-binary split). Fully self-contained: no other module
-// reads identity's tables directly, and every other module gets the
-// caller's identity from the JWT claims, never a lookup into `users`.
-// Same shape as services/course/cmd/course-api/main.go and services/analytics/cmd/analytics-api/main.go —
-// thin, no business logic — just a narrower route registration.
+// (ADR-0023). It is one of identity's three binaries: identity-worker runs the
+// outbox relay, the token-version re-seeder and the housekeeping jobs, and
+// identity-admin creates the first admin. The process bootstrap (config,
+// Postgres and Redis, telemetry, the internal /metrics and health listener,
+// signals, graceful shutdown) is libs/runtime; wire.go holds everything
+// identity-specific. /metrics is served on the internal listener only
+// (METRICS_HTTP_ADDR), never on the public port.
 package main
 
 import (
-	"context"
-	"fmt"
-	"log/slog"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
-
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/logging"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/router"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 )
 
 func main() {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "configuration error:", err)
-		os.Exit(1)
-	}
+	runtime.Main("identity-api", wire, options()...)
+}
 
-	logger := logging.New(cfg.Env, logging.LevelFromEnv())
-	logger.Info("starting", slog.String("service", "identity-api"), slog.String("env", cfg.Env))
+// requirements are the configuration groups this binary needs; it starts without
+// the variables of any other group. It serves the HTTP API: it signs and verifies JWTs and hashes passwords (Argon); it neither produces nor consumes Kafka and has no object store.
+var requirements = config.Requirements{Postgres: true, Redis: true, JWT: true, Argon: true}
 
-	deps, err := infra.Connect(cfg)
-	if err != nil {
-		logger.Error("failed to connect to dependencies", slog.Any("error", err))
-		os.Exit(1)
-	}
+// loadConfig is the runtime's configuration loader for this binary.
+func loadConfig() (*config.Config, error) { return config.LoadWith(requirements) }
 
-	// Tracing and /metrics (ADR-0032). Never fails and never blocks start-up:
-	// with no OTEL_EXPORTER_OTLP_ENDPOINT, or an unreachable collector, the
-	// service simply runs untraced.
-	obs := deps.Observe(context.Background(), cfg, infra.ObserveOptions{Service: "identity-api", Outbox: true})
-
-	r, err := router.NewWithOptions(router.Options{
-		Env:            cfg.Env,
-		AllowedOrigins: cfg.CORSAllowedOrigins,
-		TrustedProxies: cfg.TrustedProxies,
-		MaxBodyBytes:   cfg.MaxBodyBytes,
-		HSTS:           cfg.EnableHSTS,
-		Observe:        obs.Middleware(),
-	})
-	if err != nil {
-		logger.Error("invalid router configuration", slog.Any("error", err))
-		os.Exit(1)
-	}
-	router.RegisterHealth(r, deps.HealthCheckers())
-	obs.RegisterMetricsRoute(r) // unauthenticated by design; see libs/infra Observability
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	registerRoutes(ctx, r, deps, cfg)
-
-	srv := router.NewServer(fmt.Sprintf(":%d", cfg.HTTPPort), r, router.ServerOptions{
-		ReadTimeout:  cfg.HTTPReadTimeout,
-		WriteTimeout: cfg.HTTPWriteTimeout,
-		IdleTimeout:  cfg.HTTPIdleTimeout,
-	})
-
-	go func() {
-		logger.Info("identity-api listening", slog.Int("port", cfg.HTTPPort))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("identity-api server error", slog.Any("error", err))
-			os.Exit(1)
-		}
-	}()
-
-	<-ctx.Done()
-	logger.Info("shutting down identity-api")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("graceful shutdown failed", slog.Any("error", err))
-	}
-	// Flush buffered spans after the last request; bounded so a collector
-	// that is down cannot hold the process open.
-	flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer flushCancel()
-	obs.Shutdown(flushCtx)
+// options is the runtime configuration of this binary.
+func options() []runtime.Option {
+	return []runtime.Option{runtime.WithDependencies(infra.Connect), runtime.WithConfig(loadConfig), runtime.WithOutbox()}
 }

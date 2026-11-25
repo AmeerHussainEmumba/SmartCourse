@@ -2,7 +2,9 @@
 
 A thin wrapper over [Asynq](https://pkg.go.dev/github.com/hibiken/asynq) (Redis-backed job queue) for SmartCourse background jobs: ADR-0013 (why Asynq), ADR-0014 (Kafka to Asynq handoff for notifications only), RFC §6.6, §6.7, §10.2, §12.3.
 
-Built against Asynq v0.26.0 (MIT). Pure Go, no cgo. It depends on no other SmartCourse module (testenv only in tests), and not on `libs/telemetry` or `libs/mongostore`: callers wire metrics and failed-event parking through the hooks below.
+Built against Asynq v0.26.0 (MIT). Pure Go, no cgo. Its non-test imports of other SmartCourse modules are `libs/logging` and `libs/telemetry` (spans, the `traceparent` task header, `Inspector.Gauges`); it does not import `libs/mongostore`: callers wire failed-event parking through the hooks below. (`testenv` is test-only.)
+
+**Used by** the workers that run Asynq: `identity-worker`, `course-worker`, `analytics-worker` and `notification-worker` (each in its own queue namespace, see below), directly and through `libs/jobs`.
 
 ## Client: idempotent enqueue
 
@@ -49,6 +51,19 @@ err := srv.Run(ctx) // blocks; cancel ctx to drain
 - **Graceful shutdown**: cancelling the context to `Run` stops pulling new tasks and waits up to `ShutdownTimeout` for in-flight handlers. At the deadline their contexts are cancelled and the tasks return to the queue to be retried (at-least-once, so handlers must be idempotent).
 - **OnExhausted** is called once, on the final failed attempt (retries used up, or the handler returned `asynqx.SkipRetry`), before Asynq archives the task. A task whose handler returns `asynq.RevokeTask` is a deliberate discard and does not call it. If the process dies between the final attempt and the hook, the hook is not replayed.
 - **Panics** in a handler are recovered and returned as an error wrapping `asynqx.ErrPanic`: an ordinary failure (retry, then `OnExhausted`), never a crash. `Server.PanicCount()` counts them.
+
+## Queue namespaces
+
+Services that share one Redis database must not share queue names: a server of service A pulls B's task, finds no handler and archives it (lost work). Set the namespace once per service, to its name:
+
+```go
+ss, _ := asynqx.NewServers(asynqx.ServersConfig{Redis: redis, Namespace: "course", ...})
+sc, _ := asynqx.NewScheduler(asynqx.SchedulerConfig{Redis: redis, Namespace: "course"})
+c := asynqx.NewClient(redis, asynqx.WithNamespace("course"))
+i := asynqx.NewInspector(redis, asynqx.WithNamespace("course"))
+```
+
+Callers keep the logical names (`QueueCritical`, ...) in `Pools`, `Register`, `Job.Queue` and `Entry.Queue`; Redis holds `course:critical` etc. The prefixed name is reported back (`Servers.Queues()`, `Result.Queue`, `QueueStats.Queue`, the `queue` metric label) and is rejected as an input, so another namespace's queue cannot be named. Tick task IDs include the namespace (`TickIDIn`), so the same job name scheduled by two services does not dedupe. A namespace is `[a-z][a-z0-9_-]{0,31}` or empty (no prefix, the default).
 
 ## Servers: one pool per queue
 

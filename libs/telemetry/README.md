@@ -1,6 +1,6 @@
 # libs/telemetry
 
-OpenTelemetry tracing, W3C trace-context helpers for the event envelope, Gin middleware and Prometheus metrics (ADR-0032, RFC §12). Pure Go, no cgo. Wired into identity-api, course-api, analytics-api and the worker through `libs/infra` (`Dependencies.Observe`); see "Wiring" below.
+OpenTelemetry tracing, W3C trace-context helpers for the event envelope, Gin middleware and Prometheus metrics (ADR-0032, RFC §12). Pure Go, no cgo. Wired into every binary through `libs/runtime` (which builds `libs/infra/observe`, or `libs/infra` `Dependencies.Observe` when the binary has a database); see "Wiring" below. Imported directly (spans, metrics, lag and queue gauges) by `identity-worker`, `course-worker`, `analytics-worker`, `notification-worker` and `audit-worker`.
 
 ## Tracing
 
@@ -129,7 +129,7 @@ The OTLP/HTTP exporter links `google.golang.org/grpc` and protobuf (for status c
 
 ## Wiring (Phase 7)
 
-`libs/infra.Dependencies.Observe(ctx, cfg, ObserveOptions)` builds everything from `config.Telemetry` and hands back an `Observability` with `Middleware()` (for `router.Options.Observe`), `RegisterMetricsRoute(r)` and `Shutdown(ctx)`. It has no error return: tracing off, an invalid set-up or an unreachable collector never stops or delays a service.
+`libs/runtime` makes one call per binary: `libs/infra.Dependencies.Observe(ctx, cfg, ObserveOptions)` (or `observe.New` for a binary with no database) builds everything from `config.Telemetry` and hands back an `Observability` with `Middleware()` (for `router.Options.Observe`), `MetricsHandler()` and `Shutdown(ctx)`. It has no error return: tracing off, an invalid set-up or an unreachable collector never stops or delays a service.
 
 | Concern | Behaviour |
 |---|---|
@@ -137,11 +137,13 @@ The OTLP/HTTP exporter links `google.golang.org/grpc` and protobuf (for status c
 | DB / Redis spans | GORM callbacks and a go-redis hook, registered only when tracing is on, and a span only for a call made under a request span (no root trace per relay poll). Redis spans carry the command name, never the key. |
 | Temporal | `libs/temporal.Observe`: the `go.temporal.io/sdk/contrib/opentelemetry` interceptor (v0.8.1, MIT) and the `workflow_*` counters. |
 | Probes | `/metrics`, `/health/live`, `/health/ready` are not traced (a scrape every 15 s would bury real traces). They still count in RED. |
-| Metrics a binary never feeds | Not exported (analytics-api has no `outbox_backlog`; only the worker has `workflow_*`), so a constant 0 never reads as "nothing waiting". |
-| Outbox gauges | One aggregate query over the partial index of unpublished rows, run by a 15 s poller (never by a scrape, so scrape rate cannot load Postgres). Exposed by identity-api, course-api and the worker (the table is shared, aggregate with `max()`). |
-| Asynq | `Inspector.Gauges` in the worker: `asynq_queue_depth` = pending + scheduled, `asynq_retry_count` = retry set. Asynq jobs also get a span and a `job_id` logger (`libs/asynqx`). |
+| Metrics a binary never feeds | Not exported (analytics has no `outbox_backlog`; only `publishing-worker` has `workflow_*`), so a constant 0 never reads as "nothing waiting". |
+| Outbox gauges | One aggregate query over the partial index of unpublished rows, run by a 15 s poller (never by a scrape, so scrape rate cannot load Postgres). Exposed (`runtime.WithOutbox()`) by `identity-api`, `identity-worker`, `course-api` and `course-worker`, each over its own service's `outbox` table (unqualified, resolved by `search_path`), so there is no shared table to aggregate across services; with several replicas of one service aggregate with `max()`. |
+| Asynq | `Inspector.Gauges` in the workers that run Asynq (`course-worker`, `identity-worker`): `asynq_queue_depth` = pending + scheduled, `asynq_retry_count` = retry set. Asynq jobs also get a span and a `job_id` logger (`libs/asynqx`). |
 | Cardinality | `CheckLabels(registry)` fails on any label outside `route, method, status, queue, group, topic, consumer, outcome`; every service integration test runs it. |
 
-`/metrics` is unauthenticated by design (Prometheus scrapes it). It exposes route templates, counters and process statistics, never request data, but it is not for the internet: compose publishes it on `127.0.0.1` only, the worker serves it on its own `METRICS_HTTP_ADDR` listener (not the authenticated admin port), and a real deployment must keep it on the internal network or filter it at the ingress.
+**Internal listener.** Every binary serves `/metrics`, `/health/live` and `/health/ready` on its own internal listener, `METRICS_HTTP_ADDR` (default `:9100`), through `libs/runtime` (`runtime.Main`). The registry behind `/metrics` is the `Observability`'s (`MetricsHandler()`). `/metrics` is never on a public port: `RegisterMetricsRoute` was removed, and each API binary has a test that its public router answers 404 for it (`docs/plans/microservices-split.md` §6).
 
-Since the events step the relay, Kafka produce/consume and Asynq enqueue/job spans continue the same trace (`services/worker`, `libs/relay` observer, `libs/asynqx`); the test is `TestWorker_OneTraceAcrossPipeline`. Not verified: tail sampling (not built) and any load or overhead measurement. Verified live on 2026-11-24 in a disposable compose project: a `POST /api/v1/courses` and an archive request through course-api each produced a Jaeger trace with the HTTP server span and Redis and Postgres child spans (the archive trace includes `INSERT outbox`), and the outbox row carried that trace id and the actor.
+`/metrics` is unauthenticated by design (Prometheus scrapes it). It exposes route templates, counters and process statistics, never request data, but it is not for the internet: compose publishes it on `127.0.0.1` only, every binary serves it on its own `METRICS_HTTP_ADDR` listener (not the public API port), and a real deployment must keep it on the internal network or filter it at the ingress.
+
+Since the events step the relay, Kafka produce/consume and Asynq enqueue/job spans continue the same trace (`libs/relay` observer, `libs/eventbus`, `libs/asynqx`). This module's tests prove the chain on a simulated pipeline; the end-to-end scenario across the real binaries (`TestE2E_E02_OneTraceAcrossPipeline`) is a skipped stub in `test/e2e`, pending a port to the ten-binary harness (the old body is in `test/e2e/legacy`), so the cross-binary trace is not currently verified in CI. Not verified: tail sampling (not built) and any load or overhead measurement. Verified live on 2026-11-24 in a disposable compose project: a `POST /api/v1/courses` and an archive request through course-api each produced a Jaeger trace with the HTTP server span and Redis and Postgres child spans (the archive trace includes `INSERT outbox`), and the outbox row carried that trace id and the actor.

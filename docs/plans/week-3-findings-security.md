@@ -2,6 +2,21 @@
 
 **Date:** 2026-11-25 · **Branch:** worktree of `week3/start-now` (049f561) · **Companion to:** `docs/plans/module-split-findings.md` (first pass), `docs/plans/week-3.md` sections 9 and 10, DR-022 to DR-026
 
+> **Superseded in part by the microservices split (ADR-0033..0035, `docs/plans/microservices-split.md`), 2026-11-26.** This register describes the code as of 2026-11-25 and is kept as written. The "worker admin surface" (`services/worker/admin`, port 8093) is now the audit service's `audit-api` (host port 8093, `services/audit/admin`), which uses `RequireFreshPrivilegeStrict` (fail closed on a Redis miss, per its own source comment). Paths moved as follows (verified in the tree on 2026-11-26; whether each finding is fixed is **not** re-verified here):
+>
+> | Finding | Old path | Now |
+> |---|---|---|
+> | S-01, O-1, O-2, O-4 (admin surface) | `services/worker/admin/admin.go` | `services/audit/admin/admin.go` (`audit-api`) |
+> | S-08, S-10, O-12 (notification templates and handlers) | `services/worker/notification/{templates,handlers}.go` | `services/notification/notification/{templates,handlers}.go` (`notification-worker`) |
+> | S-08 (`failPublish`) | `services/course/workflows/workflow.go` | `services/publishing/publish/workflow.go` (`publishing-worker`); the activity error text originates in `services/course/course/assets.go` and runs in `course-worker` |
+> | S-11 (`/metrics` on the public API port), O-8 (`:9100` on all interfaces) | `libs/infra/observability.go` (`RegisterMetricsRoute`), each API's `main`/wire; `libs/config/admin.go` | every binary serves `/metrics`, `/health/live` and `/health/ready` on an internal listener (`METRICS_HTTP_ADDR`, `libs/runtime/server.go`); `RegisterMetricsRoute` and `libs/config/admin.go` no longer exist. Compose publishes the internal listeners on 127.0.0.1 ports 9101 to 9104 (APIs) and 9111 to 9116 (workers) |
+> | S-13 (floating image tags) | `docker-compose.yml` `minio/minio:latest` etc. | no `:latest` tag remains in `docker-compose.yml` as of 2026-11-26; MinIO and `mc` are the `pgsty` fork pinned by tag and digest (ADR-0019 amendment) |
+> | S-15 (Mongo, Kafka, Registry without authentication) | `docker-compose.yml:403` | same services, compose line numbers have moved |
+> | O-10 (`Dockerfile.worker` copies `libs/testenv`) | `Dockerfile.worker` | there is no `Dockerfile.worker`; one `Dockerfile.<binary>` per long-running binary (ten, plus `Dockerfile.schema-init`; the `identity-admin` CLI is built into `Dockerfile.identity-api`); not re-read for `libs/testenv` |
+> | S-03, S-04, S-05, O-5 (idempotency) | `libs/idempotency`, `platform.idempotency_keys` | same library; table is `course.idempotency_keys` |
+> | S-06, S-07, S-09, O-6, all others | `services/{analytics,course,identity}/...`, `libs/...` | unchanged paths |
+> | Run commands below | `services/worker` (admin, notification) | `services/audit` (`./admin/`), `services/notification` (`./notification/`); the E2E tier now runs the ten-binary topology, and the older adversarial E2E files are in `test/e2e/legacy/` |
+
 ## Purpose and rules of engagement
 
 A security-minded tester (malicious student, malicious instructor, admin with a stale token, network attacker) tried to break the finished Week 3 layer: worker admin HTTP surface, `/metrics`, certificates, analytics, `libs/idempotency`, asset upload, notification templates and SMTP, the dead-letter store and replay, compose exposure, JWT handling and token staleness, trace and request-id headers, error bodies, dependencies, config defaults, Dockerfiles, the E2E harness, and the project's own guard scripts. Authorised review of our own system on disposable local infrastructure only (testcontainers and the container harness). **No production code was changed.**
@@ -17,8 +32,8 @@ Run commands (from the repository root):
 
 | Module | Command |
 |---|---|
-| `services/worker` (admin) | `cd services/worker && go test -tags='integration bugrepro' -run 'Bugrepro\|Adversarial' ./admin/` |
-| `services/worker` (notification) | `cd services/worker && go test -tags=bugrepro -run 'Bugrepro\|Adversarial' ./notification/` |
+| `services/worker` (admin) *(now `services/audit`)* | `cd services/worker && go test -tags='integration bugrepro' -run 'Bugrepro\|Adversarial' ./admin/` |
+| `services/worker` (notification) *(now `services/notification`)* | `cd services/worker && go test -tags=bugrepro -run 'Bugrepro\|Adversarial' ./notification/` |
 | `libs/idempotency` | `cd libs/idempotency && go test -tags='integration bugrepro' -run 'Bugrepro\|Adversarial' ./` |
 | `services/analytics` | `cd services/analytics && go test -tags='integration bugrepro' -run 'Bugrepro\|Adversarial' ./analytics/` |
 | `services/course` | `cd services/course && go test -tags='integration bugrepro' -run 'Bugrepro\|Adversarial' ./course/ ./certificate/` |

@@ -6,7 +6,7 @@
 // returned nil; per-aggregate order holds with several workers; an outage does
 // not use up an event's budget; a poison row does not hold other aggregates up
 // and is parked before it is dropped; a sink that refuses keeps the row. The
-// real Kafka versions are in services/worker/transport.
+// real Kafka versions are in libs/eventbus.
 package relay_test
 
 import (
@@ -23,7 +23,6 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 type publisherFunc func(ctx context.Context, evt relay.DecodedEvent) error
@@ -54,7 +53,7 @@ func unpublished(t *testing.T, db *gorm.DB) int64 {
 // The row must stay unpublished while the Publisher has not returned (the
 // broker has not acknowledged), and stay unpublished when it returns an error.
 func TestRelayPublish_MarkedPublishedOnlyAfterPublisherReturnsNil(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeFor(t, env.DB, uuid.New(), "t.ack", 0)
 
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -87,7 +86,7 @@ func TestRelayPublish_MarkedPublishedOnlyAfterPublisherReturnsNil(t *testing.T) 
 }
 
 func TestRelayPublish_PerAggregateOrderHoldsWithManyWorkers(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	const aggs, perAgg = 6, 12
 	ids := make([]uuid.UUID, aggs)
 	for i := range ids {
@@ -144,7 +143,7 @@ func TestRelayPublish_PerAggregateOrderHoldsWithManyWorkers(t *testing.T) {
 // of 2 the row survives many failed publishes, is never parked, and goes out
 // once the transport is back.
 func TestRelayPublish_TransientFailuresDoNotConsumeTheBudget(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeFor(t, env.DB, uuid.New(), "t.outage", 0)
 
 	var down atomic.Bool
@@ -183,7 +182,7 @@ func TestRelayPublish_TransientFailuresDoNotConsumeTheBudget(t *testing.T) {
 // other aggregates are not held up while it burns its budget; later rows of the
 // same aggregate wait for it, then go out in order.
 func TestRelayPublish_PoisonRowIsParkedAndDoesNotBlockOthers(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	poisonAgg, otherAgg := uuid.New(), uuid.New()
 	writeFor(t, env.DB, poisonAgg, "t.bad", 0)
 	writeFor(t, env.DB, poisonAgg, "t.good", 1)
@@ -234,7 +233,7 @@ func TestRelayPublish_PoisonRowIsParkedAndDoesNotBlockOthers(t *testing.T) {
 // published, and a sink that refuses leaves the row unpublished (counted, and
 // retried) until it accepts.
 func TestRelayDeadLetter_ParkedBeforeDrop_RefusedParkKeepsTheRow(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeTestEvents(t, env.DB, "t.dl", 1)
 
 	var accept atomic.Bool
@@ -284,7 +283,7 @@ func TestRelayDeadLetter_ParkedBeforeDrop_RefusedParkKeepsTheRow(t *testing.T) {
 
 // With no sink the relay keeps today's behaviour: log, keep last_error, drop.
 func TestRelayDeadLetter_NoSinkStillDropsAfterBudget(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeTestEvents(t, env.DB, "t.nosink", 1)
 	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(5*time.Millisecond), relay.WithMaxAttempts(2))
 	rl.Register(relay.NewHandler("c", []string{"t.nosink"}, func(context.Context, *gorm.DB, relay.DecodedEvent) error { return errFlaky }))
@@ -299,8 +298,8 @@ func TestRelayDeadLetter_NoSinkStillDropsAfterBudget(t *testing.T) {
 // In-process mode is untouched by the transport options: handlers run in the
 // relay, one effect per event, nothing is published anywhere.
 func TestRelayDeliver_IsIdempotentAndWritesProcessedEvents(t *testing.T) {
-	env := testenv.Setup(t)
-	createEffectsTable(t, env.DB)
+	env := setupCourse(t)
+	createEffectsTable(t, env.Owner)
 	h := effectHandler("deliver-test", "t.deliver")
 	evt := relay.DecodedEvent{EventID: uuid.New(), EventType: "t.deliver", OutboxID: 1}
 	for i := 0; i < 3; i++ {

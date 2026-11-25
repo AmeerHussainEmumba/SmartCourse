@@ -2,6 +2,8 @@
 
 The PostgreSQL connection (RFC §5.1 — Postgres is the single system of record). GORM for single-entity CRUD and simple associations; modules needing non-trivial joins or window functions use `db.Raw`/`db.Exec` directly rather than GORM associations (RFC §5.9, `differences-from-requirements.md` DR-004).
 
+**Used by** `libs/infra` (`Connect`) and `libs/testenv`; no service imports it directly. Every binary with a database reaches it through `libs/infra`, each connecting with its own per-service Postgres role (`POSTGRES_DSN`, `POSTGRES_SEARCH_PATH=<schema>,public`).
+
 ## What `Open` does beyond `gorm.Open`
 
 - **Sizes the connection pool against the configured budget** (`MaxOpenConns`/`MaxIdleConns`, RFC §13.2) — pool sizing is a hard rule here, not a tuning afterthought: `MaxOpenConns × replicas` has to stay under Postgres's `max_connections` with headroom for migrations and operators.

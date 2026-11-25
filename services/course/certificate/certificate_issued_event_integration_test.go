@@ -34,6 +34,7 @@ func issuedEvents(t *testing.T, db *gorm.DB, enrollmentID uuid.UUID) int64 {
 
 func TestIssue_WritesCertificateIssuedWithTheCertificate(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 	if err := deliver(t, env.DB, completedEvent(t, f.enrollmentID, f.studentID)); err != nil {
 		t.Fatal(err)
@@ -70,6 +71,7 @@ func TestIssue_WritesCertificateIssuedWithTheCertificate(t *testing.T) {
 
 func TestIssue_ReplayAndSkippedEventsWriteNoCertificateIssued(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 	evt := completedEvent(t, f.enrollmentID, f.studentID)
 	for range 3 {
@@ -103,6 +105,7 @@ func TestIssue_ReplayAndSkippedEventsWriteNoCertificateIssued(t *testing.T) {
 
 func TestIssue_TwentyConcurrentDeliveriesWriteOneCertificateIssued(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 	evt := completedEvent(t, f.enrollmentID, f.studentID)
 
@@ -130,6 +133,7 @@ func TestIssue_TwentyConcurrentDeliveriesWriteOneCertificateIssued(t *testing.T)
 // issuing leaves neither (ADR-0006).
 func TestIssue_RollbackLeavesNeitherCertificateNorEvent(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 	hs := certificate.Handlers()
 	boom := errors.New("later step failed")

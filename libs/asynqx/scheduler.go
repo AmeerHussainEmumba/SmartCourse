@@ -34,6 +34,10 @@ var ErrDuplicateEntry = errors.New("asynqx: scheduler entry already registered")
 // SchedulerConfig configures a Scheduler.
 type SchedulerConfig struct {
 	Redis RedisOpt
+	// Namespace prefixes the queues the ticks are enqueued on and the tick task
+	// IDs (see Namespace). It must equal the Servers' namespace. Two services
+	// scheduling the same entry name do not dedupe against each other.
+	Namespace Namespace
 	// Location interprets cron specs; nil means UTC.
 	Location *time.Location
 	// TickRetention overrides DefaultTickRetention.
@@ -94,6 +98,9 @@ func NewScheduler(cfg SchedulerConfig) (*Scheduler, error) {
 	if cfg.Redis == nil {
 		return nil, errors.New("asynqx: SchedulerConfig.Redis is required")
 	}
+	if err := ValidateNamespace(cfg.Namespace); err != nil {
+		return nil, err
+	}
 	if cfg.TickRetention < 0 {
 		return nil, errors.New("asynqx: negative TickRetention")
 	}
@@ -111,7 +118,7 @@ func NewScheduler(cfg SchedulerConfig) (*Scheduler, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
 		cfg: cfg, log: log, loc: loc,
-		client: NewClient(cfg.Redis),
+		client: NewClient(cfg.Redis, WithNamespace(cfg.Namespace)),
 		cron:   cron.New(cron.WithLocation(loc)),
 		names:  map[string]struct{}{},
 		ctx:    ctx, cancel: cancel,
@@ -137,7 +144,7 @@ func (sc *Scheduler) Register(e Entry) error {
 		queue = QueueLow
 	}
 	proto := Job{Type: e.Type, Payload: e.Payload, ID: "validate", Queue: queue, MaxRetry: e.MaxRetry, Timeout: e.Timeout, Retention: sc.cfg.TickRetention}
-	if _, _, err := proto.options(); err != nil {
+	if _, _, err := proto.optionsIn(sc.cfg.Namespace); err != nil {
 		return err
 	}
 
@@ -154,10 +161,20 @@ func (sc *Scheduler) Register(e Entry) error {
 	return nil
 }
 
-// TickID returns the task ID a replica enqueues for the tick at slot.
-// Exported so callers and tests can assert on it.
-func TickID(name string, slot time.Time) string {
-	return DeterministicID("asynqx-tick", name, strconv.FormatInt(slot.Unix(), 10))
+// Namespace is the queue prefix the scheduler enqueues under ("" for none).
+func (sc *Scheduler) Namespace() Namespace { return sc.cfg.Namespace }
+
+// TickID returns the task ID a replica enqueues for the tick at slot in the
+// empty namespace. Exported so callers and tests can assert on it.
+func TickID(name string, slot time.Time) string { return TickIDIn("", name, slot) }
+
+// TickIDIn is TickID for a namespaced scheduler: the namespace is part of the
+// ID, so the same entry name in two namespaces never shares a tick ID.
+func TickIDIn(ns Namespace, name string, slot time.Time) string {
+	if ns == "" {
+		return DeterministicID("asynqx-tick", name, strconv.FormatInt(slot.Unix(), 10))
+	}
+	return DeterministicID("asynqx-tick", ns, name, strconv.FormatInt(slot.Unix(), 10))
 }
 
 // tickSlot maps the moment a tick fired to the scheduled tick time: the first
@@ -168,7 +185,7 @@ func tickSlot(s cron.Schedule, now time.Time) time.Time {
 }
 
 func (sc *Scheduler) fire(e Entry, sched cron.Schedule, job Job) {
-	job.ID = TickID(e.Name, tickSlot(sched, time.Now().In(sc.loc)))
+	job.ID = TickIDIn(sc.cfg.Namespace, e.Name, tickSlot(sched, time.Now().In(sc.loc)))
 	if sc.cfg.OnAttempt != nil {
 		sc.cfg.OnAttempt(e.Name, job.ID)
 	}

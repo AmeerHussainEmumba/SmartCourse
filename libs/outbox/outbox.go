@@ -23,8 +23,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// Row mirrors the `outbox` table (migrations/platform/000002_platform.up.sql
-// and 000003_outbox_trace_actor.up.sql).
+// Row mirrors the `outbox` table (per service: migrations/identity/000002_outbox
+// and migrations/course/000008_outbox_inbox_idempotency).
 type Row struct {
 	ID            int64 `gorm:"primaryKey"`
 	EventID       uuid.UUID

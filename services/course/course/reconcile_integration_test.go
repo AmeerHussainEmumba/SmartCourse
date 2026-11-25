@@ -97,6 +97,7 @@ func TestReconcile_StateMatrix(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			env := testenv.Setup(t)
+			env.DB = env.ServiceDB(t, "course")
 			instr := seedInstructor(t, env)
 			fake := &reconcileFake{describe: func(string) (enumspb.WorkflowExecutionStatus, error) { return tc.status, tc.err }}
 			svc := course.NewService(course.NewRepository(env.DB), env.RDB, fake, "q")
@@ -128,6 +129,7 @@ func TestReconcile_StateMatrix(t *testing.T) {
 // may be about to start.
 func TestReconcile_FreshClaimNotTouched(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	fake := &reconcileFake{describe: func(string) (enumspb.WorkflowExecutionStatus, error) {
 		return 0, serviceerror.NewNotFound("nope")
@@ -154,6 +156,7 @@ func TestReconcile_FreshClaimNotTouched(t *testing.T) {
 // Versions that are not `publishing` are never touched.
 func TestReconcile_OnlyPublishingVersions(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	fake := &reconcileFake{describe: func(string) (enumspb.WorkflowExecutionStatus, error) {
 		return 0, serviceerror.NewNotFound("nope")
@@ -181,6 +184,7 @@ func TestReconcile_OnlyPublishingVersions(t *testing.T) {
 // and a second reconciliation pass is a no-op.
 func TestReconcile_ReleasesAndRepublishSucceedsWithoutLeaseWait(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	fake := &reconcileFake{describe: func(string) (enumspb.WorkflowExecutionStatus, error) {
 		return 0, serviceerror.NewNotFound("nope")
@@ -214,6 +218,7 @@ func TestReconcile_ReleasesAndRepublishSucceedsWithoutLeaseWait(t *testing.T) {
 // workflow ID; they are still reconciled.
 func TestReconcile_LegacyRowWithoutTimestampOrWorkflowID(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	fake := &reconcileFake{describe: func(string) (enumspb.WorkflowExecutionStatus, error) {
 		t.Fatal("must not describe an empty workflow ID")
@@ -239,6 +244,7 @@ func TestReconcile_LegacyRowWithoutTimestampOrWorkflowID(t *testing.T) {
 // must lose: the version stays `ready` and is never flipped to publish_failed.
 func TestReconcile_CompletionBetweenReadAndRelease_NotOverwritten(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	var svc *course.Service
 	var courseID, vid uuid.UUID
@@ -271,6 +277,7 @@ func TestReconcile_CompletionBetweenReadAndRelease_NotOverwritten(t *testing.T) 
 // version, and no errors.
 func TestReconcile_ConcurrentWithCompletion(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	fake := &reconcileFake{describe: func(string) (enumspb.WorkflowExecutionStatus, error) {
 		return enumspb.WORKFLOW_EXECUTION_STATUS_TERMINATED, nil

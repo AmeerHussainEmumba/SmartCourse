@@ -68,12 +68,13 @@ func certificateColumns(t *testing.T, db *gorm.DB) map[string]bool {
 
 func TestMigration000007_DownThenUpAgain(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 	if err := deliver(t, env.DB, completedEvent(t, f.enrollmentID, f.studentID)); err != nil {
 		t.Fatalf("deliver: %v", err)
 	}
 
-	execScript(t, env.DB, "000007_certificates.down.sql")
+	execScript(t, env.Owner, "000007_certificates.down.sql")
 	cols := certificateColumns(t, env.DB)
 	for _, gone := range []string{"student_id", "course_id", "course_version_id"} {
 		if cols[gone] {
@@ -89,7 +90,7 @@ func TestMigration000007_DownThenUpAgain(t *testing.T) {
 		t.Fatalf("down must keep existing certificate rows, got %d", n)
 	}
 
-	execScript(t, env.DB, "000007_certificates.up.sql")
+	execScript(t, env.Owner, "000007_certificates.up.sql")
 	var studentID, courseID string
 	if err := env.DB.Raw(`SELECT student_id::text, course_id::text FROM certificates WHERE enrollment_id = ?`, f.enrollmentID).
 		Row().Scan(&studentID, &courseID); err != nil {
@@ -100,6 +101,6 @@ func TestMigration000007_DownThenUpAgain(t *testing.T) {
 	}
 
 	// Reversible again, so a second down in a rollback rehearsal also works.
-	execScript(t, env.DB, "000007_certificates.down.sql")
-	execScript(t, env.DB, "000007_certificates.up.sql")
+	execScript(t, env.Owner, "000007_certificates.down.sql")
+	execScript(t, env.Owner, "000007_certificates.up.sql")
 }

@@ -19,7 +19,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 // ADR-0006 / relay.go poll(): "FOR UPDATE SKIP LOCKED lets multiple relay
@@ -33,7 +32,7 @@ import (
 // invocation for the same event shows up (or 2s pass). If SKIP LOCKED worked
 // as documented the second invocation can never happen.
 func TestBugrepro_TwoRelays_SameEventRunsConcurrently(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeTestEvents(t, env.DB, "t.dup", 1)
 
 	var inHandler atomic.Int32
@@ -90,7 +89,7 @@ func TestBugrepro_TwoRelays_SameEventRunsConcurrently(t *testing.T) {
 // SURVIVE a panicking handler.
 func TestBugrepro_HandlerPanicCrashesWholeProcess(t *testing.T) {
 	if os.Getenv("RELAY_PANIC_CHILD") == "1" {
-		env := testenv.Setup(t)
+		env := setupCourse(t)
 		writeTestEvents(t, env.DB, "t.panic", 1)
 		rl := relay.New(env.DB, relay.WithPollInterval(10*time.Millisecond), relay.WithMaxAttempts(1))
 		rl.Register(relay.NewHandler("panicky", []string{"t.panic"}, func(context.Context, *gorm.DB, relay.DecodedEvent) error {
@@ -129,7 +128,7 @@ func tail(s string, n int) string {
 // the row (no dead-letter store exists; ADR/relay.go admit that). The data
 // needed to diagnose or manually replay it is only in a log line.
 func TestBugrepro_GivenUpEventRecordsNoLastError(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeTestEvents(t, env.DB, "t.gaveup", 1)
 	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(10*time.Millisecond), relay.WithMaxAttempts(2))
 	rl.Register(relay.NewHandler("gu", []string{"t.gaveup"}, func(context.Context, *gorm.DB, relay.DecodedEvent) error { return errFlaky }))

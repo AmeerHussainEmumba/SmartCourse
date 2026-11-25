@@ -24,6 +24,7 @@ import (
 // Without last_event_id's guard, whichever commits last would win.
 func TestUpsertInstructorMirror_IgnoresOutOfOrderDelivery(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	ctx := context.Background()
 	userID := uuid.Must(uuid.NewV7())
 

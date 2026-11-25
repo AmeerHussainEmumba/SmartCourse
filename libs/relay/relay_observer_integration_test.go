@@ -22,7 +22,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 type obsKey struct{}
@@ -54,7 +53,7 @@ func (o *recObserver) snapshot() ([]relay.DecodedEvent, []finished) {
 }
 
 func TestRelayObserver_PublishModeContextReachesPublisher(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeFor(t, env.DB, uuid.New(), "t.obs", 0)
 
 	obs := &recObserver{}
@@ -79,7 +78,7 @@ func TestRelayObserver_PublishModeContextReachesPublisher(t *testing.T) {
 }
 
 func TestRelayObserver_ProcessModeAndFailureOutcome(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeFor(t, env.DB, uuid.New(), "t.proc", 0)
 
 	obs := &recObserver{}
@@ -110,7 +109,7 @@ func TestRelayObserver_ProcessModeAndFailureOutcome(t *testing.T) {
 }
 
 func TestRelayObserver_PanickingObserverDoesNotStopDelivery(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeFor(t, env.DB, uuid.New(), "t.panic", 0)
 	writeFor(t, env.DB, uuid.New(), "t.panic", 1)
 
@@ -136,7 +135,7 @@ func TestRelayObserver_PanickingObserverDoesNotStopDelivery(t *testing.T) {
 }
 
 func TestRelayHandlerHook_SeparatesProcessedDuplicateFailed(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	agg := uuid.New()
 	writeFor(t, env.DB, agg, "t.hook", 0)
 
@@ -187,7 +186,7 @@ func TestRelayHandlerHook_SeparatesProcessedDuplicateFailed(t *testing.T) {
 
 // The relay's own log lines about a row carry event_id (RFC §12.4).
 func TestRelayLogs_CarryEventID(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	var buf syncLog
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))

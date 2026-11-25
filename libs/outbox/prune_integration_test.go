@@ -45,7 +45,7 @@ func exists(t *testing.T, env *testenv.Env, id int64) bool {
 }
 
 func TestPrune_DeletesOnlyOldPublishedRows(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	ctx := context.Background()
 	day := 24 * time.Hour
 
@@ -72,7 +72,7 @@ func TestPrune_DeletesOnlyOldPublishedRows(t *testing.T) {
 }
 
 func TestPrune_DrainsMoreThanOneBatch(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	if err := env.DB.Exec(`
 		INSERT INTO outbox (event_id, aggregate_type, aggregate_id, event_type, schema_version, payload, published_at)
 		SELECT gen_random_uuid(), 'x', gen_random_uuid(), 'x.y', 1, '{}', now() - interval '10 days'
@@ -94,7 +94,7 @@ func TestPrune_DrainsMoreThanOneBatch(t *testing.T) {
 }
 
 func TestPrune_RejectsNonPositiveRetention(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	old := insertRow(t, env, 10*24*time.Hour, "")
 	for _, d := range []time.Duration{0, -time.Hour} {
 		if _, err := outbox.Prune(context.Background(), env.DB, d); err == nil {

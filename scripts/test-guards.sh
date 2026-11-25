@@ -76,7 +76,7 @@ expect_pass "check-module-graph on the clean tree"      "$work/base" scripts/che
 expect_pass "check-link-graph on the clean tree"        "$work/base" scripts/check-link-graph.sh
 expect_pass "check-dockerfile-modules on the clean tree" "$work/base" scripts/check-dockerfile-modules.sh
 expect_pass "check-dev-defaults on the clean tree (S-12f: it used to exit 1 here)" "$work/base" scripts/check-dev-defaults.sh
-for m in services/identity services/course services/analytics services/worker; do
+for m in services/identity services/course services/analytics services/notification services/publishing services/audit; do
   expect_pass "standalone build of $m (GOWORK=off)" "$work/base/$m" env GOWORK=off go build ./...
 done
 
@@ -188,8 +188,8 @@ d=$(fresh c14)
 perl -0pi -e 's/(func TestE2E_E03_DuplicateDelivery\(t \*testing\.T\) \{\n)/$1\tt.Skip("pending: Phase 3 - back to a skip")\n/' "$d/test/e2e/scenarios_pipeline_e2e_test.go"
 expect_fail "pending-e2e guard fails when E03 goes back to a skip" "FAIL E03 is still skipped as pending" "$d" scripts/check-pending-e2e.sh
 d=$(fresh c15)
-perl -0pi -e 's/(ALLOWED=")/$1\nE08 Phase-8/' "$d/scripts/check-pending-e2e.sh"
-expect_fail "pending-e2e guard fails when an allowlisted spec is implemented but still listed" "FAIL E08 is implemented .* remove its line" "$d" scripts/check-pending-e2e.sh
+perl -0pi -e 's/(ALLOWED=")/$1\nE03 Phase-3/' "$d/scripts/check-pending-e2e.sh"
+expect_fail "pending-e2e guard fails when an allowlisted spec is implemented but still listed" "FAIL E03 is implemented .* remove its line" "$d" scripts/check-pending-e2e.sh
 d=$(fresh c16)
 perl -0pi -e 's/func TestE2E_E05_KafkaDownThenUp/func notASpec_E05_KafkaDownThenUp/' "$d/test/e2e/scenarios_resilience_e2e_test.go"
 expect_fail "pending-e2e guard fails when a spec is deleted" "FAIL E05: found 0 spec functions" "$d" scripts/check-pending-e2e.sh
@@ -219,7 +219,7 @@ expect_fail "dev-defaults C: []byte conversion of a credential" "FAIL \[C\]" "$d
 d=$(fresh dd9); printf 'package inject\n\nvar cfg = struct{ Password string }{Password: "hunter2hunter2"}\n' >"$d/libs/errors/zz_inject.go"
 expect_fail "dev-defaults C: struct field credential" "FAIL \[C\]" "$d" $DD
 # D: a comment mentioning APP_ENV is not a refusal to seed in production
-d=$(fresh dd10); perl -0pi -e 's/if cfg\.Env != "development" \{/if false \/* APP_ENV cfg.Env production *\/ {/' "$d/tools/seed/main.go"
+d=$(fresh dd10); perl -0pi -e 's/env != "" && env != "development"/false \/* APP_ENV env production *\//' "$d/tools/seed/main.go"
 expect_fail "dev-defaults D: the environment check disabled, comments still mention APP_ENV (S-12b)" "FAIL \[D\]" "$d" $DD
 # G: ports published beyond loopback, inline and list form
 d=$(fresh dd11); perl -0pi -e 's/\["127\.0\.0\.1:5433:5432"\]/["5433:5432"]/' "$d/docker-compose.yml"

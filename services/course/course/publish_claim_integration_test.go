@@ -34,6 +34,7 @@ func isPublishInProgress(err error) bool {
 
 func TestPublishClaim_SecondPublishWhilePublishing_Returns409(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	ctx := context.Background()
 	starts := 0
@@ -61,6 +62,7 @@ func TestPublishClaim_SecondPublishWhilePublishing_Returns409(t *testing.T) {
 // nothing the workflow does can be overwritten afterwards.
 func TestPublishClaim_StateIsPublishingBeforeWorkflowStarts(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	var courseID, draftID any
 	var stateAtStart string
@@ -88,6 +90,7 @@ func TestPublishClaim_StateIsPublishingBeforeWorkflowStarts(t *testing.T) {
 // version stuck "publishing" with a finished workflow.
 func TestPublishClaim_FastFailingWorkflow_FailureNotOverwritten(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	var draftID any
 	fake := &fakeTemporalClient{executeWorkflow: func(_ context.Context, o temporalclient.StartWorkflowOptions, _ any, _ ...any) (temporalclient.WorkflowRun, error) {
@@ -115,6 +118,7 @@ func TestPublishClaim_FastFailingWorkflow_FailureNotOverwritten(t *testing.T) {
 // not wedged in `publishing`, and a retry works.
 func TestPublishClaim_WorkflowStartFails_ReleasesClaimAndRetrySucceeds(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	fail := true
 	fake := &fakeTemporalClient{executeWorkflow: func(_ context.Context, o temporalclient.StartWorkflowOptions, _ any, _ ...any) (temporalclient.WorkflowRun, error) {
@@ -144,6 +148,7 @@ func TestPublishClaim_WorkflowStartFails_ReleasesClaimAndRetrySucceeds(t *testin
 // failure (state and message), not a blank draft.
 func TestPublishClaim_StartFailsOnRetry_RestoresPreviousFailure(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	fake := &fakeTemporalClient{executeWorkflow: func(_ context.Context, _ temporalclient.StartWorkflowOptions, _ any, _ ...any) (temporalclient.WorkflowRun, error) {
 		return nil, errors.New("temporal unreachable")
@@ -167,6 +172,7 @@ func TestPublishClaim_StartFailsOnRetry_RestoresPreviousFailure(t *testing.T) {
 // claim must still be refused.
 func TestPublishClaim_StaleClaimIsReclaimable_FreshOneIsNot(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	starts := 0
 	fake := &fakeTemporalClient{executeWorkflow: func(_ context.Context, o temporalclient.StartWorkflowOptions, _ any, _ ...any) (temporalclient.WorkflowRun, error) {

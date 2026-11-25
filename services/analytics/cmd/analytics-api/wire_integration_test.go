@@ -17,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
@@ -41,6 +42,7 @@ type harness struct {
 	t   *testing.T
 	r   *gin.Engine
 	cfg *config.Config
+	rdb *redis.Client
 }
 
 func newHarness(t *testing.T, pg *testenv.Env, mongoURI string) *harness {
@@ -50,11 +52,17 @@ func newHarness(t *testing.T, pg *testenv.Env, mongoURI string) *harness {
 	r := gin.New()
 	closeFn := registerRoutes(r, &infra.Dependencies{DB: pg.DB, RDB: pg.RDB}, cfg)
 	t.Cleanup(func() { closeFn(context.Background()) })
-	return &harness{t: t, r: r, cfg: cfg}
+	return &harness{t: t, r: r, cfg: cfg, rdb: pg.RDB}
 }
 
 func (h *harness) get(path, role string) *httptest.ResponseRecorder {
-	tok, err := auth.IssueAccessToken(h.cfg.JWT, uuid.New(), role, 1)
+	id := uuid.New()
+	// The issues route checks the token version against Redis and fails closed
+	// when the key is missing, so a valid session has the key set.
+	if err := h.rdb.Set(context.Background(), auth.TokenVersionRedisKey(id.String()), 1, 0).Err(); err != nil {
+		h.t.Fatal(err)
+	}
+	tok, err := auth.IssueAccessToken(h.cfg.JWT, id, role, 1)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -78,7 +86,7 @@ type issuesBody struct {
 }
 
 func TestAnalyticsAPI_Issues_ServedFromRealFailedEvents(t *testing.T) {
-	pg, mongoEnv := testenv.Setup(t), testenv.SetupMongo(t)
+	pg, mongoEnv := setup(t), testenv.SetupMongo(t)
 	h := newHarness(t, pg, mongoEnv.URI)
 	store, err := mongostore.Open(context.Background(), mongostore.Config{URI: mongoEnv.URI, Database: "analytics_wire_test"})
 	if err != nil {
@@ -150,7 +158,7 @@ func TestAnalyticsAPI_Issues_ServedFromRealFailedEvents(t *testing.T) {
 }
 
 func TestAnalyticsAPI_Issues_MongoNotConfigured_Is503AndOtherRoutesWork(t *testing.T) {
-	pg := testenv.Setup(t)
+	pg := setup(t)
 	h := newHarness(t, pg, "")
 	if rec := h.get(issuesPath, "admin"); rec.Code != 503 {
 		t.Errorf("issues without MONGO_URI: want 503, got %d", rec.Code)
@@ -163,7 +171,7 @@ func TestAnalyticsAPI_Issues_MongoNotConfigured_Is503AndOtherRoutesWork(t *testi
 // MongoDB configured but unreachable at boot: routes register at once (no dial
 // at startup), the issues route says 503, and nothing else notices.
 func TestAnalyticsAPI_Issues_MongoUnreachableAtBoot(t *testing.T) {
-	pg := testenv.Setup(t)
+	pg := setup(t)
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

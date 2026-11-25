@@ -3,16 +3,12 @@
 // What this file checks, against real Postgres (RFC §6.4, §12.2): that the
 // trace_id/span_id/actor_id fields a writer supplies to outbox.Write are
 // persisted, that a writer which supplies none (every pre-existing caller)
-// leaves them NULL, that the relay hands them to handlers, and that
-// migration 000003 applies and reverses cleanly without touching existing
-// rows or the unpublished-row index.
+// leaves them NULL, that the relay hands them to handlers, and that every
+// per-service outbox carries the columns and the unpublished-row index.
 package relay_test
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -54,7 +50,7 @@ func readTraceCols(t *testing.T, db *gorm.DB, eventType string) traceCols {
 }
 
 func TestOutbox_TraceAndActor_RoundTrip(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	actor := uuid.New()
 	writeOne(t, env.DB, outbox.Event{
 		AggregateType: "test", AggregateID: uuid.New(), EventType: "test.traced", SchemaVersion: 1,
@@ -74,7 +70,7 @@ func TestOutbox_TraceAndActor_RoundTrip(t *testing.T) {
 }
 
 func TestOutbox_ExistingCallerPath_LeavesTraceAndActorNull(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeOne(t, env.DB, outbox.Event{
 		AggregateType: "test", AggregateID: uuid.New(), EventType: "test.plain", SchemaVersion: 1,
 		Payload: map[string]any{"x": 1},
@@ -87,7 +83,7 @@ func TestOutbox_ExistingCallerPath_LeavesTraceAndActorNull(t *testing.T) {
 }
 
 func TestRelay_HandsTraceAndActorToHandler(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	actor := uuid.New()
 	writeOne(t, env.DB, outbox.Event{
 		AggregateType: "test", AggregateID: uuid.New(), EventType: "test.relay.traced", SchemaVersion: 1,
@@ -136,88 +132,31 @@ func TestRelay_HandsTraceAndActorToHandler(t *testing.T) {
 	}
 }
 
-func platformMigration(t *testing.T, name string) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve caller for migrations path")
-	}
-	// libs/relay/<file> -> repo root -> migrations/platform
-	b, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "migrations", "platform", name))
-	if err != nil {
-		t.Fatalf("read migration %s: %v", name, err)
-	}
-	return string(b)
-}
-
-func outboxColumns(t *testing.T, db *gorm.DB) map[string]bool {
-	t.Helper()
-	var names []string
-	if err := db.Raw(`SELECT column_name FROM information_schema.columns
-		WHERE table_schema = 'platform' AND table_name = 'outbox'`).Scan(&names).Error; err != nil {
-		t.Fatalf("list outbox columns: %v", err)
-	}
-	m := map[string]bool{}
-	for _, n := range names {
-		m[n] = true
-	}
-	return m
-}
-
-// TestMigration000003_UpDownRoundTrip applies the down then the up SQL to a
-// database that already has 000003 applied (testenv applies every migration)
-// and checks the columns, existing rows, and the partial index survive.
-func TestMigration000003_UpDownRoundTrip(t *testing.T) {
+// TestServiceOutboxesCarryTraceActorColumnsAndIndex checks that each per-service
+// outbox has the trace/actor columns and the partial index the relay's poll
+// query relies on (the platform migrations that added them are history now;
+// migrations/cutover removes the platform tables).
+func TestServiceOutboxesCarryTraceActorColumnsAndIndex(t *testing.T) {
 	env := testenv.Setup(t)
-	up := platformMigration(t, "000003_outbox_trace_actor.up.sql")
-	down := platformMigration(t, "000003_outbox_trace_actor.down.sql")
-
-	// A row written before the down, to prove neither direction loses it.
-	writeOne(t, env.DB, outbox.Event{
-		AggregateType: "test", AggregateID: uuid.New(), EventType: "test.survivor", SchemaVersion: 1,
-		Payload: map[string]any{}, TraceID: testTraceID,
-	})
-	cols := outboxColumns(t, env.DB)
-	for _, c := range []string{"trace_id", "span_id", "actor_id"} {
-		if !cols[c] {
-			t.Fatalf("column %s missing after up", c)
+	for _, schema := range []string{"identity", "course"} {
+		var names []string
+		if err := env.DB.Raw(`SELECT column_name FROM information_schema.columns
+			WHERE table_schema = ? AND table_name = 'outbox'`, schema).Scan(&names).Error; err != nil {
+			t.Fatalf("list %s.outbox columns: %v", schema, err)
 		}
-	}
-
-	if err := env.DB.Exec(down).Error; err != nil {
-		t.Fatalf("down: %v", err)
-	}
-	cols = outboxColumns(t, env.DB)
-	for _, c := range []string{"trace_id", "span_id", "actor_id"} {
-		if cols[c] {
-			t.Errorf("column %s still present after down", c)
+		have := map[string]bool{}
+		for _, n := range names {
+			have[n] = true
 		}
-	}
-	if !cols["event_id"] || !cols["payload"] {
-		t.Errorf("down removed pre-existing columns: %v", cols)
-	}
-	var n int64
-	env.DB.Raw(`SELECT count(*) FROM platform.outbox WHERE event_type = 'test.survivor'`).Scan(&n)
-	if n != 1 {
-		t.Errorf("row lost across down: count=%d", n)
-	}
-
-	if err := env.DB.Exec(up).Error; err != nil {
-		t.Fatalf("up after down: %v", err)
-	}
-	cols = outboxColumns(t, env.DB)
-	for _, c := range []string{"trace_id", "span_id", "actor_id"} {
-		if !cols[c] {
-			t.Errorf("column %s missing after re-up", c)
+		for _, c := range []string{"event_id", "payload", "trace_id", "span_id", "actor_id"} {
+			if !have[c] {
+				t.Errorf("%s.outbox lacks column %s", schema, c)
+			}
 		}
-	}
-	c := readTraceCols(t, env.DB, "test.survivor")
-	if c.TraceID != nil {
-		t.Errorf("re-added trace_id should be NULL on a surviving row, got %v", *c.TraceID)
-	}
-	var idx int64
-	env.DB.Raw(`SELECT count(*) FROM pg_indexes WHERE schemaname = 'platform' AND indexname = 'idx_outbox_unpublished'`).Scan(&idx)
-	if idx != 1 {
-		t.Errorf("idx_outbox_unpublished missing after round trip")
+		var idx int64
+		env.DB.Raw(`SELECT count(*) FROM pg_indexes WHERE schemaname = ? AND indexname = 'idx_outbox_unpublished'`, schema).Scan(&idx)
+		if idx != 1 {
+			t.Errorf("%s.outbox lacks idx_outbox_unpublished", schema)
+		}
 	}
 }

@@ -18,6 +18,8 @@ import (
 	"github.com/lib/pq"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing"
 )
 
 type Repository struct {
@@ -303,7 +305,7 @@ func (r *Repository) GetInstructorName(ctx context.Context, userID uuid.UUID) (s
 // Title is weighted 'A' (ranks above a description match) — RFC §21's D11
 // defers final relevance tuning, so this is a reasonable starting weight,
 // not a tuned one.
-func (r *Repository) UpsertSearchIndex(ctx context.Context, o *PublishOutline) error {
+func (r *Repository) UpsertSearchIndex(ctx context.Context, o *publishing.PublishOutline) error {
 	tags := o.Tags
 	if tags == nil {
 		tags = []string{}

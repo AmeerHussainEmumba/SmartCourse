@@ -28,6 +28,7 @@ import (
 
 func TestHandleUserRegistered_PopulatesInstructorMirror(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	ctx := context.Background()
 	userID := uuid.Must(uuid.NewV7())
 
@@ -67,6 +68,7 @@ func TestHandleUserRegistered_PopulatesInstructorMirror(t *testing.T) {
 
 func TestHandleUserProfileUpdated_UpdatesInstructorMirror(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	ctx := context.Background()
 	userID := uuid.Must(uuid.NewV7())
 
@@ -122,6 +124,7 @@ func TestHandleUserProfileUpdated_UpdatesInstructorMirror(t *testing.T) {
 // silently succeed with no instructor_mirror row.
 func TestHandleUserRegistered_MalformedPayload_GivesUpRatherThanSucceeding(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	ctx := context.Background()
 	aggID := uuid.Must(uuid.NewV7())
 

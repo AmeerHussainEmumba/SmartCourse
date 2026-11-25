@@ -2,6 +2,8 @@
 
 JWT access tokens, opaque refresh/reset/verification tokens, argon2id password hashing, and the three-layer authorization middleware (`RequireAuth`, `RequireRole`, `RequireFreshPrivilege`). See `docs/adr/smartcourse-adr.md` ADR-0015 (and its addendum) for the full reasoning; `services/identity/identity` is this package's only real consumer and owns the actual login/refresh/reset flows — this package is the toolkit, not the flow.
 
+**Used by** the API binaries: `identity-api` (issue and verify, hashing), `course-api` and `analytics-api` (verify, role and freshness middleware) and `audit-api` (`RequireAuth`, `RequireRole`, `RequireFreshPrivilegeStrict`). Workers do not import it. `libs/infra` also imports it to install the outbox actor resolver.
+
 ## The shape
 
 Two kinds of token, deliberately not the same thing:
@@ -28,7 +30,7 @@ The token-version key (`user:tv:<id>`) lives in Redis, and Redis can be flushed 
 |---|---|---|---|
 | `RequireFreshPrivilege` | version 1 (fail open for version 1 tokens) | course-api instructor writes | F-38: a flush must not lock every instructor out of authoring. Cost: the old token of an instructor demoted from version 1 is accepted until they log in. Accepted for these routes, unchanged. |
 | `RequireFreshPrivilegeWithSource` | read from the durable source, write back (SET NX) | identity `/me` and admin routes | identity owns `users.token_version`, so it can be exact. |
-| `RequireFreshPrivilegeStrict` | refuse: 401 `token_stale` | worker admin API (`/api/v1/admin/failed-events`), analytics-api `GET /analytics/issues` | These services cannot read identity's tables (ADR-0022 to 0024) and the surface is admin-only. A demoted admin must not regain access because the cache forgot the demotion (E10). |
+| `RequireFreshPrivilegeStrict` | refuse: 401 `token_stale` | audit-api admin routes (`/api/v1/admin/failed-events`, `services/audit/admin`), analytics-api `GET /analytics/issues` | These services cannot read identity's tables (ADR-0022 to 0024, ADR-0033: the Postgres roles enforce it) and the surface is admin-only. A demoted admin must not regain access because the cache forgot the demotion (E10). |
 
 The admin and instructor tradeoffs differ on purpose: an instructor lockout blocks teaching until the next login, an admin token wrongly accepted exposes operator data (failed-event payloads, replay). Do not copy the instructor rule onto an admin route, or the strict one onto instructor routes.
 

@@ -2,7 +2,9 @@
 // an Idempotency-Key header executes at most once per (key, user, endpoint);
 // a retry gets the stored response back instead of a second execution.
 //
-// State lives in platform.idempotency_keys (migrations/platform/000002).
+// State lives in the calling service's own idempotency_keys table (today
+// course.idempotency_keys, migrations/course/000008); the table name is
+// unqualified, so the connection's search_path selects the service's table.
 // Ownership of a key is decided by one atomic INSERT ... ON CONFLICT, so ten
 // concurrent requests with the same key run the handler once: one request
 // owns the key, the rest see it in progress (409) or, once it finishes,

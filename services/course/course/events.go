@@ -27,8 +27,8 @@ const (
 const FailedActivityReconciler = "reconciler"
 
 // PublishFailedPayload is course.v1.CoursePublishFailed (libs/events). The
-// JSON names are the proto field names; services/worker's payload contract
-// test keeps them in step. This module does not import libs/events.
+// JSON names are the proto field names; a payload contract
+// test (lost in the split, see services/course/progress/README.md) used to keep them in step. This module does not import libs/events.
 type PublishFailedPayload struct {
 	CourseID       uuid.UUID `json:"course_id"`
 	VersionID      uuid.UUID `json:"version_id"`

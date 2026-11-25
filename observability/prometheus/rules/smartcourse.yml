@@ -5,14 +5,23 @@
 # owners before any real deployment.
 # No Alertmanager is wired: alerts are visible at http://localhost:9090/alerts.
 #
-# Which series exist today (what has been verified is in observability/README.md):
-#   outbox_*, db_connections_*, http_*           identity-api, course-api, worker (outbox) / all four
-#   asynq_*, workflow_*                          worker
-#   dead_letter_total, event_processed_total,    defined and exported, but nothing increments them
-#   kafka_consumer_lag                           until the Kafka transport lands (rules stay silent)
+# Series come from ten binaries (prometheus/prometheus.yml). Every target has
+# labels `service` (identity, course, analytics, notification, publishing,
+# audit) and `binary`; rules group by those, never by a hard-coded job list.
 #
-# The outbox is one table read by three binaries, so its rules aggregate with
-# max() instead of alerting once per job.
+#   http_*                                       the four APIs (identity, course, analytics, audit)
+#   db_connections_*                             every binary with Postgres (not publishing, audit)
+#   outbox_*                                     identity and course (api and worker both
+#                                                report their own service's outbox)
+#   kafka_consumer_lag, event_processed_total,   the workers' consumers (per consumer group)
+#   dead_letter_total
+#   asynq_*                                      the workers that run Asynq pools
+#   workflow_*                                   the Temporal workers (publishing-worker,
+#                                                course-worker: activities)
+#
+# Each service owns its own outbox now (identity.outbox, course.outbox), so the
+# outbox rules group by `service`; within one service the api and the worker
+# read the same table, hence max() inside the group.
 groups:
   - name: smartcourse-async-health
     rules:
@@ -20,11 +29,11 @@ groups:
       # PLACEHOLDER 0.05/s: no real dead-letter rate has been observed, and the
       # series stays empty until the Kafka transport parks events.
       - alert: DeadLetterRateHigh
-        expr: sum by (consumer) (rate(dead_letter_total[10m])) > 0.05
+        expr: sum by (service, consumer) (rate(dead_letter_total[10m])) > 0.05
         for: 10m
         labels: {severity: page}
         annotations:
-          summary: "Sustained dead-lettering by {{ $labels.consumer }}"
+          summary: "Sustained dead-lettering by {{ $labels.consumer }} ({{ $labels.service }})"
           description: "More than 0.05 dead letters/s (~3/min) for 10m. An occasional poison message is expected; a sustained rate is an incident."
 
       # PLACEHOLDER 300s: the relay polls about once a second, so a real
@@ -32,60 +41,61 @@ groups:
       # the relay gave up on (last_error set) stays unpublished and keeps this
       # firing until it is dealt with, by design.
       - alert: OutboxOldestUnpublishedTooOld
-        expr: max(outbox_oldest_unpublished_seconds) > 300
+        expr: max by (service) (outbox_oldest_unpublished_seconds) > 300
         for: 2m
         labels: {severity: page}
         annotations:
-          summary: "Outbox has an event unpublished for over 5 minutes"
-          description: "Relay failing or Kafka unreachable; backlog size can hide a single stuck row, age cannot."
+          summary: "{{ $labels.service }} outbox has an event unpublished for over 5 minutes"
+          description: "The service worker relay is failing or Kafka is unreachable; backlog size can hide a single stuck row, age cannot."
 
       - alert: OutboxBacklogGrowing
         # PLACEHOLDER 100 rows: no sizing data; depends on write rate.
-        expr: max(outbox_backlog) > 100 and deriv(max(outbox_backlog)[10m:1m]) > 0
+        expr: max by (service) (outbox_backlog) > 100 and deriv(max by (service) (outbox_backlog)[10m:1m]) > 0
         for: 10m
         labels: {severity: warn}
         annotations:
-          summary: "outbox_backlog is {{ $value }} and still rising"
+          summary: "{{ $labels.service }} outbox_backlog is {{ $value }} and still rising"
 
-      # PLACEHOLDER 1000 messages. Silent until the Kafka side fills the metric.
+      # PLACEHOLDER 1000 messages. Lag is per consumer group (group id = consumer
+      # name) and topic, from the worker that owns the group.
       - alert: KafkaConsumerLagGrowing
-        expr: max by (group, topic) (kafka_consumer_lag) > 1000 and deriv(kafka_consumer_lag[10m]) > 0
+        expr: max by (service, group, topic) (kafka_consumer_lag) > 1000 and deriv(max by (service, group, topic) (kafka_consumer_lag)[10m:1m]) > 0
         for: 10m
         labels: {severity: warn}
         annotations:
-          summary: "Consumer group {{ $labels.group }} is falling behind on {{ $labels.topic }}"
+          summary: "Consumer group {{ $labels.group }} ({{ $labels.service }}) is falling behind on {{ $labels.topic }}"
 
       # asynq_retry_count is treated as a gauge (tasks currently awaiting
       # retry); growth over 15m means jobs fail faster than they recover.
       # PLACEHOLDER +10 in 15m: jobs are few (maintenance schedules, mail), so
       # any sustained retry growth is notable, but 10 is a guess.
       - alert: AsynqRetryGrowth
-        expr: sum by (queue) (delta(asynq_retry_count[15m])) > 10
+        expr: sum by (service, queue) (delta(asynq_retry_count[15m])) > 10
         for: 5m
         labels: {severity: warn}
         annotations:
-          summary: "Asynq retry set growing on queue {{ $labels.queue }}"
+          summary: "Asynq retry set growing on queue {{ $labels.queue }} ({{ $labels.service }})"
           description: "Provider trouble surfaces here first (RFC §12.3)."
 
       # Not a tuned number: any failure is reported. workflow_* counts runs
       # first executed live on a worker process (replays are not counted).
       - alert: WorkflowFailures
-        expr: increase(workflow_failed_total[15m]) > 0
+        expr: sum by (service) (increase(workflow_failed_total[15m])) > 0
         labels: {severity: warn}
         annotations:
-          summary: "Publish workflow failures in the last 15m"
+          summary: "Publish workflow failures in the last 15m ({{ $labels.service }})"
 
   - name: smartcourse-http-and-db
     rules:
       # PLACEHOLDER 5%: no error budget has been agreed.
       - alert: High5xxRatio
         expr: |
-          sum by (job) (rate(http_requests_total{status=~"5.."}[5m]))
-            / sum by (job) (rate(http_requests_total[5m])) > 0.05
+          sum by (service, binary) (rate(http_requests_total{status=~"5.."}[5m]))
+            / sum by (service, binary) (rate(http_requests_total[5m])) > 0.05
         for: 5m
         labels: {severity: page}
         annotations:
-          summary: "More than 5% of requests to {{ $labels.job }} return 5xx"
+          summary: "More than 5% of requests to {{ $labels.binary }} return 5xx"
 
       # PLACEHOLDER 90%: pool sizes come from POSTGRES_MAX_OPEN_CONNS (RFC 13.2).
       # db_connections_max is 0 for an unlimited pool, which divides to +Inf, so
@@ -95,16 +105,18 @@ groups:
         for: 5m
         labels: {severity: warn}
         annotations:
-          summary: "DB pool above 90% on {{ $labels.job }}"
+          summary: "DB pool above 90% on {{ $labels.binary }}"
 
   - name: smartcourse-scrape-health
     rules:
-      # Not a tuned number. If the worker is down its outbox gauges vanish, but
-      # identity-api and course-api still report the backlog; this rule covers
-      # the case where a target itself cannot be scraped.
+      # Not a tuned number. Any of the ten binaries' internal listeners that
+      # cannot be scraped. The `binary` label selects the ten application
+      # targets (Prometheus's own job has none). publishing-worker only runs
+      # under the `workflow` profile; where it is not started this rule fires
+      # for it, because the target is configured.
       - alert: ScrapeTargetDown
-        expr: up{job=~"identity-api|course-api|analytics-api|worker"} == 0
+        expr: up{binary!=""} == 0
         for: 2m
         labels: {severity: page}
         annotations:
-          summary: "Prometheus cannot scrape {{ $labels.job }}"
+          summary: "Prometheus cannot scrape {{ $labels.binary }} ({{ $labels.service }})"

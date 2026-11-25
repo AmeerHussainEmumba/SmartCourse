@@ -93,14 +93,26 @@ jobs:
       - name: govulncheck in every module (fails on reachable vulnerabilities only)
         run: scripts/for-each-module.sh govulncheck ./...
 
-      - name: Run migrations
+      # Same order as `make migrate-up` and libs/testenv (docs/plans/microservices-split.md
+      # section 3.1): platform identity course analytics notification cutover.
+      - name: Run migrations (all six sets, in order)
         run: |
-          for svc in platform identity course analytics; do
+          for svc in platform identity course analytics notification cutover; do
             go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest \
               -path migrations/$svc \
               -database "postgres://smartcourse:smartcourse@localhost:5432/smartcourse?sslmode=disable&x-migrations-table=${svc}_schema_migrations" \
               up
           done
+
+      # The runner's psql (15+) is needed for the script's \getenv. [DEV ONLY] passwords.
+      - name: Per-service Postgres roles (scripts/db-roles.sh)
+        run: scripts/db-roles.sh
+        env:
+          DB_OWNER_DSN: postgres://smartcourse:smartcourse@localhost:5432/smartcourse?sslmode=disable
+          SVC_IDENTITY_PASSWORD: svc_identity_dev
+          SVC_COURSE_PASSWORD: svc_course_dev
+          SVC_ANALYTICS_PASSWORD: svc_analytics_dev
+          SVC_NOTIFICATION_PASSWORD: svc_notification_dev
 
       - name: Unit + integration tests (race detector always on — RFC §10.6/§18.7)
         run: scripts/for-each-module.sh go test -race -tags=integration ./...
@@ -114,13 +126,74 @@ jobs:
           POSTGRES_DSN: postgres://smartcourse:smartcourse@localhost:5432/smartcourse?sslmode=disable
           REDIS_ADDR: localhost:6379
 
+  # Every image builds, without pushing: one Dockerfile per binary (identity-api,
+  # identity-worker, course-api, course-worker, analytics-api, analytics-worker,
+  # notification-worker, publishing-worker, audit-api, audit-worker) plus
+  # schema-init, the one-shot Schema Registry bootstrap. The build context is
+  # the repo root and each image compiles its own module with GOWORK=off, so a
+  # missing COPY or replace fails here. The first step fails when a Dockerfile.*
+  # exists that the matrix does not list (or the other way round), so a new
+  # binary cannot skip this job. Also validates the compose file for every profile.
+  docker-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - identity-api
+          - identity-worker
+          - course-api
+          - course-worker
+          - analytics-api
+          - analytics-worker
+          - notification-worker
+          - publishing-worker
+          - audit-api
+          - audit-worker
+          - schema-init
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Matrix lists every Dockerfile
+        run: |
+          want=$(ls Dockerfile.* | sed 's/^Dockerfile\.//' | sort)
+          have=$(printf '%s\n' identity-api identity-worker course-api course-worker analytics-api analytics-worker notification-worker publishing-worker audit-api audit-worker schema-init | sort)
+          if [ "$want" != "$have" ]; then
+            echo "Dockerfile.* and the matrix differ:"; diff <(echo "$want") <(echo "$have") || true
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.image }} (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.${{ matrix.image }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docker compose config for every profile
+        run: |
+          docker compose config -q
+          for p in core workflow observability full; do
+            docker compose --profile "$p" config -q
+          done
+
   # The container tier of the Week 3 end-to-end scenarios (test/e2e/harness,
   # build tag `e2e`): real Postgres, Redis, Kafka, Schema Registry, MongoDB,
-  # Mailpit and Temporal in Docker, and the real worker and API binaries run as
-  # subprocesses. Separate from build-lint-test on purpose: it takes many
-  # minutes and a dozen containers, and runs in parallel with it. Only tests
-  # carrying the `e2e` tag run here (the main job's -tags=integration never
-  # selects them).
+  # Mailpit and Temporal in Docker, and the ten long-running service binaries run as
+  # subprocesses built by the harness (testcontainers for the infrastructure). Separate from
+  # build-lint-test on purpose: it takes many minutes and a dozen containers,
+  # and runs in parallel with it. Only tests carrying the `e2e` tag run here
+  # (the main job's -tags=integration never selects them).
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 45

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/hibiken/asynq"
 )
@@ -81,6 +82,60 @@ func MetaFrom(ctx context.Context) (TaskMeta, bool) {
 	r, _ := asynq.GetRetryCount(ctx)
 	m, _ := asynq.GetMaxRetry(ctx)
 	return TaskMeta{ID: id, Queue: q, Retried: r, MaxRetry: m}, true
+}
+
+// Namespace is a service's prefix for every Asynq queue it touches. Asynq has
+// no per-service isolation inside one Redis database: servers of different
+// services on the same queue names pull each other's tasks, find no handler and
+// archive them (lost work). With a Namespace, the logical queue names above map
+// to "<namespace>:<queue>" in Redis, so a service's servers, clients, scheduler
+// and inspector only ever see its own queues. The empty Namespace means no
+// prefix (the pre-namespace behaviour).
+//
+// Callers keep using QueueCritical/QueueDefault/QueueLow everywhere (Pools,
+// Job.Queue, Entry.Queue, Register); the prefix is applied in one place. A
+// prefixed name passed as a queue is rejected as unknown, so a caller cannot
+// name another service's queue.
+type Namespace = string
+
+// namespaceRe keeps a namespace one lowercase token: no ":" (so the prefix
+// cannot be confused with a logical queue name) and a bounded metric label.
+var namespaceRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+
+// ValidateNamespace reports whether ns is usable: empty (no prefix) or a
+// lowercase token of at most 32 characters without ":".
+func ValidateNamespace(ns Namespace) error {
+	if ns == "" || namespaceRe.MatchString(ns) {
+		return nil
+	}
+	return fmt.Errorf("asynqx: invalid namespace %q (want [a-z][a-z0-9_-]{0,31} or empty)", ns)
+}
+
+// QueueName returns the Redis queue name for the logical queue q in ns:
+// "<ns>:<q>", or q when ns is empty.
+func QueueName(ns Namespace, q string) string {
+	if ns == "" {
+		return q
+	}
+	return ns + ":" + q
+}
+
+// Option configures NewClient and NewInspector.
+type Option func(*options)
+
+type options struct{ ns Namespace }
+
+// WithNamespace scopes a Client or Inspector to ns (see Namespace). An invalid
+// namespace makes every call return the validation error rather than touching
+// Redis.
+func WithNamespace(ns Namespace) Option { return func(o *options) { o.ns = ns } }
+
+func applyOptions(opts []Option) options {
+	var o options
+	for _, f := range opts {
+		f(&o)
+	}
+	return o
 }
 
 func validQueue(q string) bool {

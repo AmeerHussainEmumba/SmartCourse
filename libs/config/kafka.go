@@ -9,23 +9,12 @@ import (
 	"time"
 )
 
-// Event transports (ADR-0029, EVENT_TRANSPORT).
-const (
-	// TransportInProcess is the relay running the registered handlers itself
-	// (ADR-0021). It is the default.
-	TransportInProcess = "inprocess"
-	// TransportKafka is the relay publishing to Kafka and the worker's
-	// consumers running the same handlers from the topics.
-	TransportKafka = "kafka"
-)
-
-// KafkaConfig selects the event transport and tunes the Kafka side (libs/kafka,
-// ADR-0029, ADR-0030). Every binary reads the same environment, so Load checks
-// it for all of them; the brokers and the registry are only required, and only
-// validated, when the transport is "kafka".
+// KafkaConfig locates Kafka and the Schema Registry and tunes the Kafka side
+// (libs/kafka, ADR-0029, ADR-0030). Kafka is the only event transport. The
+// brokers and the registry are required and validated only for a binary that
+// asks for them (Requirements.Kafka); the tuning below is always read and
+// validated, and keeps its defaults.
 type KafkaConfig struct {
-	// Transport is EVENT_TRANSPORT: "inprocess" (default) or "kafka".
-	Transport string
 	// Brokers are KAFKA_BROKERS, comma-separated host:port seeds.
 	Brokers []string
 	// SchemaRegistryURL is SCHEMA_REGISTRY_URL, without a trailing slash.
@@ -33,7 +22,7 @@ type KafkaConfig struct {
 
 	// ConsumerMaxInFlight is KAFKA_CONSUMER_MAX_IN_FLIGHT: how many handlers one
 	// consumer group runs at once. Each holds a Postgres connection for its
-	// transaction, and the worker runs one group per handler, so the worst case
+	// transaction, and a worker runs one group per handler, so the worst case
 	// is groups x this value; the pool queues the excess, it does not fail it.
 	ConsumerMaxInFlight int
 	// ConsumerMaxAttempts is KAFKA_CONSUMER_MAX_ATTEMPTS: tries per record
@@ -51,9 +40,6 @@ type KafkaConfig struct {
 	ProduceTimeout time.Duration
 }
 
-// KafkaEnabled reports whether the Kafka transport is selected.
-func (k KafkaConfig) KafkaEnabled() bool { return k.Transport == TransportKafka }
-
 const (
 	defaultKafkaMaxInFlight = 4
 	maxKafkaMaxInFlight     = 256
@@ -62,9 +48,12 @@ const (
 	maxKafkaProduceTimeout  = 25 * time.Second
 )
 
-// loadKafka reads and validates the transport settings, adding to errs. It takes
+// loadKafka reads and validates the Kafka settings, adding to errs. need makes
+// KAFKA_BROKERS and SCHEMA_REGISTRY_URL required (and validated). It takes
 // Load's own parsers so the error wording is uniform.
 func loadKafka(
+	need bool,
+	needRegistry bool,
 	getenv func(string) string,
 	optInt func(string, int) int,
 	optDuration func(string, time.Duration) time.Duration,
@@ -78,7 +67,6 @@ func loadKafka(
 	}
 
 	k := KafkaConfig{
-		Transport:               TransportInProcess,
 		ConsumerMaxInFlight:     optInt("KAFKA_CONSUMER_MAX_IN_FLIGHT", defaultKafkaMaxInFlight),
 		ConsumerMaxAttempts:     optInt("KAFKA_CONSUMER_MAX_ATTEMPTS", defaultKafkaMaxAttempts),
 		ConsumerBackoffBase:     optDuration("KAFKA_CONSUMER_BACKOFF_BASE", 500*time.Millisecond),
@@ -86,17 +74,6 @@ func loadKafka(
 		ConsumerShutdownTimeout: optDuration("KAFKA_CONSUMER_SHUTDOWN_TIMEOUT", 30*time.Second),
 		ProduceTimeout:          optDuration("KAFKA_PRODUCE_TIMEOUT", 20*time.Second),
 	}
-	// An unrecognised value must fail startup: a typo such as "Kafka" or
-	// "in-process" silently falling back to in-process would hide that events
-	// are not flowing through the broker.
-	switch v := getenv("EVENT_TRANSPORT"); v {
-	case "", TransportInProcess:
-	case TransportKafka:
-		k.Transport = TransportKafka
-	default:
-		bad("EVENT_TRANSPORT must be %q or %q, got %q", TransportInProcess, TransportKafka, v)
-	}
-
 	inRange("KAFKA_CONSUMER_MAX_IN_FLIGHT", k.ConsumerMaxInFlight, 1, maxKafkaMaxInFlight)
 	inRange("KAFKA_CONSUMER_MAX_ATTEMPTS", k.ConsumerMaxAttempts, 1, maxKafkaMaxAttempts)
 	if k.ConsumerBackoffBase <= 0 {
@@ -116,21 +93,24 @@ func loadKafka(
 		bad("KAFKA_PRODUCE_TIMEOUT must be greater than zero and at most %v", maxKafkaProduceTimeout)
 	}
 
-	if !k.KafkaEnabled() {
+	if !need {
 		return k
 	}
 	k.Brokers = splitAndTrim(getenv("KAFKA_BROKERS"))
 	if len(k.Brokers) == 0 {
-		bad("KAFKA_BROKERS is required when EVENT_TRANSPORT=kafka")
+		bad("KAFKA_BROKERS is required")
 	}
 	for _, b := range k.Brokers {
 		if err := checkHostPort(b); err != nil {
 			bad("KAFKA_BROKERS entry %q is not a host:port address: %v", b, err)
 		}
 	}
+	if !needRegistry {
+		return k
+	}
 	reg := strings.TrimRight(getenv("SCHEMA_REGISTRY_URL"), "/")
 	if reg == "" {
-		bad("SCHEMA_REGISTRY_URL is required when EVENT_TRANSPORT=kafka")
+		bad("SCHEMA_REGISTRY_URL is required")
 	} else if u, err := url.Parse(reg); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		bad("SCHEMA_REGISTRY_URL must be an http(s) URL, got %q", reg)
 	}

@@ -57,6 +57,7 @@ func enrollmentRows(t *testing.T, env *testenv.Env, studentID uuid.UUID) int {
 
 func TestPostEnroll_SameKeyTwice_ReplaysFirstResponse(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	r := newIdempotentEngine(env)
 	courseID := seedCourse(t, env, nil)
 	studentID := seedStudent(t, env)
@@ -82,6 +83,7 @@ func TestPostEnroll_SameKeyTwice_ReplaysFirstResponse(t *testing.T) {
 
 func TestPostEnroll_TenConcurrentSameKey_OneRow(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	r := newIdempotentEngine(env)
 	courseID := seedCourse(t, env, nil)
 	studentID := seedStudent(t, env)

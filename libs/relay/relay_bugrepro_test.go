@@ -17,7 +17,6 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 // B-09: a transient publish failure (the broker is down) records last_error on
@@ -28,7 +27,7 @@ import (
 // reports success. Expected: a row that was eventually published is pruned
 // once it is old enough.
 func TestBugrepro_RowsPublishedAfterATransientFailure_AreNeverPruned(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	const rows = 5
 	for i := 0; i < rows; i++ {
 		writeFor(t, env.DB, uuid.New(), "t.outage", i)

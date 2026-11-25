@@ -5,14 +5,14 @@ import (
 	"time"
 )
 
-// AsynqConfig sizes the worker's Asynq pools and retry policy (libs/asynqx,
-// RFC §10.2, ADR-0013). Only the worker binary runs Asynq, but every binary
+// AsynqConfig sizes the Asynq pools and retry policy (libs/asynqx,
+// RFC §10.2, ADR-0013). Only the workers run Asynq, but every binary
 // reads the same environment, so the checks below run in Load for all of them.
 type AsynqConfig struct {
 	// Per-queue pool sizes (ASYNQ_CRITICAL_CONCURRENCY, ASYNQ_DEFAULT_CONCURRENCY,
 	// ASYNQ_LOW_CONCURRENCY): RFC §10.2's 10 / 5 / 3. The pools that touch
 	// Postgres count against POSTGRES_MAX_OPEN_CONNS; Load does not enforce
-	// that, because which handlers use the database is the worker's wiring.
+	// that, because which handlers use the database is each worker's wiring.
 	CriticalConcurrency int
 	DefaultConcurrency  int
 	LowConcurrency      int
@@ -29,8 +29,8 @@ type AsynqConfig struct {
 	ShutdownTimeout time.Duration
 }
 
-// JobsConfig holds the scheduled jobs' intervals and retention (the worker's
-// services/worker/jobs). Intervals are whole minutes that divide the hour, or
+// JobsConfig holds the scheduled jobs' intervals and retention (libs/jobs,
+// run by each service's worker). Intervals are whole minutes that divide the hour, or
 // whole hours that divide the day, because the scheduler runs cron
 // expressions that every worker replica must agree on (CronSpec).
 type JobsConfig struct {
@@ -43,6 +43,12 @@ type JobsConfig struct {
 	// OutboxRetention is how long a published outbox row is kept before the
 	// prune job may delete it (OUTBOX_RETENTION, default 168h = 7 days).
 	OutboxRetention time.Duration
+
+	// ProcessedEventsRetention is how long a consumer's processed_events row
+	// (the idempotency ledger) is kept before the prune job may delete it
+	// (PROCESSED_EVENTS_RETENTION, default 336h = 14 days). It must exceed the
+	// Kafka topic retention. A non-positive or unparsable value fails startup.
+	ProcessedEventsRetention time.Duration
 }
 
 const (
@@ -51,6 +57,9 @@ const (
 	defaultAsynqLow      = 3
 	maxAsynqConcurrency  = 256
 	maxAsynqRetry        = 25
+
+	// DefaultProcessedEventsRetention is PROCESSED_EVENTS_RETENTION's default.
+	DefaultProcessedEventsRetention = 14 * 24 * time.Hour
 
 	minOutboxRetention = time.Hour
 	maxOutboxRetention = 365 * 24 * time.Hour
@@ -136,6 +145,7 @@ func loadAsynq(
 		IdempotencyPruneInterval:   optDuration("JOBS_IDEMPOTENCY_PRUNE_INTERVAL", time.Hour),
 		OutboxPruneInterval:        optDuration("JOBS_OUTBOX_PRUNE_INTERVAL", time.Hour),
 		OutboxRetention:            optDuration("OUTBOX_RETENTION", 7*24*time.Hour),
+		ProcessedEventsRetention:   optDuration("PROCESSED_EVENTS_RETENTION", DefaultProcessedEventsRetention),
 	}
 	for key, d := range map[string]time.Duration{
 		"JOBS_RECONCILE_PUBLISHES_INTERVAL": j.ReconcilePublishesInterval,
@@ -150,6 +160,9 @@ func loadAsynq(
 	}
 	if j.OutboxRetention < minOutboxRetention || j.OutboxRetention > maxOutboxRetention {
 		bad("OUTBOX_RETENTION must be between %v and %v", minOutboxRetention, maxOutboxRetention)
+	}
+	if j.ProcessedEventsRetention <= 0 {
+		bad("PROCESSED_EVENTS_RETENTION must be a positive duration such as 336h")
 	}
 	return a, j
 }

@@ -5,7 +5,7 @@
 ## Behaviour
 
 - **No header:** the request passes straight through.
-- **First request with a key:** claims the key with one atomic `INSERT ... ON CONFLICT` into `platform.idempotency_keys`, runs the handler, and stores the response if it was a 2xx with a JSON body.
+- **First request with a key:** claims the key with one atomic `INSERT ... ON CONFLICT` into the service's own `idempotency_keys` table (unqualified name, resolved by the connection's `search_path`; `course.idempotency_keys`, migration `course/000008`), runs the handler, and stores the response if it was a 2xx with a JSON body.
 - **Retry after completion:** the stored status and body are returned with `Idempotent-Replayed: true`. The body is stored as `JSONB`, so it is equal in content to the first response but whitespace and key order may differ.
 - **Retry while the first is still running:** `409 idempotency_request_in_progress` with `Retry-After: 1`.
 - **Same key, different request** (method, path, query or body): `422 idempotency_key_reused`.
@@ -13,6 +13,8 @@
 - **Abandoned keys:** an `in_progress` row older than the lease (3 minutes by default, longer than the 120 s request timeout) can be claimed by a new request. Completed rows expire after 24 hours (RFC §15.2) and can be claimed again; `PruneExpired` deletes them and is meant to run as a scheduled worker job.
 - **Key format:** 1 to 255 printable ASCII characters, one header value; otherwise `400 idempotency_key_invalid`.
 - **Scope:** keys are per authenticated user. A request with no user (`Options.UserID` returns false) is not subject to idempotency handling.
+
+**Used by** `services/course/cmd/course-api` only (the other services have no `idempotency_keys` table). The scheduled `PruneExpired` runs in `course-worker` through `libs/jobs.PruneIdempotencyKeys`.
 
 ## Use
 

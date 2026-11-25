@@ -14,7 +14,7 @@ import (
 const pruneBatch = 1000
 
 // Prune deletes outbox rows the relay finished with more than olderThan ago and
-// returns how many it removed (RFC §9.5 scheduled job; the worker runs it).
+// returns how many it removed (RFC §9.5 scheduled job; each producing service's worker runs it).
 //
 // It never deletes a row the relay has not published (published_at IS NULL),
 // whatever its age: that row is still owed to its consumers. It also keeps any

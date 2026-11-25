@@ -37,31 +37,18 @@ func ev(id int64, typ string, payload map[string]any) advEvent {
 	return advEvent{outboxID: id, eventID: uuid.New(), typ: typ, payload: payload}
 }
 
-// deliver emulates one relay delivery of e to every analytics handler that
-// subscribes to its type, with the relay's own idempotency rule (check
-// processed_events, run handler, insert marker, all in one transaction).
+// deliver runs one delivery of e through relay.Deliver, the path the
+// analytics-worker's Kafka consumers use: the handler and the
+// analytics.processed_events marker commit in one transaction, and an event id
+// already marked is skipped.
 func deliver(env *testenv.Env, e advEvent) error {
 	raw, _ := json.Marshal(e.payload)
 	for _, h := range analytics.Handlers() {
 		if !h.EventTypes[e.typ] {
 			continue
 		}
-		err := env.DB.Transaction(func(tx *gorm.DB) error {
-			var n int64
-			if err := tx.Raw(`SELECT count(*) FROM processed_events WHERE consumer_name = ? AND event_id = ?`, h.ConsumerName, e.eventID).Row().Scan(&n); err != nil {
-				return err
-			}
-			if n > 0 {
-				return nil
-			}
-			if err := h.Handle(context.Background(), tx, relay.DecodedEvent{
-				OutboxID: e.outboxID, EventID: e.eventID, EventType: e.typ, Payload: raw, OccurredAt: time.Now(),
-			}); err != nil {
-				return err
-			}
-			return tx.Exec(`INSERT INTO processed_events (consumer_name, event_id) VALUES (?, ?)`, h.ConsumerName, e.eventID).Error
-		})
-		if err != nil {
+		evt := relay.DecodedEvent{OutboxID: e.outboxID, EventID: e.eventID, EventType: e.typ, Payload: raw, OccurredAt: time.Now()}
+		if err := relay.Deliver(context.Background(), env.DB, h, evt); err != nil {
 			return err
 		}
 	}
@@ -159,48 +146,32 @@ func scenario() []advEvent {
 
 func truncateAnalytics(t *testing.T, env *testenv.Env) {
 	t.Helper()
-	if err := env.DB.Exec(`TRUNCATE user_role_mirror, course_mirror, enrollment_mirror, course_stats, daily_enrollments, platform_snapshot, processed_events`).Error; err != nil {
+	// TRUNCATE is DDL-class: the service role cannot, the owner can (qualified names).
+	if err := env.Owner.Exec(`TRUNCATE analytics.user_role_mirror, analytics.course_mirror, analytics.enrollment_mirror, analytics.course_stats, analytics.daily_enrollments, analytics.platform_snapshot, analytics.processed_events`).Error; err != nil {
 		t.Fatal(err)
 	}
 }
 
-// Replaying the whole event history through the REAL relay (outbox rows
-// reset to unpublished) N times must change nothing.
-func TestAdvAnalytics_ReplayThroughRelayIsIdempotent(t *testing.T) {
-	env := testenv.Setup(t)
-	for _, e := range scenario() {
-		raw, _ := json.Marshal(e.payload)
-		if err := env.DB.Exec(`INSERT INTO outbox (event_id, aggregate_type, aggregate_id, event_type, schema_version, payload)
-			VALUES (?, 'x', ?, ?, 1, ?)`, e.eventID, uuid.New(), e.typ, raw).Error; err != nil {
-			t.Fatal(err)
+// Replaying the whole event history through the consumer path (what a retry
+// topic replay or a Kafka redelivery does) N times must change nothing, both
+// while processed_events remembers the events (exact), and after PruneProcessed
+// has forgotten them: then the mirrors still converge but the incremental
+// daily_enrollments counter is applied again (a known gap: the marker is what
+// makes that handler idempotent, hence the PROCESSED_EVENTS_RETENTION window),
+// and the reconciler, which recomputes every aggregate from the mirrors, must
+// restore the exact state.
+func TestAdvAnalytics_ReplayThroughConsumerPathIsIdempotent(t *testing.T) {
+	env := setup(t)
+	events := scenario() // one set of event ids: a replay redelivers the same events
+	feedAll := func() {
+		t.Helper()
+		for _, e := range events {
+			if err := deliver(env, e); err != nil {
+				t.Fatalf("deliver %s: %v", e.typ, err)
+			}
 		}
 	}
-	drain := func() {
-		rl := relay.New(env.DB, relay.WithPollInterval(10*time.Millisecond), relay.WithWorkerCount(1), relay.WithMaxAttempts(50))
-		for _, h := range analytics.Handlers() {
-			rl.Register(h)
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		done := make(chan struct{})
-		go func() { rl.Run(ctx); close(done) }()
-		deadline := time.Now().Add(20 * time.Second)
-		for {
-			var n int64
-			env.DB.Raw(`SELECT count(*) FROM outbox WHERE published_at IS NULL`).Row().Scan(&n)
-			if n == 0 {
-				break
-			}
-			if time.Now().After(deadline) {
-				cancel()
-				<-done
-				t.Fatal("relay did not drain")
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-		cancel()
-		<-done
-	}
-	drain()
+	feedAll()
 	want := stateDump(t, env, true)
 	if !strings.Contains(want, "ps") || !strings.Contains(want, "em") {
 		t.Fatalf("scenario produced no state:\n%s", want)
@@ -208,12 +179,22 @@ func TestAdvAnalytics_ReplayThroughRelayIsIdempotent(t *testing.T) {
 	assertCountersSane(t, env)
 
 	for i := 0; i < 3; i++ {
-		if err := env.DB.Exec(`UPDATE outbox SET published_at = NULL, attempts = 0`).Error; err != nil {
-			t.Fatal(err)
-		}
-		drain()
+		feedAll() // markers present: every delivery is a duplicate
 		if got := stateDump(t, env, true); got != want {
 			t.Fatalf("replay #%d changed analytics state\n--- before\n%s\n--- after\n%s", i+1, want, got)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if err := env.Owner.Exec(`DELETE FROM analytics.processed_events`).Error; err != nil {
+			t.Fatal(err)
+		}
+		feedAll() // markers gone (pruned): the handlers run again
+		if err := analytics.NewReconciler(env.DB, nil).Run(context.Background()); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+		assertCountersSane(t, env)
+		if got := stateDump(t, env, true); got != want {
+			t.Fatalf("replay #%d after the markers were pruned and a reconcile changed analytics state\n--- before\n%s\n--- after\n%s", i+1, want, got)
 		}
 	}
 }
@@ -222,7 +203,7 @@ func TestAdvAnalytics_ReplayThroughRelayIsIdempotent(t *testing.T) {
 // last_event_id guard, published, enrolled, completed-after-enrolled) must
 // converge to the same state under shuffling and N-fold duplication.
 func TestAdvAnalytics_ShuffledAndDuplicatedDeliveryConverges(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	events := scenario()
 
 	// Canonical: in-order, once.
@@ -253,7 +234,7 @@ func TestAdvAnalytics_ShuffledAndDuplicatedDeliveryConverges(t *testing.T) {
 }
 
 func TestAdvAnalytics_UserRoleEvents_OutOfOrderAndDuplicated(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	uid := uuid.New()
 	registered := ev(10, "identity.user_registered", map[string]any{"user_id": uid, "role": "student"})
 	promoted := ev(20, "identity.user_role_changed", map[string]any{"user_id": uid, "role": "instructor"})
@@ -299,7 +280,7 @@ func TestAdvAnalytics_UserRoleEvents_OutOfOrderAndDuplicated(t *testing.T) {
 // fail loudly (so the relay retries), write nothing, and succeed once the
 // enrollment arrives.
 func TestAdvAnalytics_CompletedBeforeEnrolled_FailsThenSucceedsAfterEnrolled(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	course, enr, stu := uuid.New(), uuid.New(), uuid.New()
 	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	completed := ev(2, "progress.course_completed", map[string]any{"enrollment_id": enr, "student_id": stu, "completed_at": at.Add(time.Minute)})
@@ -330,7 +311,7 @@ func TestAdvAnalytics_CompletedBeforeEnrolled_FailsThenSucceedsAfterEnrolled(t *
 // Malformed payloads must error (retry then give up), never silently zero a
 // counter or panic.
 func TestAdvAnalytics_MalformedAndHostilePayloads(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	for _, typ := range []string{"identity.user_registered", "course.course_published", "enrollment.student_enrolled", "enrollment.student_withdrawn", "progress.course_completed"} {
 		for _, raw := range []string{`not json`, `[]`, `{"user_id": 5}`, `{"course_id":"nope"}`} {
 			for _, h := range analytics.Handlers() {

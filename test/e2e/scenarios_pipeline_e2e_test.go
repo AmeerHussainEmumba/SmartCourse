@@ -12,13 +12,14 @@ import (
 )
 
 // The scenarios in the *_e2e_test.go files run the full stack of
-// test/e2e/harness: real containers and the real service binaries, with the
-// Kafka transport. They carry the `e2e` build tag (not `integration`): they
-// start a dozen containers and have their own CI job (make test-e2e). Their
-// specs are the doc comments of the original skipped tests, kept here with
-// the implementation; E2, E8 to E14 are still skipped specs in
-// scenarios_*_test.go. Rules for all of them are in the header of
-// scenarios_pipeline_test.go (black box, real dependencies, no fixed sleeps).
+// test/e2e/harness: real containers and the ten real service binaries, on
+// Kafka only. They carry the `e2e` build tag (not `integration`): they start a
+// dozen containers and ten processes and have their own CI job (make
+// test-e2e). Their specs are the doc comments of the original skipped tests,
+// kept here with the implementation. E02 and E08 to E14 are pending on the new
+// harness (scenarios_pending_e2e_test.go; their old bodies are in legacy/).
+// Rules for all of them are in the header of scenarios_pipeline_test.go (black
+// box, real dependencies, no fixed sleeps).
 
 // topicOf is RFC 6.5: the topic follows the event type's prefix.
 func topicOf(eventType string) string {
@@ -30,9 +31,10 @@ func topicOf(eventType string) string {
 // Phases 2 to 7).
 //
 // Steps:
-//  1. Start identity-api, course-api, analytics-api and the worker (relay with
-//     EVENT_TRANSPORT=kafka, all consumers, Asynq server) against fresh
-//     containers; Mailpit is the SMTP sink.
+//  1. Start the ten binaries (identity, course, analytics, notification,
+//     publishing, audit; each API and worker its own process, its own
+//     Postgres role) against fresh containers; Mailpit is the SMTP sink. The
+//     first admin is created by the identity-admin CLI.
 //  2. Register an admin-promoted instructor and two students through the API
 //     (register 202, login 200, admin PATCH /admin/users/{id}/role, re-login).
 //  3. Instructor creates a course with one module and two lessons and
@@ -116,9 +118,10 @@ func TestE2E_E01_HappyPath(t *testing.T) {
 	s.WaitSettled(t, time.Minute)
 
 	t.Run("kafka", func(t *testing.T) {
-		type row struct{ EventID, EventType, AggregateID string }
-		var rows []row
-		if err := s.DB().Raw(`SELECT event_id::text AS event_id, event_type, aggregate_id::text AS aggregate_id FROM platform.outbox ORDER BY id`).Scan(&rows).Error; err != nil {
+		// Every event of the system sits in exactly one service's outbox
+		// (identity.outbox or course.outbox, there is no shared table).
+		rows, err := s.OutboxRows()
+		if err != nil {
 			t.Fatal(err)
 		}
 		recs, err := s.ReadTopics(harness.EventTopics...)
@@ -167,7 +170,7 @@ func TestE2E_E01_HappyPath(t *testing.T) {
 		}
 		for eventType, want := range map[string]int{
 			"identity.user_registered":     4, // admin, instructor, A, B
-			"identity.user_role_changed":   1,
+			"identity.user_role_changed":   2, // the admin created by identity-admin, the instructor promoted over the API
 			"course.course_published":      1,
 			"enrollment.student_enrolled":  2,
 			"enrollment.student_withdrawn": 1,
@@ -180,9 +183,8 @@ func TestE2E_E01_HappyPath(t *testing.T) {
 	})
 
 	t.Run("lesson and certificate events", func(t *testing.T) {
-		var lesson, cert int
-		_ = s.DB().Raw(`SELECT count(*) FROM platform.outbox WHERE event_type = 'progress.lesson_completed'`).Row().Scan(&lesson)
-		_ = s.DB().Raw(`SELECT count(*) FROM platform.outbox WHERE event_type = 'progress.certificate_issued'`).Row().Scan(&cert)
+		lesson := int(s.MustCount(t, `SELECT count(*) FROM course.outbox WHERE event_type = 'progress.lesson_completed'`))
+		cert := int(s.MustCount(t, `SELECT count(*) FROM course.outbox WHERE event_type = 'progress.certificate_issued'`))
 		if lesson == 0 && cert == 0 {
 			t.Skip("known gap: E1's spec lists LessonCompleted x2 and CertificateIssued on progress.events, but no service writes them to the outbox and libs/events has no message for them (libs/events/catalog.go, services/course/certificate/README); only CourseCompleted exists")
 		}
@@ -233,9 +235,13 @@ func TestE2E_E01_HappyPath(t *testing.T) {
 	})
 
 	t.Run("archive", func(t *testing.T) {
-		var ids []string
-		if err := s.DB().Raw(`SELECT event_id::text FROM platform.outbox`).Scan(&ids).Error; err != nil {
+		rows, err := s.OutboxRows()
+		if err != nil {
 			t.Fatal(err)
+		}
+		ids := make([]string, len(rows))
+		for i, r := range rows {
+			ids[i] = r.EventID
 		}
 		harness.Eventually(t, time.Minute, "every event archived once in MongoDB", func() error {
 			for _, id := range ids {
@@ -343,7 +349,16 @@ func TestE2E_E03_DuplicateDelivery(t *testing.T) {
 	if stats.TotalEnrollments != 1 || stats.ActiveEnrollments != 1 {
 		t.Fatalf("after one enrollment the course stats are %+v, want total 1, active 1", stats)
 	}
-	before, _ := s.WorkerMetrics()
+	duplicates := func() float64 { // event_processed_total{outcome="duplicate"}, summed over the consuming workers
+		var sum float64
+		for _, b := range []string{harness.CourseWorker, harness.AnalyticsWorker, harness.NotificationWorker, harness.AuditWorker} {
+			if m, err := s.Metrics(b); err == nil {
+				sum += m.SumWhere("event_processed_total", `outcome="duplicate"`)
+			}
+		}
+		return sum
+	}
+	before := duplicates()
 
 	// Step 3: re-deliver the exact same record twice more, bypassing the relay.
 	recs, err := s.ReadTopic("enrollment.events")
@@ -395,8 +410,5 @@ func TestE2E_E03_DuplicateDelivery(t *testing.T) {
 	if got := s.ListFailedEvents(t, ""); len(got) != 0 {
 		t.Errorf("failed-events admin list shows %d records, want 0", len(got))
 	}
-	if after, err := s.WorkerMetrics(); err == nil && before != nil {
-		dup := after.SumWhere("event_processed_total", `outcome="duplicate"`) - before.SumWhere("event_processed_total", `outcome="duplicate"`)
-		t.Logf("event_processed_total{outcome=duplicate} moved by %v over the redelivery (3 consumers x 2 copies = 6 when the metric is wired)", dup)
-	}
+	t.Logf("event_processed_total{outcome=duplicate} moved by %v over the redelivery (3 consumers x 2 copies = 6 when the metric is wired)", duplicates()-before)
 }

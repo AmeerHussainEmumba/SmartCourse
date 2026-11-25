@@ -24,6 +24,7 @@ import (
 func bootEngine(t *testing.T) *gin.Engine {
 	t.Helper()
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	cfg := &config.Config{JWT: config.JWTConfig{

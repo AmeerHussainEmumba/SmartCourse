@@ -40,6 +40,7 @@ func scalarInt(t *testing.T, env *testenv.Env, q string, args ...any) int64 {
 // then releases both together.
 func TestBugrepro_ConcurrentFinalLessons_EnrollmentNeverCompletes(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := progress.NewService(progress.NewRepository(env.DB))
 	ctx := context.Background()
 	enrollmentID, keys, studentID := seedEnrollmentWithTwoLessons(t, env)
@@ -90,6 +91,7 @@ func TestBugrepro_ConcurrentFinalLessons_EnrollmentNeverCompletes(t *testing.T) 
 // before their UPDATE, then releases.
 func TestBugrepro_ConcurrentSameFinalLesson_EmitsDuplicateCompletionEvents(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := progress.NewService(progress.NewRepository(env.DB))
 	ctx := context.Background()
 	enrollmentID, keys, studentID := seedEnrollmentWithTwoLessons(t, env)
@@ -135,6 +137,7 @@ func TestBugrepro_ConcurrentSameFinalLesson_EmitsDuplicateCompletionEvents(t *te
 // returns success), and the student can never reach completion.
 func TestBugrepro_LessonAddedByRepublish_ExistingEnrollmentCanNeverComplete(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := progress.NewService(progress.NewRepository(env.DB))
 	ctx := context.Background()
 	enrollmentID, keys, studentID := seedEnrollmentWithTwoLessons(t, env)
@@ -176,6 +179,7 @@ func TestBugrepro_LessonAddedByRepublish_ExistingEnrollmentCanNeverComplete(t *t
 // (typo, another course's lesson, tampering) returns success.
 func TestBugrepro_MarkCompleteUnknownLessonKeyReportsSuccess(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := progress.NewService(progress.NewRepository(env.DB))
 	enrollmentID, _, studentID := seedEnrollmentWithTwoLessons(t, env)
 	if err := svc.MarkComplete(context.Background(), studentID, enrollmentID, uuid.New()); err == nil {

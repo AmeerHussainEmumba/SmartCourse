@@ -31,10 +31,6 @@ func seedCourse(t *testing.T, env *testenv.Env, limit *int) uuid.UUID {
 	ctx := context.Background()
 
 	instructorID := uuid.Must(uuid.NewV7())
-	if err := env.DB.Exec(`INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, 'x', 'Instructor', 'instructor', 'active')`,
-		instructorID, instructorID.String()+"@example.com").Error; err != nil {
-		t.Fatalf("seed instructor: %v", err)
-	}
 
 	courseID := uuid.Must(uuid.NewV7())
 	versionID := uuid.Must(uuid.NewV7())
@@ -68,10 +64,6 @@ func seedCourse(t *testing.T, env *testenv.Env, limit *int) uuid.UUID {
 func seedStudent(t *testing.T, env *testenv.Env) uuid.UUID {
 	t.Helper()
 	id := uuid.Must(uuid.NewV7())
-	if err := env.DB.Exec(`INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, 'x', 'Student', 'student', 'active')`,
-		id, id.String()+"@example.com").Error; err != nil {
-		t.Fatalf("seed student: %v", err)
-	}
 	return id
 }
 
@@ -84,6 +76,7 @@ func seedStudent(t *testing.T, env *testenv.Env) uuid.UUID {
 // it, exactly 10 succeed, every time.
 func TestEnroll_SeatLimit_NeverExceededUnderConcurrency(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	ctx := context.Background()
 
@@ -159,6 +152,7 @@ func TestEnroll_SeatLimit_NeverExceededUnderConcurrency(t *testing.T) {
 // could itself race.
 func TestEnroll_DuplicateAttempt_ExactlyOneSucceeds(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	ctx := context.Background()
 
@@ -202,6 +196,7 @@ func TestEnroll_DuplicateAttempt_ExactlyOneSucceeds(t *testing.T) {
 
 func TestWithdraw_ThenReenroll_Allowed(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	ctx := context.Background()
 
@@ -225,12 +220,11 @@ func TestWithdraw_ThenReenroll_Allowed(t *testing.T) {
 
 func TestEnroll_UnpublishedCourse_Rejected(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	ctx := context.Background()
 
 	instructorID := uuid.Must(uuid.NewV7())
-	env.DB.Exec(`INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, 'x', 'Instructor', 'instructor', 'active')`,
-		instructorID, instructorID.String()+"@example.com")
 	courseID := uuid.Must(uuid.NewV7())
 	env.DB.Exec(`INSERT INTO courses (id, instructor_id, slug) VALUES (?, ?, ?)`, courseID, instructorID, courseID.String())
 	studentID := seedStudent(t, env)
@@ -251,6 +245,7 @@ func TestEnroll_UnpublishedCourse_Rejected(t *testing.T) {
 // requests its own enrollment ID.
 func TestGetByID_ReturnsOwnEnrollment_RejectsOthers(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	ctx := context.Background()
 
@@ -289,6 +284,7 @@ func TestGetByID_ReturnsOwnEnrollment_RejectsOthers(t *testing.T) {
 // student, not just that it returns something.
 func TestListMine_ReturnsOnlyCallersOwnEnrollments(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	ctx := context.Background()
 

@@ -31,22 +31,44 @@ mod=github.com/AmeerHussainEmumba/SmartCourse
 # analytics-api MAY link libs/mongostore (ADR-0031 deviation note): the Failed
 # Events metric is served from failed_events. identity-api stays forbidden, and
 # so does every other forbidden prefix below; course-api's rule is unchanged.
+# course-api serves HTTP only and must not link Kafka (libs/kafka, libs/eventbus),
+# Asynq, MongoDB or libs/jobs; those are course-worker's (docs/plans/microservices-split.md §6).
 rules=(
-  "services/identity  identity-api  services/course,services/analytics,services/worker,libs/temporal,libs/mongostore,libs/asynqx,libs/kafka  yes 580"
-  "services/analytics analytics-api services/identity,services/course,services/worker,libs/temporal,libs/asynqx,libs/kafka   yes 650"
-  "services/course    course-api    services/identity,services/analytics,services/worker                no  760"
-  "services/worker    worker        services/identity                                                   no  855"
+  "services/identity  identity-api  services/course,services/analytics,libs/temporal,libs/mongostore,libs/asynqx,libs/kafka,libs/eventbus,libs/jobs  yes 580"
+  "services/identity  identity-admin services/course,services/analytics,libs/temporal,libs/mongostore,libs/asynqx,libs/kafka,libs/eventbus,libs/jobs  yes 580"
+  "services/identity  identity-worker services/course,services/analytics,libs/mongostore                                   yes 640"
+  "services/analytics analytics-api services/identity,services/course,libs/temporal,libs/asynqx,libs/kafka,libs/eventbus,libs/jobs   yes 650"
+  "services/analytics analytics-worker services/identity,services/course,libs/temporal                             yes 695"
+  "services/course    course-api    services/identity,services/analytics,libs/kafka,libs/eventbus,libs/asynqx,libs/mongostore,libs/jobs no  765"
+  "services/course    course-worker services/identity,services/analytics                no  875"
+  "services/publishing publishing-worker services/identity,services/course,services/analytics,libs/asynqx,libs/kafka,libs/eventbus,libs/events,libs/mongostore,libs/relay,libs/idempotency,libs/ratelimit no 612 github.com/(segmentio|twmb|confluentinc|IBM/sarama|hibiken/asynq|golang-migrate|jackc/pgx|redis/go-redis)/|gorm.io/|go.mongodb.org/mongo-driver/v2/mongo$"
+  "services/audit     audit-api     services/identity,services/course,services/analytics,libs/temporal,libs/asynqx   yes 655"
+  "services/audit     audit-worker  services/identity,services/course,services/analytics,libs/temporal,libs/asynqx   yes 630"
+  "services/notification notification-worker services/identity,services/course,services/analytics,libs/temporal  yes 695"
 )
+# publishing-worker (Wave B5, tightened in Wave C5): no Kafka, Mongo, Asynq or
+# migration code and no other service; Temporal is its whole job. The last column
+# is an extra regex for third-party packages. Since libs/runtime stopped importing
+# libs/infra (a binary opts in with runtime.WithDependencies(infra.Connect)) the
+# Postgres driver (pgx, gorm) and go-redis are forbidden too: the binary has no
+# database and links none. It was 648 packages while it linked them through
+# libs/runtime -> libs/infra; 583 when measured in Wave C5 (budget is that plus
+# about 5%). audit-api and audit-worker also dropped (650 -> 624, 651 -> 600) but
+# still link go-redis and gorm through libs/eventbus and libs/relay, so they do not
+# forbid them.
 slack=${LINK_BUDGET_SLACK:-0}
 
 fail=0
 for rule in "${rules[@]}"; do
-  read -r dir bin forbidden no_temporal budget <<<"$rule"
+  read -r dir bin forbidden no_temporal budget extra <<<"$rule"
   deps=$(cd "$dir" && GOWORK=off go list -deps "./cmd/$bin")
 
   pattern="^${mod}/(${forbidden//,/|})(/|\$)"
   if [ "$no_temporal" = "yes" ]; then
     pattern="${pattern}|^go\\.temporal\\.io/"
+  fi
+  if [ -n "${extra:-}" ]; then
+    pattern="${pattern}|^(${extra})"
   fi
 
   if hits=$(grep -E "$pattern" <<<"$deps"); then

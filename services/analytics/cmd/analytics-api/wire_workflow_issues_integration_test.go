@@ -45,7 +45,7 @@ func deliverPublishFailed(t *testing.T, db *gorm.DB, eventID uuid.UUID, outboxID
 }
 
 func TestAnalyticsAPI_Issues_WorkflowIssuesFromPublishFailedEvents(t *testing.T) {
-	pg, mongoEnv := testenv.Setup(t), testenv.SetupMongo(t)
+	pg, mongoEnv := setup(t), testenv.SetupMongo(t)
 	h := newHarness(t, pg, mongoEnv.URI)
 	type wfBody struct {
 		Failed     int64            `json:"failed"`

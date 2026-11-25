@@ -26,7 +26,7 @@ import (
 const consumerName = "analytics-aggregator"
 
 // Handlers returns every relay.Handler this module registers. Called once
-// at worker startup (buildRelay in services/worker/cmd/worker/wire.go — ADR-0022) — wiring lives there, not
+// at worker startup (analytics-worker's consumers, services/analytics/cmd/analytics-worker — ADR-0022, ADR-0033) — wiring lives there, not
 // here, so a binary only links the modules it actually runs.
 func Handlers() []relay.Handler {
 	return []relay.Handler{

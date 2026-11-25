@@ -18,13 +18,13 @@ import (
 )
 
 // The whole course service (course + enrollment + progress + its relay
-// handlers) runs on a connection whose search_path is exactly what
-// `make run-course` / docker-compose set: course,platform,public. Every other
-// schema is unreachable by bare name. If any code path secretly reads
+// handlers) runs as the svc_course role, exactly what the course binaries
+// connect with (search_path course,public). Every other schema is unreachable. If any code path secretly reads
 // identity.users, analytics.* ... it fails here with "relation does not exist".
 func TestSchemaIsolation_CourseServiceMainFlows(t *testing.T) {
 	env := testenv.Setup(t)
-	conn := env.OpenWithSearchPath(t, "course,platform,public")
+	conn := env.ServiceDB(t, "course")
+	env.DB = conn
 	ctx := context.Background()
 
 	// Negative controls: the restriction is real.
@@ -158,7 +158,7 @@ func TestSchemaIsolation_CourseServiceMainFlows(t *testing.T) {
 	}
 	var archivedEvt []byte
 	if err := conn.Raw(`SELECT payload FROM outbox WHERE event_type = 'course.course_archived'`).Row().Scan(&archivedEvt); err != nil {
-		t.Fatalf("outbox row not visible through platform schema: %v", err)
+		t.Fatalf("course.outbox row not visible to svc_course: %v", err)
 	}
 	for _, h := range enrollment.Handlers() {
 		if err := conn.Transaction(func(tx *gorm.DB) error {

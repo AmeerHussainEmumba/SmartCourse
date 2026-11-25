@@ -1,0 +1,46 @@
+# The notification service's worker (docs/plans/microservices-split.md §6): the
+# Kafka consumers, the Asynq pools, the pending-delivery sweeper and the SMTP
+# provider. One binary, no HTTP API; its internal listener (/metrics, /health/*)
+# is METRICS_HTTP_ADDR (default :9100), published as 9114 on the host.
+# The service is its own Go module, so this image is built from that module plus
+# only the library modules it depends on; nothing else in the repo is copied in.
+# Keep the COPY list in step with the module's go.mod `replace` directives —
+# GOWORK=off below means a missing module fails this build instead of being
+# papered over by go.work.
+# Build context is the repo root: docker build -f Dockerfile.notification-worker .
+FROM golang:1.26.11-alpine AS build
+ENV GOWORK=off CGO_ENABLED=0
+WORKDIR /src
+COPY libs/asynqx ./libs/asynqx
+COPY libs/auth ./libs/auth
+COPY libs/cache ./libs/cache
+COPY libs/config ./libs/config
+COPY libs/db ./libs/db
+COPY libs/errors ./libs/errors
+COPY libs/eventbus ./libs/eventbus
+COPY libs/events ./libs/events
+COPY libs/httpx ./libs/httpx
+COPY libs/idempotency ./libs/idempotency
+COPY libs/infra ./libs/infra
+COPY libs/jobs ./libs/jobs
+COPY libs/kafka ./libs/kafka
+COPY libs/logging ./libs/logging
+COPY libs/mongostore ./libs/mongostore
+COPY libs/outbox ./libs/outbox
+COPY libs/relay ./libs/relay
+COPY libs/router ./libs/router
+COPY libs/runtime ./libs/runtime
+COPY libs/telemetry ./libs/telemetry
+COPY libs/testenv ./libs/testenv
+COPY services/notification ./services/notification
+WORKDIR /src/services/notification
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    go build -trimpath -o /out/notification-worker ./cmd/notification-worker
+
+FROM alpine:3.20
+# Run as an unprivileged user: a compromise of the service should not be root in the container.
+RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 app
+USER app
+COPY --from=build /out/notification-worker /usr/local/bin/notification-worker
+EXPOSE 9100
+ENTRYPOINT ["/usr/local/bin/notification-worker"]

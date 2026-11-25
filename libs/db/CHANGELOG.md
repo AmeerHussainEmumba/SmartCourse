@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- README: states which service binaries use the module (microservices split). No code change.
+
 - Added `EnableTracing(*gorm.DB)`: hand-written GORM callbacks that make each statement run under a request span a CLIENT child span (`<operation> <table>`, db.system.name, statement text with bind placeholders; error type only, never the message). A statement with no active span starts nothing. Never called means no callback and no overhead. No new module (otelgorm and the GORM plugin were not adopted).
 
 ## [0.1.0] - not yet tagged

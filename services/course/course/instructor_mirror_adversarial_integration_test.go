@@ -55,6 +55,7 @@ func deliverMirror(t *testing.T, env *testenv.Env, e mirrorEvt) {
 // the highest outbox id, and the catalogue must show it.
 func TestAdvInstructorMirror_DuplicatedAndReorderedIdentityEvents(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	ctx := context.Background()
 	svc := newTestService(env)
 	uid := uuid.New()
@@ -64,7 +65,7 @@ func TestAdvInstructorMirror_DuplicatedAndReorderedIdentityEvents(t *testing.T) 
 		{30, uuid.New(), "identity.user_profile_updated", map[string]any{"user_id": uid, "full_name": "Third"}},
 	}
 	for seed := int64(0); seed < 8; seed++ {
-		if err := env.DB.Exec(`TRUNCATE instructor_mirror, processed_events`).Error; err != nil {
+		if err := env.DB.Exec(`DELETE FROM instructor_mirror`).Error; err != nil || env.DB.Exec(`DELETE FROM processed_events`).Error != nil {
 			t.Fatal(err)
 		}
 		rng := rand.New(rand.NewSource(seed))
@@ -101,6 +102,7 @@ func TestAdvInstructorMirror_DuplicatedAndReorderedIdentityEvents(t *testing.T) 
 // whose instructor has no mirror row yet must still list with an empty name.
 func TestAdvInstructorMirror_ProfileBeforeRegisteredAndMissingMirror(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	ctx := context.Background()
 	svc := newTestService(env)
 	uid := uuid.New()

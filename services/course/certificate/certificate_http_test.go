@@ -86,11 +86,13 @@ func issued(t *testing.T, env *testenv.Env) (f fixture, id, code string) {
 
 func TestRegisterRoutes_BootsWithoutPanicking(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	_ = newTestEngine(t, env, 30)
 }
 
 func TestOwnerRoutes_NoOrBadToken_Unauthorized(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	r := newTestEngine(t, env, 30)
 	_, id, _ := issued(t, env)
 
@@ -106,6 +108,7 @@ func TestOwnerRoutes_NoOrBadToken_Unauthorized(t *testing.T) {
 
 func TestListMine_ReturnsOnlyCallersCertificates(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	r := newTestEngine(t, env, 30)
 	f, id, code := issued(t, env)
 	_, _, _ = issued(t, env) // another student's certificate
@@ -133,6 +136,7 @@ func TestListMine_ReturnsOnlyCallersCertificates(t *testing.T) {
 
 func TestGetByID_Owner200_NonOwnerSameAsUnknown404_Malformed400(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	r := newTestEngine(t, env, 30)
 	f, id, _ := issued(t, env)
 	stranger := bearerToken(t, uuid.New())
@@ -161,6 +165,7 @@ func TestGetByID_Owner200_NonOwnerSameAsUnknown404_Malformed400(t *testing.T) {
 
 func TestVerify_PublicRevealsOnlyWhatAVerifierNeeds(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	r := newTestEngine(t, env, 30)
 	f, id, code := issued(t, env)
 
@@ -192,6 +197,7 @@ func TestVerify_PublicRevealsOnlyWhatAVerifierNeeds(t *testing.T) {
 
 func TestVerify_UnknownCode404_MalformedCode400(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	r := newTestEngine(t, env, 100)
 	_, _, code := issued(t, env)
 
@@ -216,6 +222,7 @@ func TestVerify_UnknownCode404_MalformedCode400(t *testing.T) {
 
 func TestVerify_IsRateLimited(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	r := newTestEngine(t, env, 3)
 	_, _, code := issued(t, env)
 

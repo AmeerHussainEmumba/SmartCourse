@@ -29,7 +29,9 @@ type Job struct {
 	// same ID is a no-op while the first task still exists in Redis.
 	ID string
 
-	// Queue is critical, default or low; empty means default.
+	// Queue is the logical queue: critical, default or low; empty means
+	// default. The Client's namespace (WithNamespace) is applied on top, so a
+	// prefixed name is rejected as unknown.
 	Queue string
 
 	// MaxRetry is the number of retries after the first attempt. Zero means
@@ -63,13 +65,21 @@ var ErrInvalidJob = errors.New("asynqx: invalid job")
 
 // Client enqueues jobs. It is safe for concurrent use.
 type Client struct {
-	c *asynq.Client
+	c     *asynq.Client
+	ns    Namespace
+	nsErr error
 }
 
-// NewClient connects to Redis. Close releases the connection.
-func NewClient(redis RedisOpt) *Client {
-	return &Client{c: asynq.NewClient(redis)}
+// NewClient connects to Redis. Close releases the connection. WithNamespace
+// puts every job on the service's own queues; Result.Queue reports the
+// prefixed name.
+func NewClient(redis RedisOpt, opts ...Option) *Client {
+	o := applyOptions(opts)
+	return &Client{c: asynq.NewClient(redis), ns: o.ns, nsErr: ValidateNamespace(o.ns)}
 }
+
+// Namespace is the queue prefix the client enqueues under ("" for none).
+func (c *Client) Namespace() Namespace { return c.ns }
 
 // Close closes the underlying Redis connection.
 func (c *Client) Close() error { return c.c.Close() }
@@ -83,7 +93,10 @@ func (c *Client) Close() error { return c.c.Close() }
 // trace in ctx nothing is added and no span is started, so scheduler-driven and
 // untraced enqueues are unchanged.
 func (c *Client) Enqueue(ctx context.Context, j Job) (res Result, err error) {
-	opts, queue, err := j.options()
+	if c.nsErr != nil {
+		return Result{}, fmt.Errorf("%w: %w", ErrInvalidJob, c.nsErr)
+	}
+	opts, queue, err := j.optionsIn(c.ns)
 	if err != nil {
 		return Result{}, err
 	}
@@ -106,7 +119,8 @@ func (c *Client) Enqueue(ctx context.Context, j Job) (res Result, err error) {
 	return Result{ID: info.ID, Queue: info.Queue}, nil
 }
 
-func (j Job) options() ([]asynq.Option, string, error) {
+// optionsIn returns the Asynq options and the physical (namespaced) queue name.
+func (j Job) optionsIn(ns Namespace) ([]asynq.Option, string, error) {
 	switch {
 	case j.Type == "":
 		return nil, "", fmt.Errorf("%w: empty type", ErrInvalidJob)
@@ -120,6 +134,7 @@ func (j Job) options() ([]asynq.Option, string, error) {
 	if !validQueue(queue) {
 		return nil, "", fmt.Errorf("%w: unknown queue %q", ErrInvalidJob, queue)
 	}
+	queue = QueueName(ns, queue)
 	if j.MaxRetry < 0 || j.Timeout < 0 || j.ProcessIn < 0 || j.Retention < 0 {
 		return nil, "", fmt.Errorf("%w: negative option", ErrInvalidJob)
 	}
@@ -145,3 +160,6 @@ func (j Job) options() ([]asynq.Option, string, error) {
 	}
 	return opts, queue, nil
 }
+
+// options is optionsIn for the empty namespace.
+func (j Job) options() ([]asynq.Option, string, error) { return j.optionsIn("") }

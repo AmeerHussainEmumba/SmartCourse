@@ -6,13 +6,12 @@
 # reviewable. See docs/plans/module-split.md and RFC §4.4.
 #
 #   libs/*            may require only other libs/*
-#   services/identity, services/course, services/analytics
-#                     may require only libs/*  (no service imports another)
-#   services/worker   may require libs/* and services/analytics, services/course
-#                     (it runs their relay handlers and the publish workflow)
-#   tools/seed        may require libs/* and services/identity, services/course
-#   test/e2e          same as tools/seed: cross-service tests that run identity and
-#                     course together against one Postgres and one Redis
+#   services/*        may require only libs/*  (no service imports another: the
+#                     microservice split, docs/plans/microservices-split.md)
+#   tools/seed, test/e2e
+#                     require no service either: the seed is an HTTP client of the
+#                     public APIs; the E2E tier builds and runs the binaries and
+#                     talks to them over HTTP, Kafka and the databases
 #
 # Usage: scripts/check-module-graph.sh
 set -euo pipefail
@@ -22,9 +21,6 @@ mod=github.com/AmeerHussainEmumba/SmartCourse
 
 allowed_services() { # module dir -> space-separated allowed services/* modules
   case "$1" in
-    services/worker) echo "services/analytics services/course" ;;
-    tools/seed)      echo "services/identity services/course" ;;
-    test/e2e)        echo "services/identity services/course" ;;
     *)               echo "" ;;
   esac
 }

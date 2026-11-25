@@ -4,6 +4,11 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Asynq queues are namespaced per service: `identity-worker` prefixes its queues with `identity:` (`libs/asynqx` `Namespace`), so the workers can share one Redis database without taking each other's tasks (a worker used to archive another service's task as `handler not found`).
+- Split into three binaries (docs/plans/microservices-split.md): `identity-api` (now on `libs/runtime`; `/metrics` only on the internal listener `METRICS_HTTP_ADDR`, no longer on the public router), `identity-worker` (new: publish-only relay over `identity.outbox`, the token-version re-seeder, `PruneOutbox` through `libs/jobs`) and `identity-admin` (new CLI: first admin from `IDENTITY_ADMIN_EMAIL`, `IDENTITY_ADMIN_PASSWORD`, optional `IDENTITY_ADMIN_NAME`; idempotent). Behaviour change: `RunTokenVersionReseeder` no longer runs in `identity-api`; it runs in `identity-worker`. `registerRoutes` in `cmd/identity-api` no longer takes a context.
+- New: `Service.BootstrapAdmin` (one transaction: user, `identity.user_registered`, role change to admin, token version bump, `identity.user_role_changed`; existing accounts are never touched), `BootstrapAdminResult`.
+- Tests use `env.ServiceDB(t, "identity")` (role `svc_identity`, search_path `identity,public`) instead of the owner connection. go.mod requires `libs/runtime`, `eventbus`, `relay`, `jobs`, `asynqx`, `kafka` (indirect: `events`, `idempotency`). Dockerfiles: `Dockerfile.identity-api` also installs `identity-admin`; new `Dockerfile.identity-worker`.
+
 - identity-api wires telemetry in `cmd/identity-api/main.go`: tracing, RED metrics, `/metrics`, outbox gauges, bounded flush on shutdown (Phase 7).
 
 - Security: bumped indirect dependencies to clear govulncheck findings reachable from this module's code (golang.org/x/net v0.58.0 to v0.60.0 and github.com/quic-go/quic-go v0.59.0 to v0.59.1 where present; github.com/moby/go-archive v0.2.0 to v0.3.0, github.com/klauspost/compress v1.18.6 to v1.20.2 and github.com/moby/sys/user v0.4.0 to v0.4.1 where present, test-only via testcontainers). No API change.

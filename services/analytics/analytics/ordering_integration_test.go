@@ -24,7 +24,7 @@ func TestEnrollmentMirror_EnrolledWithdrawn_AnyOrderAndDuplicatesConverge(t *tes
 	orders := map[string][]int{"in-order": {0, 1}, "reversed": {1, 0}, "dup-reversed": {1, 1, 0, 0, 1}, "dup-in-order": {0, 0, 1, 1}}
 	for name, order := range orders {
 		t.Run(name, func(t *testing.T) {
-			env := testenv.Setup(t)
+			env := setup(t)
 			course, enr, stu := uuid.New(), uuid.New(), uuid.New()
 			evs := []advEvent{
 				ev(1, "enrollment.student_enrolled", map[string]any{"enrollment_id": enr, "student_id": stu, "course_id": course, "enrolled_at": at}),
@@ -46,7 +46,7 @@ func TestEnrollmentMirror_EnrolledWithdrawn_AnyOrderAndDuplicatesConverge(t *tes
 // A late-arriving completion (id 3) must not be undone by a delayed older
 // enrolled (id 1), and a stale withdrawn (id 2) must not undo completion.
 func TestEnrollmentMirror_CompletedNotRevertedByOlderEvents(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	course, enr, stu := uuid.New(), uuid.New(), uuid.New()
 	at := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
 	enrolled := ev(1, "enrollment.student_enrolled", map[string]any{"enrollment_id": enr, "student_id": stu, "course_id": course, "enrolled_at": at})
@@ -74,7 +74,7 @@ func TestEnrollmentMirror_CompletedNotRevertedByOlderEvents(t *testing.T) {
 // Daily bucket follows enrolled_at's UTC day, including for a non-UTC
 // offset in the payload, and is not double counted on redelivery.
 func TestDailyEnrollment_BucketsByEnrolledAtUTC(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	course := uuid.New()
 	// 2026-03-01 01:30 at +05:00 is 2026-02-28 20:30 UTC.
 	e := ev(1, "enrollment.student_enrolled", map[string]any{

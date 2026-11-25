@@ -2,6 +2,8 @@
 
 **Date:** 2026-11-17 · **Branch:** `refactor/module-split-tests` · **Companion to:** `docs/plans/module-split.md`, ADR-0026, DR-020
 
+> **Superseded in part by the microservices split (ADR-0033..0035, `docs/plans/microservices-split.md`), 2026-11-26.** This is a point-in-time assessment (2026-11-17) and is kept as written. Statements that no longer hold: there is no `services/worker` and no worker that imports `course` and `analytics` (each service has its own workers; services import only `libs/*`); the repository has 33 modules and 11 binaries, not 20 modules and four images; the `platform` schema is gone; Kafka, MongoDB, Asynq, notifications, OpenTelemetry/Prometheus and the dead-letter store were built in Week 3 (so the "Not built (M3/M4)" rows and "Week 3: Not started" are out of date, and analytics is 9 of 9 metrics, DR-026); the in-process relay is removed. The ratings and counts below describe 2026-11-17, not today.
+
 ## Purpose
 
 Phase 7 of the module-split plan: re-check the result against the frozen baseline (`docs/baseline/SmartCourse.md`, `docs/baseline/Execution Guidelines.md`) and the Week 2 review, confirm the split did not stray from either, and give a rating that does not flatter. Nothing here is a claim that a control or requirement is "done" on anyone's behalf: each row says what was checked and how.
@@ -31,13 +33,13 @@ Status words: **Met** (built and exercised by tests or a live run), **Partial** 
 | 2.5 | Publish: analytics initialised | Met | `course.course_published` consumed by analytics |
 | 2.6 | Course marked Ready; partial failures do not corrupt | Met | `state: ready` observed live after the split; blue-green promotion is the last step (ADR-0010), and injected activity faults left the live version intact. The adversarial phase found search exposing a course whose publish failed (F-08); fixed, with regression tests, so search now joins on the published version |
 | 3.1 | Enrollment recorded, progress initialised, analytics updated | Met | |
-| 3.2 | Enrollment triggers notifications | Not built | M3 |
+| 3.2 | Enrollment triggers notifications | Not built | M3 *(built in Week 3: `notification-worker`)* |
 | 3.3 | Idempotency, backpressure, recovery, concurrency without inconsistency | Met | The enroll path held under 150 contenders for 25 seats. The adversarial phase found the **withdraw** path did not (was Partial until fixed): a concurrent double withdraw decrements `enrollment_count` twice and emits two events, leaking seats (F-01, found independently by both testers). Concurrent final lessons could leave an enrollment `active` forever (F-06), and the relay released its claim lock before handlers ran, so two replicas could run one event concurrently (F-04). All three are fixed (ADR-0027 for the relay) and covered by regression tests |
 | 4.1 | Async processing: publishing, analytics, cache, search | Met | Temporal workflow and the in-process relay (ADR-0021/0025) |
 | 4.2 | Async processing: notification delivery | Not built | M3 (Asynq) |
 | 4.3 | Traceable, recoverable, no duplicate processing | Partial | recoverable and de-duplicated (`processed_events`); not traceable beyond logs until OpenTelemetry (M4) |
-| 4.4 | Kafka event backbone | Not built | M3. The relay is a deliberate in-process stand-in (ADR-0021) |
-| 5 | Analytics metrics (the baseline names nine) | **Partial: 7 of 9** | Total students, total instructors, total courses published, average courses per student (`platform_snapshot`); completion rate, average completion time (`course_stats`); new enrollments over time (`daily_enrollments`). **Missing: Most Popular Courses, Failed Events.** The PRD and README say "ten metrics"; the baseline lists nine plus an empty tenth bullet, so "7 of 10" overstates the denominator |
+| 4.4 | Kafka event backbone | Not built | M3. The relay is a deliberate in-process stand-in (ADR-0021) *(superseded: Kafka is the only transport, per-service publish-only relays, ADR-0033)* |
+| 5 | Analytics metrics (the baseline names nine) | **Partial: 7 of 9** *(9 of 9 have a source as of 2026-11-24, DR-024, DR-026)* | Total students, total instructors, total courses published, average courses per student (`platform_snapshot`); completion rate, average completion time (`course_stats`); new enrollments over time (`daily_enrollments`). **Missing: Most Popular Courses, Failed Events.** The PRD and README say "ten metrics"; the baseline lists nine plus an empty tenth bullet, so "7 of 10" overstates the denominator |
 | 6.1 | Clear separation of responsibilities | Met | strengthened by this work: one Go module per service, enforced by the module graph and two CI guards |
 | 6.2 | Monitoring and logging | Partial | structured JSON logging yes; Prometheus/Grafana/Jaeger/OpenTelemetry exist only as compose profiles and code comments (M4) |
 | 6.3 | Diagnose failures in publishing, enrollment, background tasks | Partial | `publish-status`, logs, Temporal UI; no metrics or traces |
@@ -77,7 +79,7 @@ Count of the 32 rows above: **19 Met, 7 Partial, 6 Not built.** (Every row count
 | "The Temporal SDK and every other library come along" | `identity-api` and `analytics-api` link no Temporal code. `course-api` and `worker` do, because they use it | Done |
 | Week 2 "minor fixes on elevate" | project owner reports these were already fixed (2026-11-18); the list itself was not seen here | **Done per the owner, not independently checked** |
 
-What this work did **not** do, and the supervisor may expect: per-service event consumption (the worker still imports the `course` and `analytics` handler packages; deferred to M3 Kafka, ADR-0026), per-service migrations folders, tagged module versions (mechanics built, nothing tagged).
+What this work did **not** do, and the supervisor may expect: per-service event consumption (the worker still imports the `course` and `analytics` handler packages; deferred to M3 Kafka, ADR-0026; *done 2026-11-25 by the microservices split, ADR-0033*), per-service migrations folders, tagged module versions (mechanics built, nothing tagged).
 
 ## D. Did the split stray from the baseline or the earlier ADRs?
 
@@ -86,7 +88,7 @@ What this work did **not** do, and the supervisor may expect: per-service event 
 | Services independently deployable (ADR-0022/0023) | four images built from only the modules each needs, with `GOWORK=off`; stack run from them, all three APIs ready |
 | Seat-limit transaction (ADR-0012) | `course`, `enrollment`, `progress` kept in one module; the concurrency test passes after the split |
 | Schema per service (ADR-0024) | unchanged; migrations untouched |
-| Outbox and relay semantics (ADR-0006/0021) | unchanged; relay tests pass |
+| Outbox and relay semantics (ADR-0006/0021) | unchanged; relay tests pass *(ADR-0021's in-process relay and the shared outbox were later superseded in part by ADR-0033)* |
 | Publishing as a workflow (ADR-0025) | live: 202 from course-api, workflow ran in the worker, state `ready` |
 | No behaviour change | the full integration suite passed at every phase |
 

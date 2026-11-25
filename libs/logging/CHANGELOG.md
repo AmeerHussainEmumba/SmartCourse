@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- README: states which service binaries use the module (microservices split). No code change.
+
 - Added `Correlated(ctx)` (logger from `ctx` plus `trace_id` and `span_id` of the active span), `WithEventID`, `WithJobID` and the key constants (RFC section 12.4).
 
 ## [0.1.0] - not yet tagged

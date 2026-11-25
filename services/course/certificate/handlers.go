@@ -4,7 +4,7 @@
 // idempotency marker will commit in, so the certificate and "I've processed
 // this" become atomic together (RFC §6.6).
 //
-// The caller (services/worker's relay wiring) registers Handlers() alongside
+// The caller (course-worker's consumer wiring) registers Handlers() alongside
 // the other modules' handlers; nothing in this package starts a relay.
 package certificate
 

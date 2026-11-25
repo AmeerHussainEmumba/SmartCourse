@@ -20,10 +20,10 @@
 # Base URLs (defaults match docker-compose.yml's host ports):
 #   IDENTITY_URL=http://localhost:8090  COURSE_URL=http://localhost:8091
 #   ANALYTICS_URL=http://localhost:8092
-# Admin used to promote a freshly registered user to instructor (the seeded
-# dev admin by default; tools/seed documents this account and refuses to run
-# outside APP_ENV=development):
-#   VERIFY_ADMIN_EMAIL=admin@smartcourse.dev  VERIFY_ADMIN_PASSWORD=SeedPass123!
+# Admin used to promote a freshly registered user to instructor: the first admin
+# that `make seed` creates with identity-admin (SEED_ADMIN_EMAIL /
+# SEED_ADMIN_PASSWORD, env.example defaults unless you set them):
+#   VERIFY_ADMIN_EMAIL=admin@smartcourse.local  VERIFY_ADMIN_PASSWORD=change-me-admin-password
 # Other: VERIFY_PUBLISH_TIMEOUT_S=90 (wait for a publish to reach ready).
 #
 # What it creates: three users (all with fresh random emails) and one published
@@ -37,8 +37,8 @@ set -uo pipefail
 IDENTITY_URL=${IDENTITY_URL:-http://localhost:8090}
 COURSE_URL=${COURSE_URL:-http://localhost:8091}
 ANALYTICS_URL=${ANALYTICS_URL:-http://localhost:8092}
-ADMIN_EMAIL=${VERIFY_ADMIN_EMAIL:-admin@smartcourse.dev}
-ADMIN_PASSWORD=${VERIFY_ADMIN_PASSWORD:-SeedPass123!}
+ADMIN_EMAIL=${VERIFY_ADMIN_EMAIL:-${SEED_ADMIN_EMAIL:-admin@smartcourse.local}}
+ADMIN_PASSWORD=${VERIFY_ADMIN_PASSWORD:-${SEED_ADMIN_PASSWORD:-change-me-admin-password}}
 PUBLISH_TIMEOUT_S=${VERIFY_PUBLISH_TIMEOUT_S:-90}
 USER_PASSWORD='Verify-Pass-1234'
 RUN_ID="$(date +%s)${RANDOM}"
@@ -363,7 +363,7 @@ check_TS_MONGO() { pending "Phase 4: db.events.countDocuments() increases after 
 check_TS_ASYNQ() { pending "Phase 5: three queues weighted 6:3:1; processed count increases"; }
 check_TS_PROM()  { pending "Phase 7: /metrics on every service (RED plus outbox_backlog, kafka_consumer_lag, asynq_queue_depth, dead_letter_total); Prometheus targets up"; }
 check_TS_GRAF()  { pending "Phase 7: GET /api/search?type=dash-db on Grafana lists the provisioned dashboard"; }
-check_TS_JAEGER(){ pending "Phase 7: GET /api/services on Jaeger lists identity-api, course-api, analytics-api, worker"; }
+check_TS_JAEGER(){ pending "Phase 7: GET /api/services on Jaeger lists the ten service names (identity-api, identity-worker, course-api, course-worker, analytics-api, analytics-worker, notification-worker, publishing-worker, audit-api, audit-worker)"; }
 check_TS_OTEL()  { pending "Phase 7: covered by E02; instrumentation present in HTTP, DB, Redis, Kafka, Asynq, Temporal"; }
 check_AD_3()     { pending "Phase 5: Asynq scheduler has a 60 s analytics reconciliation task"; }
 check_P1_3() {
@@ -415,19 +415,19 @@ run_e2e() {
   fi
 }
 check_E01() { run_e2e '^TestE2E_E01_'; }
-check_E02() { run_e2e '^TestE2E_E02_'; }
+check_E02() { pending "Wave C3b: TestE2E_E02_ is not ported to the ten-binary harness yet (test/e2e/legacy)"; }
 check_E03() { run_e2e '^TestE2E_E03_'; }
 check_E04() { run_e2e '^TestE2E_E04_'; }
 check_E05() { run_e2e '^TestE2E_E05_'; }
 check_E06() { run_e2e '^TestE2E_E06_'; }
 check_E07() { run_e2e '^TestE2E_E07_'; }
-check_E08() { run_e2e '^TestE2E_E08_'; }
-check_E09() { run_e2e '^TestE2E_E09_'; }
-check_E10() { run_e2e '^TestE2E_E10_'; }
-check_E11() { run_e2e '^TestE2E_E11_'; }
-check_E12() { run_e2e '^TestE2E_E12_'; }
-check_E13() { run_e2e '^TestE2E_E13_'; }
-check_E14() { run_e2e '^TestE2E_E14_'; }
+check_E08() { pending "Wave C3b: TestE2E_E08_ is not ported to the ten-binary harness yet (test/e2e/legacy)"; }
+check_E09() { pending "Wave C3b: TestE2E_E09_ is not ported to the ten-binary harness yet (test/e2e/legacy)"; }
+check_E10() { pending "Wave C3b: TestE2E_E10_ is not ported to the ten-binary harness yet (test/e2e/legacy)"; }
+check_E11() { pending "Wave C3b: TestE2E_E11_ is not ported to the ten-binary harness yet (test/e2e/legacy)"; }
+check_E12() { pending "Wave C3b: TestE2E_E12_ is not ported to the ten-binary harness yet (test/e2e/legacy)"; }
+check_E13() { pending "Wave C3b: TestE2E_E13_ is not ported to the ten-binary harness yet (test/e2e/legacy)"; }
+check_E14() { pending "Wave C3b: TestE2E_E14_ is not ported to the ten-binary harness yet (test/e2e/legacy)"; }
 
 # ---------------------------------------------------------------- registry
 # id|name|function. Order here is run order; ids match the matrix.
@@ -484,12 +484,12 @@ needs_stack() {
   return 1
 }
 
-# E01 to E14 run through `go test -tags=e2e` in test/e2e, which starts its own
-# containers (they need Docker, not the running stack); all fourteen are
-# implemented, so --list shows them as e2e, not pending.
+# E01 and E03 to E07 run through `go test -tags=e2e` in test/e2e, which starts
+# its own containers (they need Docker, not the running stack). E02 and E08 to
+# E14 are pending until Wave C3b ports them to the ten-binary harness.
 is_e2e() {
   case "$1" in
-    E0[1-9]|E1[0-4]) return 0 ;;
+    E01|E0[3-7]) return 0 ;;
   esac
   return 1
 }

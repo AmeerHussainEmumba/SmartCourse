@@ -4,6 +4,10 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- README corrected for the split: wiring through `libs/runtime`, per-service outbox gauges, `/metrics` only on the internal listener (`RegisterMetricsRoute` removed), the cross-binary trace test status. No code change.
+
+- README: the internal listener (`libs/runtime`) that serves `/metrics`, `/health/live` and `/health/ready` on `METRICS_HTTP_ADDR` for every binary. No code change.
+
 - Added `TraceparentFromIDs(traceID, spanID)` (builds a traceparent from an outbox row's two id columns, sampled flag set, empty for invalid ids), `StartRelay` (INTERNAL span for the outbox relay delivering a row) and the `TraceparentHeader` constant shared by the Kafka record header and the Asynq task header.
 
 - Wired into identity-api, course-api, analytics-api and the worker through `libs/infra` (`Dependencies.Observe`), Phase 7.

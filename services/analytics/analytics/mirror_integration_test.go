@@ -18,12 +18,11 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/analytics/analytics"
 )
 
 func TestRecomputeCourseStats_ReflectsEnrollmentMirror(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	ctx := context.Background()
 	courseID := uuid.Must(uuid.NewV7())
 
@@ -107,7 +106,7 @@ func TestRecomputeCourseStats_ReflectsEnrollmentMirror(t *testing.T) {
 // was caught live (a seeded instructor showing up as a student in
 // analytics.platform_snapshot) before this guard existed.
 func TestUpsertUserRoleMirror_IgnoresOutOfOrderDelivery(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	ctx := context.Background()
 	userID := uuid.Must(uuid.NewV7())
 

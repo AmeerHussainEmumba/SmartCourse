@@ -33,7 +33,7 @@ func feed(t *testing.T, env *testenv.Env, events ...advEvent) {
 }
 
 func TestReconciler_HealsCorruptedCounters(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	feed(t, env, scenario()...)
 	want := stateDump(t, env, true)
 
@@ -74,12 +74,12 @@ func TestReconciler_HealsCorruptedCounters(t *testing.T) {
 }
 
 func TestReconciler_RebuildsMissingAggregates(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	feed(t, env, scenario()...)
 	want := stateDump(t, env, true)
 
 	// Aggregates wiped entirely (a restore, a manual truncate); the mirrors survive.
-	if err := env.DB.Exec(`TRUNCATE course_stats, daily_enrollments, platform_snapshot`).Error; err != nil {
+	if err := env.Owner.Exec(`TRUNCATE analytics.course_stats, analytics.daily_enrollments, analytics.platform_snapshot`).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := analytics.NewReconciler(env.DB, nil).Run(context.Background()); err != nil {
@@ -91,7 +91,7 @@ func TestReconciler_RebuildsMissingAggregates(t *testing.T) {
 }
 
 func TestReconciler_RefreshesPopularSortedSet(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	ctx := context.Background()
 	c1, c2, c3 := uuid.New(), uuid.New(), uuid.New()
 	feed(t, env,
@@ -131,7 +131,7 @@ func TestReconciler_RefreshesPopularSortedSet(t *testing.T) {
 }
 
 func TestReconciler_EmptyRankingClearsSortedSet(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	ctx := context.Background()
 	if err := env.RDB.ZAdd(ctx, analytics.PopularCoursesKey, redis.Z{Score: 5, Member: uuid.NewString()}).Err(); err != nil {
 		t.Fatal(err)
@@ -146,7 +146,7 @@ func TestReconciler_EmptyRankingClearsSortedSet(t *testing.T) {
 
 // Redis being down must be reported, but Postgres is still repaired first.
 func TestReconciler_RedisDown_StillRepairsPostgres_AndReportsError(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	feed(t, env, scenario()...)
 	want := stateDump(t, env, true)
 	if err := env.DB.Exec(`UPDATE platform_snapshot SET total_students = 999`).Error; err != nil {
@@ -169,7 +169,7 @@ func TestReconciler_RedisDown_StillRepairsPostgres_AndReportsError(t *testing.T)
 // already be right, i.e. no Run may have overwritten a newer handler result
 // with a stale recompute, and no deadlock or error may occur.
 func TestReconciler_ConcurrentWithHandlersAndSecondRun(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	ctx := context.Background()
 	const courses, perWorker, workers = 2, 10, 4
 	courseIDs := make([]uuid.UUID, courses)
@@ -254,7 +254,7 @@ func TestReconciler_ConcurrentWithHandlersAndSecondRun(t *testing.T) {
 // If Run computed from a snapshot taken before waiting (a single
 // INSERT..SELECT..ON CONFLICT), it would write back a stale total of 0.
 func TestReconciler_WaitsForInFlightHandlerAndDoesNotOverwriteItsResult(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	ctx := context.Background()
 	course := uuid.New()
 	feed(t, env, ev(1, "course.course_published", map[string]any{"course_id": course}))

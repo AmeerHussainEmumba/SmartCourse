@@ -22,7 +22,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/idempotency"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 type harness struct {
@@ -36,7 +35,7 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	h := &harness{db: testenv.Setup(t).DB}
+	h := &harness{db: setupCourse(t).DB}
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(func(c *gin.Context) {

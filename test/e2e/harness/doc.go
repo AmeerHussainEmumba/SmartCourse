@@ -1,9 +1,12 @@
 // Package harness is the container-tier stack of the Week 3 end-to-end
-// scenarios (docs/plans/week-3.md section 5, test/README.md): real Postgres,
-// Redis, Kafka, Schema Registry, MongoDB, Mailpit and Temporal through
-// testcontainers, and the real worker, identity-api, course-api and
-// analytics-api binaries run as subprocesses with the environment the compose
-// file gives them.
+// scenarios (docs/plans/week-3.md section 5, test/README.md): real Postgres
+// (the real roles script and every migration), Redis, Kafka, a Confluent
+// Schema Registry, MongoDB, Mailpit and Temporal through testcontainers, and
+// the ten service binaries (identity-api, identity-worker, course-api,
+// course-worker, analytics-api, analytics-worker, notification-worker,
+// publishing-worker, audit-api, audit-worker) run as subprocesses, each with
+// exactly the environment of its configuration table and its own Postgres
+// role. The first admin is made by the built identity-admin CLI.
 //
 // A scenario is written against Stack:
 //
@@ -14,14 +17,15 @@
 //	enr := s.Enroll(t, student, course)
 //	harness.Eventually(t, time.Minute, "one mail", func() error { ... })
 //
-// Where things live: stack.go (what runs and how it is wired), infra.go
-// (containers shared by the whole test binary: Schema Registry and Temporal),
-// proc.go and build.go (binaries as subprocesses), api.go (HTTP helpers),
-// mailpit.go, mongo.go, kafka.go, metrics.go and workeradmin.go (readers and
-// fault controls for each dependency), poll.go (Eventually).
+// Where things live: stack.go (Start, per-binary Start/Stop/Kill, readiness,
+// SQL readers), topology.go (what each binary reads: the environment tables),
+// infra.go (containers shared by the whole test binary: Schema Registry and
+// Temporal), proc.go and build.go (binaries as subprocesses), api.go (HTTP
+// helpers), audit.go (failed events through audit-api), mailpit.go, mongo.go,
+// kafka.go and metrics.go (readers and fault controls for each dependency),
+// poll.go (Eventually).
 //
-// The package imports no service internals beyond the module graph allows
-// (test/e2e may require libs/* and services/identity and services/course
-// only, scripts/check-module-graph.sh), so the worker and analytics-api are
-// built with `go build` and run as processes, never imported.
+// The package imports no service module (test/e2e requires libs/* only,
+// scripts/check-module-graph.sh): the binaries are built with `go build` and
+// run as processes, never imported.
 package harness

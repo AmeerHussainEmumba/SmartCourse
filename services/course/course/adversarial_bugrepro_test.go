@@ -31,6 +31,7 @@ import (
 // archive, upload-url) for the rest of its TTL.
 func TestBugrepro_Course_RedisFlush_ResurrectsSuspendedInstructorToken(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := course.NewService(course.NewRepository(env.DB), env.RDB, nil, "")
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

@@ -142,7 +142,7 @@ func TestMigration000003_DownRemovesColumn_UpRestoresIt_KeepsRows(t *testing.T) 
 		t.Helper()
 		// The migration files SET search_path for their own session; do it on
 		// one pinned connection and restore the test search_path after.
-		sqlDB, err := s.env.DB.DB()
+		sqlDB, err := s.env.Owner.DB()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -151,7 +151,7 @@ func TestMigration000003_DownRemovesColumn_UpRestoresIt_KeepsRows(t *testing.T) 
 			t.Fatal(err)
 		}
 		defer func() {
-			_, _ = conn.ExecContext(t.Context(), `SET search_path TO identity,course,analytics,platform,public`)
+			_, _ = conn.ExecContext(t.Context(), `SET search_path TO public`)
 			_ = conn.Close()
 		}()
 		for _, st := range migrationStatements(t, name) {
