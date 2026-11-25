@@ -1,9 +1,9 @@
-//go:build integration && bugrepro
+//go:build integration
 
-// Reproducers for behaviour defects found by the second adversarial pass
-// (docs/plans/week-3-findings-behaviour.md). They fail today by design.
+// Regression guards from the second adversarial pass: attacks that HELD
+// (docs/plans/week-3-findings-behaviour.md, "What held").
 //
-//	cd services/worker && go test -tags='integration bugrepro' -run Bugrepro ./transport/
+//	cd services/worker && go test -tags=integration -run TestAdversarial ./transport/
 package transport_test
 
 import (
@@ -36,15 +36,12 @@ func (c *collectSink) n() int {
 	return len(c.parked)
 }
 
-// B-08: a row whose encoded record is larger than the broker accepts (here a
-// 3 MiB name against the 1 MiB default) is classified by classifyProduceError.
-// The client-side "record too large" error is not a *kerr.Error the function
-// recognises, so the row is treated as a transient broker problem: it does not
-// consume its attempt budget, is retried forever and, because publish mode
-// holds back every later row of the same aggregate, blocks that aggregate for
-// good. Expected: a record no retry can fix is parked within the budget and the
-// aggregate's later events flow.
-func TestBugrepro_OversizeRecord_BlocksItsAggregateForever(t *testing.T) {
+// The hypothesis was that a row whose encoded record is larger than the broker
+// accepts (here a 3 MiB name against the 1 MiB default) escapes
+// classifyProduceError, is treated as a transient broker problem, never uses its
+// attempt budget and blocks its aggregate forever. It does not: the record is
+// parked within the budget and the later event of the same aggregate flows.
+func TestAdversarial_OversizeRecord_IsParkedAndDoesNotBlockItsAggregate(t *testing.T) {
 	s := newStack(t)
 	agg := uuid.New()
 	s.writeType(agg, effectType, map[string]any{"user_id": agg, "full_name": strings.Repeat("x", 3<<20)})
