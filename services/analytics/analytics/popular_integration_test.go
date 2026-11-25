@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/analytics/analytics"
 )
 
@@ -33,7 +32,7 @@ type popularEnv struct {
 }
 
 func newPopularEnv(t *testing.T, withRedis bool) *popularEnv {
-	env := testenv.Setup(t)
+	env := setup(t)
 	svc := analytics.NewService(analytics.NewRepository(env.DB))
 	if withRedis {
 		svc = svc.WithPopularCache(env.RDB)
@@ -153,7 +152,7 @@ func TestPopularCourses_RedisEmpty_FallsBackToPostgres(t *testing.T) {
 }
 
 func TestPopularCourses_RedisDown_FallsBackToPostgres_Never5xx(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	dead := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 200 * time.Millisecond, MaxRetries: -1})
 	defer func() { _ = dead.Close() }()
 	svc := analytics.NewService(analytics.NewRepository(env.DB)).WithPopularCache(dead)

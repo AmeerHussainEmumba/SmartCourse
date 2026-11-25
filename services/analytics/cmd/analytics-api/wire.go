@@ -25,27 +25,26 @@ const shutdownTimeout = 15 * time.Second
 // buildRouter builds the public engine: health and the analytics routes. It
 // deliberately does not mount /metrics: that is served only on the internal
 // listener (METRICS_HTTP_ADDR) that libs/runtime starts (design §6).
-func buildRouter(p *runtime.Process) (*gin.Engine, func(context.Context), error) {
-	cfg := p.Config
+func buildRouter(cfg *config.Config, deps *infra.Dependencies, obs *infra.Observability) (*gin.Engine, func(context.Context), error) {
 	r, err := router.NewWithOptions(router.Options{
 		Env:            cfg.Env,
 		AllowedOrigins: cfg.CORSAllowedOrigins,
 		TrustedProxies: cfg.TrustedProxies,
 		MaxBodyBytes:   cfg.MaxBodyBytes,
 		HSTS:           cfg.EnableHSTS,
-		Observe:        p.Obs.Middleware(),
+		Observe:        obs.Middleware(),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid router configuration: %w", err)
 	}
-	router.RegisterHealth(r, p.Deps.HealthCheckers())
-	closeRoutes := registerRoutes(r, p.Deps, cfg)
+	router.RegisterHealth(r, deps.HealthCheckers())
+	closeRoutes := registerRoutes(r, deps, cfg)
 	return r, closeRoutes, nil
 }
 
 // wire registers the HTTP server as the one critical component.
 func wire(p *runtime.Process) error {
-	r, closeRoutes, err := buildRouter(p)
+	r, closeRoutes, err := buildRouter(p.Config, p.Deps, p.Obs)
 	if err != nil {
 		return err
 	}

@@ -167,7 +167,7 @@ func truncateAnalytics(t *testing.T, env *testenv.Env) {
 // Replaying the whole event history through the REAL relay (outbox rows
 // reset to unpublished) N times must change nothing.
 func TestAdvAnalytics_ReplayThroughRelayIsIdempotent(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	for _, e := range scenario() {
 		raw, _ := json.Marshal(e.payload)
 		if err := env.DB.Exec(`INSERT INTO outbox (event_id, aggregate_type, aggregate_id, event_type, schema_version, payload)
@@ -222,7 +222,7 @@ func TestAdvAnalytics_ReplayThroughRelayIsIdempotent(t *testing.T) {
 // last_event_id guard, published, enrolled, completed-after-enrolled) must
 // converge to the same state under shuffling and N-fold duplication.
 func TestAdvAnalytics_ShuffledAndDuplicatedDeliveryConverges(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	events := scenario()
 
 	// Canonical: in-order, once.
@@ -253,7 +253,7 @@ func TestAdvAnalytics_ShuffledAndDuplicatedDeliveryConverges(t *testing.T) {
 }
 
 func TestAdvAnalytics_UserRoleEvents_OutOfOrderAndDuplicated(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	uid := uuid.New()
 	registered := ev(10, "identity.user_registered", map[string]any{"user_id": uid, "role": "student"})
 	promoted := ev(20, "identity.user_role_changed", map[string]any{"user_id": uid, "role": "instructor"})
@@ -299,7 +299,7 @@ func TestAdvAnalytics_UserRoleEvents_OutOfOrderAndDuplicated(t *testing.T) {
 // fail loudly (so the relay retries), write nothing, and succeed once the
 // enrollment arrives.
 func TestAdvAnalytics_CompletedBeforeEnrolled_FailsThenSucceedsAfterEnrolled(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	course, enr, stu := uuid.New(), uuid.New(), uuid.New()
 	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	completed := ev(2, "progress.course_completed", map[string]any{"enrollment_id": enr, "student_id": stu, "completed_at": at.Add(time.Minute)})
@@ -330,7 +330,7 @@ func TestAdvAnalytics_CompletedBeforeEnrolled_FailsThenSucceedsAfterEnrolled(t *
 // Malformed payloads must error (retry then give up), never silently zero a
 // counter or panic.
 func TestAdvAnalytics_MalformedAndHostilePayloads(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	for _, typ := range []string{"identity.user_registered", "course.course_published", "enrollment.student_enrolled", "enrollment.student_withdrawn", "progress.course_completed"} {
 		for _, raw := range []string{`not json`, `[]`, `{"user_id": 5}`, `{"course_id":"nope"}`} {
 			for _, h := range analytics.Handlers() {

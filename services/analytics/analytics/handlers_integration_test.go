@@ -64,7 +64,7 @@ func pollUntil(t *testing.T, deadline time.Duration, fn func() bool) {
 }
 
 func TestHandlePlatformCounts_UserRegistered_UpsertsRoleMirrorAndRecomputesSnapshot(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	userID := uuid.Must(uuid.NewV7())
 
 	rl := newTestRelay(env)
@@ -90,7 +90,7 @@ func TestHandlePlatformCounts_UserRegistered_UpsertsRoleMirrorAndRecomputesSnaps
 }
 
 func TestHandlePlatformCounts_UserRoleChanged_UpdatesRoleMirror(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	userID := uuid.Must(uuid.NewV7())
 
 	rl := newTestRelay(env)
@@ -118,7 +118,7 @@ func TestHandlePlatformCounts_UserRoleChanged_UpdatesRoleMirror(t *testing.T) {
 }
 
 func TestHandleCoursePublished_UpsertsCourseMirrorAndStatsRow(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	courseID := uuid.Must(uuid.NewV7())
 
 	rl := newTestRelay(env)
@@ -144,7 +144,7 @@ func TestHandleCoursePublished_UpsertsCourseMirrorAndStatsRow(t *testing.T) {
 }
 
 func TestHandleStudentEnrolled_InsertsEnrollmentMirror(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	courseID := uuid.Must(uuid.NewV7())
 	studentID := uuid.Must(uuid.NewV7())
 	enrollmentID := uuid.Must(uuid.NewV7())
@@ -181,7 +181,7 @@ func TestHandleStudentEnrolled_InsertsEnrollmentMirror(t *testing.T) {
 }
 
 func TestHandleStudentWithdrawn_UpdatesEnrollmentMirrorStatus(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	courseID := uuid.Must(uuid.NewV7())
 	studentID := uuid.Must(uuid.NewV7())
 	enrollmentID := uuid.Must(uuid.NewV7())
@@ -224,7 +224,7 @@ func TestHandleStudentWithdrawn_UpdatesEnrollmentMirrorStatus(t *testing.T) {
 // first) — a real cross-handler dependency, not just a single handler in
 // isolation.
 func TestHandleCourseCompleted_ResolvesCourseIDAndUpdatesStats(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	courseID := uuid.Must(uuid.NewV7())
 	studentID := uuid.Must(uuid.NewV7())
 	enrollmentID := uuid.Must(uuid.NewV7())

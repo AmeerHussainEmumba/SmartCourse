@@ -21,7 +21,7 @@ import (
 // must both work on that.
 func TestSchemaIsolation_AnalyticsHandlersAndReadsOnOwnSchemaOnly(t *testing.T) {
 	env := testenv.Setup(t)
-	conn := env.OpenWithSearchPath(t, "analytics,public")
+	conn := env.ServiceDB(t, "analytics") // svc_analytics, search_path analytics,public
 	ctx := context.Background()
 
 	for _, q := range []string{`SELECT 1 FROM courses`, `SELECT 1 FROM users`, `SELECT 1 FROM outbox`, `SELECT 1 FROM enrollments`} {
