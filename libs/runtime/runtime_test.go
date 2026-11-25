@@ -52,7 +52,7 @@ func start(t *testing.T, wire func(*runtime.Process) error, opts ...runtime.Opti
 	h := &harness{t: t, addr: freeAddr(t), done: make(chan struct{})}
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
-	all := append([]runtime.Option{runtime.WithConfig(testConfig(h.addr, true)), runtime.WithoutDependencies(), runtime.WithLogger(quiet)}, opts...)
+	all := append([]runtime.Option{runtime.WithConfig(testConfig(h.addr, true)), runtime.WithLogger(quiet)}, opts...)
 	go func() { h.err = runtime.Run(ctx, "test-svc", wire, all...); close(h.done) }()
 	t.Cleanup(func() { cancel(); <-h.done })
 	return h
@@ -313,7 +313,7 @@ func TestInternalListener_NoMetricsRouteWhenMetricsAreOff(t *testing.T) {
 	h.cancel = cancel
 	go func() {
 		h.err = runtime.Run(ctx, "x", func(p *runtime.Process) error { return nil },
-			runtime.WithConfig(testConfig(h.addr, false)), runtime.WithoutDependencies(), runtime.WithLogger(quiet))
+			runtime.WithConfig(testConfig(h.addr, false)), runtime.WithLogger(quiet))
 		close(h.done)
 	}()
 	t.Cleanup(func() { cancel(); <-h.done })
@@ -418,7 +418,7 @@ func TestInternalListener_BindFailureDoesNotStopTheProcess(t *testing.T) {
 		done <- runtime.Run(ctx, "x", func(p *runtime.Process) error {
 			p.Go("work", func(ctx context.Context) error { ran.Store(true); <-ctx.Done(); return nil })
 			return nil
-		}, runtime.WithConfig(testConfig(l.Addr().String(), true)), runtime.WithoutDependencies(), runtime.WithLogger(quiet))
+		}, runtime.WithConfig(testConfig(l.Addr().String(), true)), runtime.WithLogger(quiet))
 	}()
 	eventually(t, "component running despite the failed bind", ran.Load)
 	cancel()

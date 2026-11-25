@@ -18,6 +18,7 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/asynqx"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/jobs"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
@@ -107,7 +108,7 @@ func startWorker(t *testing.T, env *testenv.Env, newPublisher publisherFactory) 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- runtime.Run(ctx, "identity-worker", func(p *runtime.Process) error { return wireWith(p, newPublisher) }, runtime.WithOutbox())
+		done <- runtime.Run(ctx, "identity-worker", func(p *runtime.Process) error { return wireWith(p, newPublisher) }, runtime.WithDependencies(infra.Connect), runtime.WithOutbox())
 	}()
 	t.Cleanup(func() {
 		cancel()

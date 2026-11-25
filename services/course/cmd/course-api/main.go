@@ -10,8 +10,9 @@
 // are on the INTERNAL listener (METRICS_HTTP_ADDR), never on the public port.
 package main
 
+import "github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 import "github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 
 func main() {
-	runtime.Main("course-api", wire, runtime.WithOutbox())
+	runtime.Main("course-api", wire, runtime.WithDependencies(infra.Connect), runtime.WithOutbox())
 }

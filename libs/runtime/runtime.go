@@ -12,8 +12,8 @@
 //		})
 //	}
 //
-// Main loads the configuration, builds the logger, connects Postgres and Redis,
-// starts telemetry (tracing, metrics), serves the INTERNAL listener
+// Main loads the configuration, builds the logger, connects the dependencies the
+// binary asked for (WithDependencies: Postgres and Redis), starts telemetry (tracing, metrics), serves the INTERNAL listener
 // (METRICS_HTTP_ADDR, default :9100: /metrics, /health/live, /health/ready), runs
 // the components, and on SIGTERM or SIGINT shuts down gracefully within a bounded
 // time and flushes telemetry.
@@ -27,9 +27,15 @@
 //     component that should retry owns its own loop.
 //   - Critical(): cancels the process, which then shuts down and exits non-zero.
 //
-// The API binaries' public /metrics mounting (libs/infra RegisterMetricsRoute,
-// libs/router) is left in place until Wave C removes it, once every binary
-// serves the internal listener.
+// Dependencies are optional and chosen by the binary, so a binary that never
+// connects a database does not link a database driver:
+//
+//	runtime.Main("course-api", wire, runtime.WithDependencies(infra.Connect))
+//
+// Inside the wiring function p.Deps is that value as a Dependencies interface;
+// infra.Of(p.Deps) gives the *infra.Dependencies back. This package imports
+// libs/infra/observe (telemetry) but never libs/infra, so pgx, GORM and go-redis
+// stay out of a binary that does not pass a constructor.
 package runtime
 
 import (
@@ -45,7 +51,7 @@ import (
 	"time"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra/observe"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/logging"
 )
 
@@ -65,10 +71,11 @@ type Process struct {
 	Name   string
 	Config *config.Config
 	Logger *slog.Logger
-	// Deps is nil under WithoutDependencies.
-	Deps *infra.Dependencies
+	// Deps is what WithDependencies connected, nil when the binary has none.
+	// infra.Of(Deps) is the *infra.Dependencies behind it.
+	Deps Dependencies
 	// Obs is never nil; it is inert when tracing and metrics are both off.
-	Obs *infra.Observability
+	Obs *observe.Observability
 	// Health is the readiness state; Ready adds to it.
 	Health *Health
 
@@ -128,7 +135,7 @@ type Option func(*options)
 type options struct {
 	load            func() (*config.Config, error)
 	logger          *slog.Logger
-	noDeps          bool
+	connect         func(*config.Config) (Dependencies, error)
 	outbox          bool
 	workflows       bool
 	shutdownTimeout time.Duration
@@ -144,9 +151,34 @@ func WithOutbox() Option { return func(o *options) { o.outbox = true } }
 // binary's own call, after Main has built p.Obs.
 func WithWorkflows() Option { return func(o *options) { o.workflows = true } }
 
-// WithoutDependencies skips connecting Postgres and Redis (a binary with no
-// database): Process.Deps is nil and no database readiness checks are added.
-func WithoutDependencies() Option { return func(o *options) { o.noDeps = true } }
+// Dependencies is what Main needs of a binary's connected clients (Postgres and
+// Redis for libs/infra's *Dependencies): their telemetry, their readiness checks
+// and their release. It is an interface so this package links no database code.
+type Dependencies interface {
+	// Observe builds the binary's tracing and metrics, adding the database
+	// series and client hooks of its own.
+	Observe(ctx context.Context, cfg *config.Config, o observe.Options) *observe.Observability
+	// ReadinessChecks are added to /health/ready, one per dependency.
+	ReadinessChecks() map[string]func(context.Context) error
+	// Close releases the connections after the components have stopped.
+	Close()
+}
+
+// WithDependencies connects the binary's dependencies before wiring, normally
+// WithDependencies(infra.Connect). A constructor error stops start-up. Without
+// this option Process.Deps is nil, no database readiness check is added and no
+// database code is linked.
+func WithDependencies[D Dependencies](connect func(*config.Config) (D, error)) Option {
+	return func(o *options) {
+		o.connect = func(cfg *config.Config) (Dependencies, error) {
+			d, err := connect(cfg)
+			if err != nil {
+				return nil, err
+			}
+			return d, nil
+		}
+	}
+}
 
 // WithShutdownTimeout overrides DefaultShutdownTimeout.
 func WithShutdownTimeout(d time.Duration) Option { return func(o *options) { o.shutdownTimeout = d } }
@@ -194,21 +226,27 @@ func Run(ctx context.Context, name string, wire func(*Process) error, opts ...Op
 	}
 	logger.Info("starting", slog.String("service", name), slog.String("env", cfg.Env))
 
-	var deps *infra.Dependencies
-	if !o.noDeps {
-		if deps, err = infra.Connect(cfg); err != nil {
+	var deps Dependencies
+	if o.connect != nil {
+		if deps, err = o.connect(cfg); err != nil {
 			return fmt.Errorf("connect to dependencies: %w", err)
 		}
-		defer closeDeps(deps)
+		defer deps.Close()
 	}
 
 	runCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	obs := deps.Observe(runCtx, cfg, infra.ObserveOptions{Service: name, Outbox: o.outbox, Workflows: o.workflows})
+	obsOpts := observe.Options{Service: name, Outbox: o.outbox, Workflows: o.workflows}
+	var obs *observe.Observability
+	if deps != nil {
+		obs = deps.Observe(runCtx, cfg, obsOpts)
+	} else {
+		obs = observe.New(runCtx, cfg, obsOpts)
+	}
 
 	p := &Process{Name: name, Config: cfg, Logger: logger, Deps: deps, Obs: obs, Health: NewHealth(), ctx: runCtx}
 	if deps != nil {
-		for dep, check := range deps.HealthCheckers() {
+		for dep, check := range deps.ReadinessChecks() {
 			p.Health.Add(dep, Check(check))
 		}
 	}
@@ -332,19 +370,5 @@ func (p *Process) runHooks(timeout time.Duration) {
 			p.Logger.Error("shutdown hook failed", slog.String("hook", h.name), slog.Any("error", err))
 		}
 		cancel()
-	}
-}
-
-func closeDeps(d *infra.Dependencies) {
-	if d == nil {
-		return
-	}
-	if d.DB != nil {
-		if sqlDB, err := d.DB.DB(); err == nil {
-			_ = sqlDB.Close()
-		}
-	}
-	if d.RDB != nil {
-		_ = d.RDB.Close()
 	}
 }

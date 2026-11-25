@@ -26,6 +26,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus/transporttest"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/events/registry"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka/topics"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/mongostore"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
@@ -77,7 +78,7 @@ func start(t *testing.T, mongoURI string) *stack {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- runtime.Run(ctx, "analytics-worker", wire, runtime.WithLogger(quiet))
+		done <- runtime.Run(ctx, "analytics-worker", wire, runtime.WithDependencies(infra.Connect), runtime.WithLogger(quiet))
 	}()
 	var once sync.Once
 	var runErr error

@@ -81,7 +81,7 @@ func wireWith(p *runtime.Process, prepare prepareFunc) error {
 		p.Logger.Warn("MONGO_URI is not set: events that exhaust their retries are logged and dropped, not parked")
 	}
 
-	consumers, err := buildConsumers(cfg.Kafka, p.Deps.DB, sink, p.Logger, p.Obs)
+	consumers, err := buildConsumers(cfg.Kafka, infra.Of(p.Deps).DB, sink, p.Logger, p.Obs)
 	if err != nil {
 		return err
 	}
@@ -90,7 +90,7 @@ func wireWith(p *runtime.Process, prepare prepareFunc) error {
 	})
 	p.Ready("kafka", kafka.HealthCheck(cfg.Kafka.Brokers), runtime.NonFatal())
 
-	js, err := buildJobs(p.Deps.DB, p.Deps.RDB, cfg)
+	js, err := buildJobs(infra.Of(p.Deps).DB, infra.Of(p.Deps).RDB, cfg)
 	if err != nil {
 		return err
 	}

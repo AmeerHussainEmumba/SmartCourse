@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
@@ -63,7 +64,9 @@ func startAPI(t *testing.T, env *testenv.Env) (public, internal string) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- runtime.Run(ctx, "identity-api", wire, runtime.WithOutbox()) }()
+	go func() {
+		done <- runtime.Run(ctx, "identity-api", wire, runtime.WithDependencies(infra.Connect), runtime.WithOutbox())
+	}()
 	t.Cleanup(func() {
 		cancel()
 		select {

@@ -104,7 +104,7 @@ func TestAnalyticsAPI_RunsUnderRuntime_MetricsOnInternalListenerOnly(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- runtime.Run(ctx, "analytics-api", wire, runtime.WithConfig(func() (*config.Config, error) { return cfg, nil }))
+		done <- runtime.Run(ctx, "analytics-api", wire, runtime.WithConfig(func() (*config.Config, error) { return cfg, nil }), runtime.WithDependencies(infra.Connect))
 	}()
 	var runErr error
 	var once sync.Once

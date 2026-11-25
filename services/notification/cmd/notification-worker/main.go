@@ -6,8 +6,9 @@
 // that libs/runtime serves on METRICS_HTTP_ADDR.
 package main
 
+import "github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 import "github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 
 func main() {
-	runtime.Main("notification-worker", wire)
+	runtime.Main("notification-worker", wire, runtime.WithDependencies(infra.Connect))
 }

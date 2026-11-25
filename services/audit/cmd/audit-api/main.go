@@ -11,5 +11,5 @@ import (
 )
 
 func main() {
-	rt.Main("audit-api", wire, rt.WithoutDependencies(), rt.WithConfig(auditconfig.LoadAPI))
+	rt.Main("audit-api", wire, rt.WithConfig(auditconfig.LoadAPI))
 }

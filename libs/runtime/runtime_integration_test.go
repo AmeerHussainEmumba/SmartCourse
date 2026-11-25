@@ -11,6 +11,7 @@ import (
 	"gorm.io/driver/postgres"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
@@ -34,10 +35,11 @@ func TestRun_ConnectsDependenciesAndReportsThemOnTheInternalListener(t *testing.
 	var sawDeps bool
 	go func() {
 		h.err = runtime.Run(ctx, "it-svc", func(p *runtime.Process) error {
-			sawDeps = p.Deps != nil && p.Deps.DB != nil && p.Deps.RDB != nil && p.Obs != nil
+			d := infra.Of(p.Deps)
+			sawDeps = d != nil && d.DB != nil && d.RDB != nil && p.Obs != nil
 			p.Go("idle", func(ctx context.Context) error { <-ctx.Done(); return nil })
 			return nil
-		}, runtime.WithConfig(func() (*config.Config, error) { return cfg, nil }), runtime.WithOutbox(), runtime.WithLogger(quiet))
+		}, runtime.WithConfig(func() (*config.Config, error) { return cfg, nil }), runtime.WithDependencies(infra.Connect), runtime.WithOutbox(), runtime.WithLogger(quiet))
 		close(h.done)
 	}()
 	t.Cleanup(func() { cancel(); <-h.done })

@@ -27,6 +27,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus/transporttest"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka/topics"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/mongostore"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
@@ -168,7 +169,7 @@ func (s *stack) start(smtp config.SMTPConfig, mongo config.MongoConfig) *worker 
 	logger := slog.New(slog.NewTextHandler(w.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	go func() {
 		w.err = runtime.Run(ctx, "notification-worker", wire,
-			runtime.WithConfig(func() (*config.Config, error) { return cfg, nil }), runtime.WithLogger(logger))
+			runtime.WithConfig(func() (*config.Config, error) { return cfg, nil }), runtime.WithDependencies(infra.Connect), runtime.WithLogger(logger))
 		close(w.done)
 	}()
 	t.Cleanup(w.stop)

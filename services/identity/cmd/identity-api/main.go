@@ -8,8 +8,9 @@
 // (METRICS_HTTP_ADDR), never on the public port.
 package main
 
+import "github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 import "github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 
 func main() {
-	runtime.Main("identity-api", wire, runtime.WithOutbox())
+	runtime.Main("identity-api", wire, runtime.WithDependencies(infra.Connect), runtime.WithOutbox())
 }

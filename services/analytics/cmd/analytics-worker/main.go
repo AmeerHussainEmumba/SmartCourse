@@ -7,8 +7,9 @@
 // wiring is in wire.go.
 package main
 
+import "github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 import "github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 
 func main() {
-	runtime.Main("analytics-worker", wire)
+	runtime.Main("analytics-worker", wire, runtime.WithDependencies(infra.Connect))
 }

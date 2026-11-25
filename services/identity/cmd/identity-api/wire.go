@@ -24,7 +24,7 @@ const shutdownGrace = 15 * time.Second
 // Its failure is critical (an API that is not serving must not look alive). The
 // token-version re-seeder is NOT here: it runs in identity-worker.
 func wire(p *runtime.Process) error {
-	r, err := newRouter(p.Config, p.Deps, p.Obs)
+	r, err := newRouter(p.Config, infra.Of(p.Deps), p.Obs)
 	if err != nil {
 		return err
 	}

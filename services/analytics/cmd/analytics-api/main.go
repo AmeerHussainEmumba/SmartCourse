@@ -5,8 +5,9 @@
 // in wire.go. The service's consumers and reconciler run in analytics-worker.
 package main
 
+import "github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 import "github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 
 func main() {
-	runtime.Main("analytics-api", wire)
+	runtime.Main("analytics-api", wire, runtime.WithDependencies(infra.Connect))
 }

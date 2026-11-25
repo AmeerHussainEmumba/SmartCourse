@@ -24,6 +24,7 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus/transporttest"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
@@ -186,7 +187,7 @@ func TestBoot_RelayPublishesAndTheWorkersOwnConsumerApplies(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- runtime.Run(ctx, "course-worker", wire,
-			runtime.WithConfig(func() (*config.Config, error) { return cfg, nil }), runtime.WithOutbox(),
+			runtime.WithConfig(func() (*config.Config, error) { return cfg, nil }), runtime.WithDependencies(infra.Connect), runtime.WithOutbox(),
 			runtime.WithLogger(quiet()))
 	}()
 	t.Cleanup(cancel)
@@ -230,7 +231,7 @@ func TestBoot_UnreachableKafkaFailsStartUp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	err := runtime.Run(ctx, "course-worker", wire,
-		runtime.WithConfig(func() (*config.Config, error) { return cfg, nil }), runtime.WithLogger(quiet()))
+		runtime.WithConfig(func() (*config.Config, error) { return cfg, nil }), runtime.WithDependencies(infra.Connect), runtime.WithLogger(quiet()))
 	if err == nil || !strings.Contains(err.Error(), "kafka") {
 		t.Fatalf("Run = %v, want a start-up error naming kafka", err)
 	}

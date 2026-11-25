@@ -65,7 +65,7 @@ func TestAuditAPI_MongoUnreachable_Degraded503NoCrash(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- rt.Run(ctx, "audit-api", wire, rt.WithoutDependencies(), rt.WithConfig(auditconfig.LoadAPI))
+		done <- rt.Run(ctx, "audit-api", wire, rt.WithConfig(auditconfig.LoadAPI))
 	}()
 	t.Cleanup(cancel)
 

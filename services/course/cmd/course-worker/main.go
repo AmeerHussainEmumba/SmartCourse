@@ -16,10 +16,11 @@
 // idempotency_keys here is the course schema's own.
 package main
 
+import "github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 import "github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 
 // The workflow_* counters (runtime.WithWorkflows) belong to the process that
 // runs the workflow worker, which is publishing-worker, not this one.
 func main() {
-	runtime.Main("course-worker", wire, runtime.WithOutbox())
+	runtime.Main("course-worker", wire, runtime.WithDependencies(infra.Connect), runtime.WithOutbox())
 }

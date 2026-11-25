@@ -14,8 +14,9 @@
 // non-fatal (the outbox buffers an outage).
 package main
 
+import "github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 import "github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 
 func main() {
-	runtime.Main("identity-worker", wire, runtime.WithOutbox())
+	runtime.Main("identity-worker", wire, runtime.WithDependencies(infra.Connect), runtime.WithOutbox())
 }

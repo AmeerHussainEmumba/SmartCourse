@@ -41,7 +41,9 @@ func serve(t *testing.T, deps *infra.Dependencies, obs *infra.Observability) *gi
 	if err != nil {
 		t.Fatal(err)
 	}
-	obs.RegisterMetricsRoute(r)
+	if h := obs.MetricsHandler(); h != nil { // stands in for the internal listener libs/runtime serves
+		r.GET("/metrics", gin.WrapH(h))
+	}
 	r.GET("/things/:id", func(c *gin.Context) {
 		ctx := c.Request.Context()
 		var n int

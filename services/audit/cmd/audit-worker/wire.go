@@ -32,7 +32,7 @@ const topicsTimeout = 30 * time.Second
 //     MongoDB is NON-FATAL ("degraded": the events stay in Kafka and the
 //     archiver catches up when it is back).
 //
-// Postgres is not used (runtime.WithoutDependencies): the archive is
+// Postgres is not used (no runtime.WithDependencies): the archive is
 // idempotent by event id in MongoDB.
 func wire(p *rt.Process) error {
 	cfg := p.Config

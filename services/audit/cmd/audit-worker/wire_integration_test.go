@@ -62,7 +62,7 @@ func start(t *testing.T, mongoURI string, brokers []string) *running {
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &running{internal: internal, done: make(chan error, 1), cancel: cancel}
 	go func() {
-		r.done <- rt.Run(ctx, "audit-worker", wire, rt.WithoutDependencies(), rt.WithConfig(auditconfig.LoadWorker))
+		r.done <- rt.Run(ctx, "audit-worker", wire, rt.WithConfig(auditconfig.LoadWorker))
 	}()
 	t.Cleanup(cancel)
 	return r

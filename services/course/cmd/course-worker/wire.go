@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
@@ -22,7 +23,7 @@ import (
 // schema subject is missing from the registry: a misconfigured worker stops at
 // start instead of failing row by row.
 func wire(p *runtime.Process) error {
-	cfg, logger, deps, obs := p.Config, p.Logger, p.Deps, p.Obs
+	cfg, logger, deps, obs := p.Config, p.Logger, infra.Of(p.Deps), p.Obs
 	k := cfg.Kafka
 
 	// Temporal clients (the jobs' and the activities') get the tracing
