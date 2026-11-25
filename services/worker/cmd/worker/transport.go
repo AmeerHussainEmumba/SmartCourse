@@ -9,11 +9,11 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/transport"
 )
 
 // transportMode reports the selected event transport, config.TransportInProcess
@@ -39,7 +39,7 @@ type eventTransport struct {
 	cfg       *config.Config
 	logger    *slog.Logger
 	sink      relay.DeadLetterSink
-	publisher *transport.Publisher
+	publisher *eventbus.Publisher
 	// obs carries the tracing flag and the metrics the relay observer, the
 	// publisher, the consumers and the lag gauges use; an inert value means none.
 	obs *infra.Observability
@@ -65,11 +65,11 @@ func newEventTransport(ctx context.Context, logger *slog.Logger, cfg *config.Con
 		return t, nil
 	}
 	k := cfg.Kafka
-	schemas, err := transport.Prepare(ctx, k.Brokers, k.SchemaRegistryURL)
+	schemas, err := eventbus.Prepare(ctx, k.Brokers, k.SchemaRegistryURL)
 	if err != nil {
 		return nil, fmt.Errorf("kafka transport: %w", err)
 	}
-	t.publisher, err = transport.NewPublisher(transport.PublisherConfig{
+	t.publisher, err = eventbus.NewPublisher(eventbus.PublisherConfig{
 		Brokers: k.Brokers, ProduceTimeout: k.ProduceTimeout, Schemas: schemas, Tracing: obs.TracingEnabled(),
 	})
 	if err != nil {
@@ -86,10 +86,10 @@ func newEventTransport(ctx context.Context, logger *slog.Logger, cfg *config.Con
 func (t *eventTransport) RelayOptions() []relay.Option {
 	var opts []relay.Option
 	if t.obs.TracingEnabled() {
-		opts = append(opts, relay.WithObserver(transport.RelayObserver()))
+		opts = append(opts, relay.WithObserver(eventbus.RelayObserver()))
 	}
 	if m := t.metrics(); m != nil {
-		opts = append(opts, relay.WithHandlerHook(transport.HandlerCounter(m)))
+		opts = append(opts, relay.WithHandlerHook(eventbus.HandlerCounter(m)))
 	}
 	if t.publisher != nil {
 		opts = append(opts, relay.WithPublisher(t.publisher))
@@ -108,18 +108,9 @@ func (t *eventTransport) Run(ctx context.Context, rl *relay.Relay, db *gorm.DB) 
 		return
 	}
 	k := t.cfg.Kafka
-	runner, err := transport.NewRunner(transport.RunnerConfig{
-		Brokers:         k.Brokers,
-		MaxInFlight:     k.ConsumerMaxInFlight,
-		MaxAttempts:     k.ConsumerMaxAttempts,
-		BackoffBase:     k.ConsumerBackoffBase,
-		BackoffMax:      k.ConsumerBackoffMax,
-		ShutdownTimeout: k.ConsumerShutdownTimeout,
-		Sink:            t.sink,
-		Logger:          t.logger,
-		Tracing:         t.obs.TracingEnabled(),
-		Metrics:         t.metrics(),
-	}, db, rl.Handlers())
+	runner, err := eventbus.NewConsumers(k, rl.Handlers(), db,
+		eventbus.WithSink(t.sink), eventbus.WithLogger(t.logger),
+		eventbus.WithTracing(t.obs.TracingEnabled()), eventbus.WithMetrics(t.metrics()))
 	if err != nil {
 		t.logger.Error("kafka consumers not started", slog.Any("error", err))
 		return
@@ -141,7 +132,7 @@ func (t *eventTransport) metrics() *telemetry.Metrics {
 // startLagGauges runs the kafka_consumer_lag poller for runner's groups and
 // returns the function that stops it. A reader that cannot be built is logged:
 // the consumers run without the gauge.
-func (t *eventTransport) startLagGauges(ctx context.Context, runner *transport.Runner, m *telemetry.Metrics) (stop func()) {
+func (t *eventTransport) startLagGauges(ctx context.Context, runner *eventbus.Consumers, m *telemetry.Metrics) (stop func()) {
 	collector, closeReader, err := runner.LagGauges(m)
 	if err != nil {
 		t.logger.Error("kafka_consumer_lag not exported", slog.Any("error", err))

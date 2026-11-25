@@ -14,10 +14,10 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus/transporttest"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/transport/transporttest"
 )
 
 // transportModes are the two event transports (ADR-0029). The worker's event

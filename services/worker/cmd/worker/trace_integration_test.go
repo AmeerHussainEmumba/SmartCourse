@@ -24,6 +24,7 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka/topics"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
@@ -32,7 +33,6 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/enrollment"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/notification"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/transport"
 )
 
 // pipeline is a worker's event side plus the HTTP side that feeds it, in one
@@ -376,7 +376,7 @@ func TestWorker_TracingDisabled_NoSpansHeadersOrFailures(t *testing.T) {
 				recs := readTopic(t, p.cfg.Kafka.Brokers, topics.Enrollment, 1)
 				for _, r := range recs {
 					for _, h := range r.Headers {
-						if h.Key == transport.HeaderTraceparent {
+						if h.Key == eventbus.HeaderTraceparent {
 							t.Errorf("record on %s has a traceparent header with tracing off: %s", r.Topic, h.Value)
 						}
 					}
@@ -425,7 +425,7 @@ func TestWorker_KafkaRecordCarriesTheProduceSpansTraceparent(t *testing.T) {
 	var header string
 	for _, r := range readTopic(t, p.cfg.Kafka.Brokers, topics.Enrollment, 1) {
 		for _, h := range r.Headers {
-			if h.Key == transport.HeaderTraceparent {
+			if h.Key == eventbus.HeaderTraceparent {
 				header = string(h.Value)
 			}
 		}

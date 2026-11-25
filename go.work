@@ -7,6 +7,7 @@ use (
 	./libs/config
 	./libs/contracts/publishing
 	./libs/db
+	./libs/eventbus
 	./libs/errors
 	./libs/events
 	./libs/httpx

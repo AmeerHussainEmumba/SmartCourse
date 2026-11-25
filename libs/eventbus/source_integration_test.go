@@ -1,6 +1,6 @@
 //go:build integration
 
-package transport_test
+package eventbus_test
 
 import (
 	"context"
@@ -12,7 +12,6 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka/topics"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/transport"
 )
 
 // The runner hands each handler the record's coordinates and the frame's
@@ -34,7 +33,7 @@ func TestRunner_HandlerSeesTheRecordSource(t *testing.T) {
 		return nil
 	})
 	s.startRelay(s.publisher(10*time.Second), 1)
-	s.startRunner(transport.RunnerConfig{}, h)
+	s.startRunner(runnerCfg{}, h)
 
 	agg := uuid.New()
 	s.write(agg, 1)

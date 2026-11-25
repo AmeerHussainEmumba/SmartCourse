@@ -1,13 +1,17 @@
-// Package transport is the worker's Kafka side of the event transport
-// (ADR-0029): it encodes an outbox row into the framed Envelope the topics carry
-// and produces it (the relay's Publisher), decodes a consumed record back into
-// the relay.DecodedEvent the existing handlers take, and runs one consumer group
-// per registered relay handler. libs/relay stays free of any Kafka client; this
-// package is the only place the two meet.
+// Package eventbus is the Kafka side of the event transport (ADR-0029), shared
+// by every service (docs/plans/microservices-split.md §4): it encodes an outbox
+// row into the framed Envelope the topics carry and produces it (the relay's
+// Publisher), decodes a consumed record back into the relay.DecodedEvent the
+// handlers take, and runs one consumer group per consumer name (Consumers),
+// each also reading its own retry topic. libs/relay stays free of any Kafka
+// client; this package is the only place the two meet.
 //
-// The relay remains the only path from the outbox to Kafka (RFC §6.2): nothing
-// here reads the outbox, and the Publisher is only ever called by the relay.
-package transport
+// The relay remains the only path from an outbox to Kafka (RFC §6.2): nothing
+// here reads the outbox, and the Publisher is only ever called by the relay. A
+// service wires two independent things: relay.New(db, relay.WithPublisher(p))
+// with no handler registered, and NewConsumers(cfg, handlers, db) for the events
+// it consumes.
+package eventbus
 
 import (
 	"fmt"
@@ -32,11 +36,11 @@ var topicByPrefix = map[string]string{
 func TopicFor(eventType string) (string, error) {
 	prefix, _, ok := strings.Cut(eventType, ".")
 	if !ok {
-		return "", fmt.Errorf("transport: event type %q has no <domain>. prefix", eventType)
+		return "", fmt.Errorf("eventbus: event type %q has no <domain>. prefix", eventType)
 	}
 	topic, ok := topicByPrefix[prefix]
 	if !ok {
-		return "", fmt.Errorf("transport: event type %q has no topic (unknown prefix %q)", eventType, prefix)
+		return "", fmt.Errorf("eventbus: event type %q has no topic (unknown prefix %q)", eventType, prefix)
 	}
 	return topic, nil
 }

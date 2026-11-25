@@ -157,6 +157,21 @@ func Ensure(ctx context.Context, brokers []string) error {
 // topic: partitions are not grown, and a different replication factor is not
 // applied. Use kafka-topics.sh --alter to grow a topic.
 func EnsureWith(ctx context.Context, brokers []string, opts Options) error {
+	return ensure(ctx, brokers, opts, Provisioned())
+}
+
+// EnsureNamed creates the named topics with the default partition count and
+// replication factor, skipping those that exist. A consumer uses it for its own
+// retry topic, so a consumer name nobody added to Consumers still works.
+func EnsureNamed(ctx context.Context, brokers []string, names ...string) error {
+	ts := make([]Topic, len(names))
+	for i, n := range names {
+		ts[i] = Topic{Name: n}
+	}
+	return ensure(ctx, brokers, Options{}, ts)
+}
+
+func ensure(ctx context.Context, brokers []string, opts Options, want []Topic) error {
 	if len(brokers) == 0 {
 		return errors.New("topics: brokers is required")
 	}
@@ -172,7 +187,7 @@ func EnsureWith(ctx context.Context, brokers []string, opts Options) error {
 	defer cl.Close()
 	adm := kadm.NewClient(cl)
 
-	for _, t := range Provisioned() {
+	for _, t := range want {
 		parts := t.Partitions
 		if parts == 0 {
 			parts = opts.Partitions

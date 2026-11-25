@@ -1,4 +1,4 @@
-package transport
+package eventbus
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
@@ -56,11 +57,28 @@ func NewPublisher(cfg PublisherConfig) (*Publisher, error) {
 // relay.Transient: an outage must not use up the budget of good events. The
 // exceptions are the broker rejecting the record itself (too large, corrupt),
 // which no retry can fix.
-func (p *Publisher) Publish(ctx context.Context, evt relay.DecodedEvent) (err error) {
+func (p *Publisher) Publish(ctx context.Context, evt relay.DecodedEvent) error {
 	msg, err := p.codec.Encode(evt)
 	if err != nil {
 		return err
 	}
+	return p.produce(ctx, msg, evt)
+}
+
+// PublishRetry produces evt to consumer's retry topic (EncodeForRetry): the
+// replay path of a parked event. It returns nil only after the broker
+// acknowledged the record, so a caller that marks the event replayed afterwards
+// never marks one that was not sent. An event that cannot be framed returns an
+// ErrUnencodable error; a broker problem is relay.Transient as in Publish.
+func (p *Publisher) PublishRetry(ctx context.Context, consumer string, schemaID uint32, evt relay.DecodedEvent) error {
+	msg, err := EncodeForRetry(consumer, schemaID, evt)
+	if err != nil {
+		return err
+	}
+	return p.produce(ctx, msg, evt)
+}
+
+func (p *Publisher) produce(ctx context.Context, msg kafka.Message, evt relay.DecodedEvent) (err error) {
 	if p.tracing {
 		var span trace.Span
 		ctx, span = telemetry.StartProduce(ctx, msg.Topic, evt.EventType, evt.EventID.String())
@@ -73,6 +91,12 @@ func (p *Publisher) Publish(ctx context.Context, evt relay.DecodedEvent) (err er
 		return classifyProduceError(err)
 	}
 	return nil
+}
+
+// NewPublisherFor is NewPublisher with the brokers and the produce timeout taken
+// from the process configuration (KAFKA_BROKERS, KAFKA_PRODUCE_TIMEOUT).
+func NewPublisherFor(k config.KafkaConfig, schemas Schemas, tracing bool) (*Publisher, error) {
+	return NewPublisher(PublisherConfig{Brokers: k.Brokers, ProduceTimeout: k.ProduceTimeout, Schemas: schemas, Tracing: tracing})
 }
 
 // Close releases the producer.

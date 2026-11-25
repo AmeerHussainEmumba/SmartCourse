@@ -1,4 +1,4 @@
-package transport
+package eventbus
 
 import (
 	"encoding/json"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/events"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka/topics"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 )
 
@@ -48,7 +49,7 @@ func NewCodec(s Schemas) *Codec { return &Codec{schemas: s} }
 
 // ErrUnencodable marks a row that cannot become a message however often it is
 // retried: an unknown event type or a payload that does not match its schema.
-var ErrUnencodable = errors.New("transport: event cannot be encoded")
+var ErrUnencodable = errors.New("eventbus: event cannot be encoded")
 
 // Encode turns an outbox row into the message the relay produces: the topic by
 // event-type prefix, the aggregate id as the partition key (per-aggregate order,
@@ -57,26 +58,72 @@ var ErrUnencodable = errors.New("transport: event cannot be encoded")
 // unknown event type, a field the schema does not have or a mistyped value is an
 // ErrUnencodable error.
 func (c *Codec) Encode(evt relay.DecodedEvent) (kafka.Message, error) {
-	t, ok := events.Lookup(evt.EventType)
-	if !ok {
+	if _, ok := events.Lookup(evt.EventType); !ok {
 		return kafka.Message{}, fmt.Errorf("%w: unknown event type %q", ErrUnencodable, evt.EventType)
 	}
 	topic, err := TopicFor(evt.EventType)
 	if err != nil {
 		return kafka.Message{}, fmt.Errorf("%w: %w", ErrUnencodable, err)
 	}
-	if topic != t.Topic {
-		// The catalog and the routing table are tested to agree; this guards a
-		// future edit to one of them.
-		return kafka.Message{}, fmt.Errorf("%w: %s routes to %s but the catalog says %s", ErrUnencodable, evt.EventType, topic, t.Topic)
-	}
 	schemaID, ok := c.schemas.EnvelopeIDs[topic]
 	if !ok {
-		return kafka.Message{}, fmt.Errorf("transport: no envelope schema id loaded for topic %s", topic)
+		return kafka.Message{}, fmt.Errorf("eventbus: no envelope schema id loaded for topic %s", topic)
 	}
 	version, ok := c.schemas.PayloadVersions[evt.EventType]
 	if !ok {
-		return kafka.Message{}, fmt.Errorf("transport: no schema version loaded for %s", evt.EventType)
+		return kafka.Message{}, fmt.Errorf("eventbus: no schema version loaded for %s", evt.EventType)
+	}
+	return encodeTo(topic, schemaID, int32(version), evt)
+}
+
+// EncodeForRetry builds the record that re-delivers a stored event to one
+// consumer: the same framed Envelope and headers the original producer wrote,
+// addressed to the consumer's retry topic (topics.Retry(consumer)) instead of the
+// event's source topic. The audit service uses it to replay a parked event
+// (docs/plans/microservices-split.md §4.1): it needs no registry access, only
+// what it stored when it parked the event, which is the event as the consumer
+// decoded it (so evt.Payload is JSON with the proto field names, evt.SchemaVersion
+// the registry version of the payload subject) and the schema id of the frame
+// (relay.Source.SchemaID). Decode of the returned record gives evt back.
+//
+// The record is for the named consumer only in the sense that it lands on that
+// consumer's retry topic: the consumer group runs it through the same idempotent
+// relay.Deliver path as any record, so a replay of an event it already processed
+// is absorbed by processed_events. An event that cannot be framed is an
+// ErrUnencodable error and must stay parked.
+func EncodeForRetry(consumer string, schemaID uint32, evt relay.DecodedEvent) (kafka.Message, error) {
+	if consumer == "" {
+		return kafka.Message{}, fmt.Errorf("%w: no consumer to retry for", ErrUnencodable)
+	}
+	if schemaID == 0 {
+		return kafka.Message{}, fmt.Errorf("%w: no schema id stored for %s", ErrUnencodable, evt.EventID)
+	}
+	if evt.SchemaVersion <= 0 {
+		return kafka.Message{}, fmt.Errorf("%w: no schema version stored for %s", ErrUnencodable, evt.EventID)
+	}
+	if _, err := TopicFor(evt.EventType); err != nil {
+		return kafka.Message{}, fmt.Errorf("%w: %w", ErrUnencodable, err)
+	}
+	msg, err := encodeTo(topics.Retry(consumer), schemaID, int32(evt.SchemaVersion), evt)
+	if err != nil {
+		return kafka.Message{}, err
+	}
+	return msg, nil
+}
+
+// encodeTo frames evt as an Envelope with the given schema id and payload
+// version and addresses it to topic, keyed by aggregate id.
+func encodeTo(topic string, schemaID uint32, version int32, evt relay.DecodedEvent) (kafka.Message, error) {
+	t, ok := events.Lookup(evt.EventType)
+	if !ok {
+		return kafka.Message{}, fmt.Errorf("%w: unknown event type %q", ErrUnencodable, evt.EventType)
+	}
+	if routed, err := TopicFor(evt.EventType); err != nil {
+		return kafka.Message{}, fmt.Errorf("%w: %w", ErrUnencodable, err)
+	} else if routed != t.Topic {
+		// The catalog and the routing table are tested to agree; this guards a
+		// future edit to one of them.
+		return kafka.Message{}, fmt.Errorf("%w: %s routes to %s but the catalog says %s", ErrUnencodable, evt.EventType, routed, t.Topic)
 	}
 
 	payload := t.New()
@@ -144,7 +191,7 @@ func decodeFramed(rec kafka.Record) (relay.DecodedEvent, uint32, error) {
 	var env events.Envelope
 	schemaID, err := events.DecodeInto(rec.Value, &env)
 	if err != nil {
-		return relay.DecodedEvent{}, 0, fmt.Errorf("transport: %s[%d]@%d: %w", rec.Topic, rec.Partition, rec.Offset, err)
+		return relay.DecodedEvent{}, 0, fmt.Errorf("eventbus: %s[%d]@%d: %w", rec.Topic, rec.Partition, rec.Offset, err)
 	}
 	evt, err := decodeEnvelope(rec, &env)
 	return evt, schemaID, err
@@ -153,20 +200,20 @@ func decodeFramed(rec kafka.Record) (relay.DecodedEvent, uint32, error) {
 func decodeEnvelope(rec kafka.Record, env *events.Envelope) (relay.DecodedEvent, error) {
 	payload, err := events.OpenPayload(env)
 	if err != nil {
-		return relay.DecodedEvent{}, fmt.Errorf("transport: %s[%d]@%d: %w", rec.Topic, rec.Partition, rec.Offset, err)
+		return relay.DecodedEvent{}, fmt.Errorf("eventbus: %s[%d]@%d: %w", rec.Topic, rec.Partition, rec.Offset, err)
 	}
 	js, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(payload)
 	if err != nil {
-		return relay.DecodedEvent{}, fmt.Errorf("transport: marshal payload to JSON: %w", err)
+		return relay.DecodedEvent{}, fmt.Errorf("eventbus: marshal payload to JSON: %w", err)
 	}
 
 	eventID, err := uuid.Parse(env.GetEventId())
 	if err != nil {
-		return relay.DecodedEvent{}, fmt.Errorf("transport: envelope event_id %q: %w", env.GetEventId(), err)
+		return relay.DecodedEvent{}, fmt.Errorf("eventbus: envelope event_id %q: %w", env.GetEventId(), err)
 	}
 	aggregateID, err := uuid.Parse(env.GetAggregateId())
 	if err != nil {
-		return relay.DecodedEvent{}, fmt.Errorf("transport: envelope aggregate_id %q: %w", env.GetAggregateId(), err)
+		return relay.DecodedEvent{}, fmt.Errorf("eventbus: envelope aggregate_id %q: %w", env.GetAggregateId(), err)
 	}
 	evt := relay.DecodedEvent{
 		EventID:       eventID,
@@ -182,14 +229,14 @@ func decodeEnvelope(rec kafka.Record, env *events.Envelope) (relay.DecodedEvent,
 	if a := env.GetActorId(); a != "" {
 		id, err := uuid.Parse(a)
 		if err != nil {
-			return relay.DecodedEvent{}, fmt.Errorf("transport: envelope actor_id %q: %w", a, err)
+			return relay.DecodedEvent{}, fmt.Errorf("eventbus: envelope actor_id %q: %w", a, err)
 		}
 		evt.ActorID = &id
 	}
 	if v, ok := rec.Header(HeaderOutboxID); ok {
 		n, err := strconv.ParseInt(string(v), 10, 64)
 		if err != nil {
-			return relay.DecodedEvent{}, fmt.Errorf("transport: header %s %q: %w", HeaderOutboxID, v, err)
+			return relay.DecodedEvent{}, fmt.Errorf("eventbus: header %s %q: %w", HeaderOutboxID, v, err)
 		}
 		evt.OutboxID = n
 	}

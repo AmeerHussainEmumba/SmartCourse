@@ -1,4 +1,4 @@
-package transport
+package eventbus
 
 import (
 	"context"
@@ -29,8 +29,8 @@ func RelayObserver() relay.Observer {
 }
 
 // HandlerCounter is the relay's handler hook for the in-process transport: it
-// counts event_processed_total per consumer and outcome, as the Kafka runner
-// does for the kafka transport. A nil m yields nil (no hook).
+// counts event_processed_total per consumer and outcome, as Consumers does for
+// the kafka transport. A nil m yields nil (no hook).
 func HandlerCounter(m *telemetry.Metrics) relay.HandlerHook {
 	if m == nil {
 		return nil

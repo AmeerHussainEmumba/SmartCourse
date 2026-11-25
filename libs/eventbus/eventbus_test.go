@@ -1,4 +1,4 @@
-package transport_test
+package eventbus_test
 
 import (
 	"context"
@@ -10,13 +10,13 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus/transporttest"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/events"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/events/registry"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka/topics"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/transport"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/transport/transporttest"
 )
 
 // samplePayloads are what the services write to the outbox for each event type
@@ -40,10 +40,10 @@ func samplePayloads(agg uuid.UUID) map[string]map[string]any {
 	}
 }
 
-func testSchemas(t *testing.T) transport.Schemas {
+func testSchemas(t *testing.T) eventbus.Schemas {
 	t.Helper()
 	reg := transporttest.NewRegistry(t)
-	s, err := transport.LoadSchemas(context.Background(), registry.New(reg.URL))
+	s, err := eventbus.LoadSchemas(context.Background(), registry.New(reg.URL))
 	if err != nil {
 		t.Fatalf("LoadSchemas: %v", err)
 	}
@@ -73,13 +73,13 @@ func TestTopicFor_RoutesByEventTypePrefix(t *testing.T) {
 		"enrollment.student_withdrawn": topics.Enrollment,
 	}
 	for et, want := range cases {
-		got, err := transport.TopicFor(et)
+		got, err := eventbus.TopicFor(et)
 		if err != nil || got != want {
 			t.Errorf("TopicFor(%q) = %q, %v; want %q", et, got, err, want)
 		}
 	}
 	for _, bad := range []string{"", "nodot", "billing.invoice_paid", ".x"} {
-		if _, err := transport.TopicFor(bad); err == nil {
+		if _, err := eventbus.TopicFor(bad); err == nil {
 			t.Errorf("TopicFor(%q) must fail", bad)
 		}
 	}
@@ -93,7 +93,7 @@ func TestTopicFor_AgreesWithEventCatalogAndTopicList(t *testing.T) {
 		known[n] = true
 	}
 	for _, et := range events.Types() {
-		got, err := transport.TopicFor(et.EventType)
+		got, err := eventbus.TopicFor(et.EventType)
 		if err != nil || got != et.Topic {
 			t.Errorf("%s: routing says %q (%v), catalog says %q", et.EventType, got, err, et.Topic)
 		}
@@ -105,21 +105,21 @@ func TestTopicFor_AgreesWithEventCatalogAndTopicList(t *testing.T) {
 
 func TestTopicsFor_HandlerSubscribesToItsEventTypesTopics(t *testing.T) {
 	h := relay.NewHandler("c", []string{"enrollment.student_enrolled", "enrollment.student_withdrawn", "course.course_archived", "progress.course_completed"}, nil)
-	got, err := transport.TopicsFor(h)
+	got, err := eventbus.TopicsFor(h)
 	want := []string{topics.Course, topics.Enrollment, topics.Progress}
 	if err != nil || strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("TopicsFor = %v, %v; want %v", got, err, want)
 	}
-	if _, err := transport.TopicsFor(relay.NewHandler("c", []string{"nope.x"}, nil)); err == nil {
+	if _, err := eventbus.TopicsFor(relay.NewHandler("c", []string{"nope.x"}, nil)); err == nil {
 		t.Error("an event type with no topic must be an error")
 	}
-	if _, err := transport.TopicsFor(relay.NewHandler("c", nil, nil)); err == nil {
+	if _, err := eventbus.TopicsFor(relay.NewHandler("c", nil, nil)); err == nil {
 		t.Error("a handler with no event types must be an error")
 	}
 }
 
 func TestCodec_EveryEventTypeRoundTripsToTheHandlerInput(t *testing.T) {
-	codec := transport.NewCodec(testSchemas(t))
+	codec := eventbus.NewCodec(testSchemas(t))
 	agg := uuid.New()
 	payloads := samplePayloads(agg)
 	if len(payloads) != len(events.Types()) {
@@ -136,7 +136,7 @@ func TestCodec_EveryEventTypeRoundTripsToTheHandlerInput(t *testing.T) {
 				t.Fatalf("topic=%s key=%s, want %s keyed by the aggregate id %s", msg.Topic, msg.Key, et.Topic, agg)
 			}
 			rec := kafka.Record{Topic: msg.Topic, Key: msg.Key, Value: msg.Value, Headers: msg.Headers}
-			got, err := transport.Decode(rec)
+			got, err := eventbus.Decode(rec)
 			if err != nil {
 				t.Fatalf("Decode: %v", err)
 			}
@@ -183,12 +183,12 @@ func TestCodec_EveryEventTypeRoundTripsToTheHandlerInput(t *testing.T) {
 
 func TestCodec_FrameCarriesTheRegistrySchemaIDAndVersion(t *testing.T) {
 	reg := transporttest.NewRegistry(t)
-	schemas, err := transport.LoadSchemas(context.Background(), registry.New(reg.URL))
+	schemas, err := eventbus.LoadSchemas(context.Background(), registry.New(reg.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
 	agg := uuid.New()
-	msg, err := transport.NewCodec(schemas).Encode(rowFor(t, "course.course_archived", map[string]any{"course_id": agg}, agg))
+	msg, err := eventbus.NewCodec(schemas).Encode(rowFor(t, "course.course_archived", map[string]any{"course_id": agg}, agg))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestCodec_FrameCarriesTheRegistrySchemaIDAndVersion(t *testing.T) {
 }
 
 func TestCodec_UnencodableRowsAreMarkedAndNamed(t *testing.T) {
-	codec := transport.NewCodec(testSchemas(t))
+	codec := eventbus.NewCodec(testSchemas(t))
 	agg := uuid.New()
 	cases := map[string]relay.DecodedEvent{
 		"unknown event type":  rowFor(t, "course.course_created", map[string]any{"course_id": agg}, agg),
@@ -218,7 +218,7 @@ func TestCodec_UnencodableRowsAreMarkedAndNamed(t *testing.T) {
 	for name, row := range cases {
 		t.Run(name, func(t *testing.T) {
 			_, err := codec.Encode(row)
-			if !errors.Is(err, transport.ErrUnencodable) {
+			if !errors.Is(err, eventbus.ErrUnencodable) {
 				t.Fatalf("want ErrUnencodable, got %v", err)
 			}
 			if relay.IsTransient(err) {
@@ -230,7 +230,7 @@ func TestCodec_UnencodableRowsAreMarkedAndNamed(t *testing.T) {
 
 func TestDecode_RejectsGarbage(t *testing.T) {
 	for name, v := range map[string][]byte{"empty": nil, "not a frame": []byte("hello world"), "bad magic": {1, 0, 0, 0, 1, 0, 1}} {
-		if _, err := transport.Decode(kafka.Record{Value: v}); err == nil {
+		if _, err := eventbus.Decode(kafka.Record{Value: v}); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
 	}
@@ -240,7 +240,7 @@ func TestLoadSchemas_FailsClearlyWhenASubjectIsMissing(t *testing.T) {
 	reg := transporttest.NewRegistry(t)
 	reg.Remove("smartcourse.course.v1.CoursePublished")
 	reg.Remove("progress.events-value")
-	_, err := transport.LoadSchemas(context.Background(), registry.New(reg.URL))
+	_, err := eventbus.LoadSchemas(context.Background(), registry.New(reg.URL))
 	if err == nil {
 		t.Fatal("want an error")
 	}
@@ -255,7 +255,7 @@ func TestLoadSchemas_FailsWhenTheRegistryIsUnreachable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// Port 1 on loopback refuses the connection.
-	_, err := transport.LoadSchemas(ctx, registry.New("http://127.0.0.1:1"))
+	_, err := eventbus.LoadSchemas(ctx, registry.New("http://127.0.0.1:1"))
 	if err == nil || !strings.Contains(err.Error(), "127.0.0.1:1") {
 		t.Fatalf("want an error naming the registry address, got %v", err)
 	}

@@ -1,4 +1,4 @@
-package transport_test
+package eventbus_test
 
 import (
 	"encoding/json"
@@ -6,17 +6,17 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/events"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/transport"
 )
 
 // FuzzDecode: whatever bytes and headers a record carries (the broker is a
 // trust boundary: anything can produce to it), Decode must return an error or a
 // well-formed event, never panic, and a decoded payload must be valid JSON.
 func FuzzDecode(f *testing.F) {
-	codec := transport.NewCodec(testSchemasFuzz(f))
+	codec := eventbus.NewCodec(testSchemasFuzz(f))
 	agg := uuid.New()
 	for _, et := range events.Types() {
 		raw, _ := json.Marshal(map[string]any{})
@@ -28,8 +28,8 @@ func FuzzDecode(f *testing.F) {
 	f.Add([]byte{0, 0, 0, 0, 1, 0}, "x")
 	f.Add([]byte{}, "")
 	f.Fuzz(func(t *testing.T, value []byte, outbox string) {
-		rec := kafka.Record{Topic: "enrollment.events", Value: value, Headers: []kafka.Header{{Key: transport.HeaderOutboxID, Value: []byte(outbox)}}}
-		evt, err := transport.Decode(rec)
+		rec := kafka.Record{Topic: "enrollment.events", Value: value, Headers: []kafka.Header{{Key: eventbus.HeaderOutboxID, Value: []byte(outbox)}}}
+		evt, err := eventbus.Decode(rec)
 		if err != nil {
 			return
 		}
@@ -42,8 +42,8 @@ func FuzzDecode(f *testing.F) {
 // testSchemasFuzz is a hand-built Schemas (the registry stand-in needs a
 // *testing.T, which a fuzz target does not have): every topic and event type
 // gets a fixed id and version 1.
-func testSchemasFuzz(testing.TB) transport.Schemas {
-	s := transport.Schemas{EnvelopeIDs: map[string]uint32{}, PayloadVersions: map[string]int32{}}
+func testSchemasFuzz(testing.TB) eventbus.Schemas {
+	s := eventbus.Schemas{EnvelopeIDs: map[string]uint32{}, PayloadVersions: map[string]int32{}}
 	for _, et := range events.Types() {
 		s.EnvelopeIDs[et.Topic] = 7
 		s.PayloadVersions[et.EventType] = 1
@@ -54,7 +54,7 @@ func testSchemasFuzz(testing.TB) transport.Schemas {
 // FuzzEncode: an outbox payload of any shape must encode or fail with an error
 // (never panic), and what encodes must decode.
 func FuzzEncode(f *testing.F) {
-	codec := transport.NewCodec(testSchemasFuzz(f))
+	codec := eventbus.NewCodec(testSchemasFuzz(f))
 	f.Add("enrollment.student_enrolled", []byte(`{"enrollment_id":"x","enrolled_at":"2026-01-01T00:00:00Z"}`))
 	f.Add("course.course_archived", []byte(`{"course_id":null}`))
 	f.Add("progress.lesson_completed", []byte(`{"completed_at":"0000-00-00T00:00:00Z"}`))
@@ -65,7 +65,7 @@ func FuzzEncode(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if _, err := transport.Decode(kafka.Record{Topic: msg.Topic, Key: msg.Key, Value: msg.Value, Headers: msg.Headers}); err != nil {
+		if _, err := eventbus.Decode(kafka.Record{Topic: msg.Topic, Key: msg.Key, Value: msg.Value, Headers: msg.Headers}); err != nil {
 			t.Fatalf("encoded %q but cannot decode it: %v", eventType, err)
 		}
 	})
