@@ -1,19 +1,23 @@
-# Prometheus config for the `observability` compose profile (RFC §12.3).
-# Mounted at /etc/prometheus (docker-compose.yml). Reload after editing:
-#   docker compose restart prometheus
+# Prometheus config for the `observability` compose profile (RFC section 12.3,
+# docs/plans/microservices-split.md section 6). Mounted at /etc/prometheus
+# (docker-compose.yml). Reload after editing: docker compose restart prometheus
 #
-# Targets are compose service names on the compose network, so the app
-# containers must be running (`core` profile) for the jobs to be UP.
-# Container-internal HTTP port is 8080 for the three APIs (HTTP_PORT in
-# docker-compose.yml), which serve /metrics on that port. The worker serves
-# /metrics on its own listener, METRICS_HTTP_ADDR (compose sets :9100); it is
-# not the authenticated admin port (8093). /metrics is unauthenticated by
-# design (RFC 12.3): these targets are on the compose network, and compose
-# publishes the ports on 127.0.0.1 only. Keep it that way outside a laptop.
+# Targets are the ten binaries' INTERNAL listeners (METRICS_HTTP_ADDR, :9100 in
+# every container), addressed by compose service name on the compose network.
+# /metrics is never on a public API port. It is unauthenticated by design
+# (RFC 12.3); compose publishes the listeners on 127.0.0.1 only (APIs 9101-9104,
+# workers 9111-9116). Keep it that way outside a laptop.
 #
-# Running the Go binaries on the host (`make run-*`) instead? Swap each
-# target for host.docker.internal:<port> (compose-published host ports are
-# identity 8090, course 8091, analytics 8092; otherwise your own HTTP_PORT).
+# Every target carries two labels: `service` (the owning service: identity,
+# course, analytics, notification, publishing, audit) and `binary` (the
+# binary: identity-api, ...). The scrape job name equals the binary name, so
+# `job` and `binary` agree; alerts and panels group by `service` or `binary`.
+#
+# The services must be running (`core` profile; publishing-worker needs
+# `workflow`) for the targets to be UP.
+#
+# Running the Go binaries on the host (`make run-*`) instead? Swap each target
+# for host.docker.internal:<port> (the port you gave it in METRICS_HTTP_ADDR).
 
 global:
   scrape_interval: 15s
@@ -30,19 +34,79 @@ scrape_configs:
   - job_name: identity-api
     metrics_path: /metrics
     static_configs:
-      - targets: ["identity-api:8080"]
+      - targets: ["identity-api:9100"] # host port 127.0.0.1:9101
+        labels:
+          service: identity
+          binary: identity-api
 
   - job_name: course-api
     metrics_path: /metrics
     static_configs:
-      - targets: ["course-api:8080"]
+      - targets: ["course-api:9100"] # host port 127.0.0.1:9102
+        labels:
+          service: course
+          binary: course-api
 
   - job_name: analytics-api
     metrics_path: /metrics
     static_configs:
-      - targets: ["analytics-api:8080"]
+      - targets: ["analytics-api:9100"] # host port 127.0.0.1:9103
+        labels:
+          service: analytics
+          binary: analytics-api
 
-  - job_name: worker
+  - job_name: audit-api
     metrics_path: /metrics
     static_configs:
-      - targets: ["worker:9100"] # METRICS_HTTP_ADDR of the worker
+      - targets: ["audit-api:9100"] # host port 127.0.0.1:9104
+        labels:
+          service: audit
+          binary: audit-api
+
+  - job_name: identity-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["identity-worker:9100"] # host port 127.0.0.1:9111
+        labels:
+          service: identity
+          binary: identity-worker
+
+  - job_name: course-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["course-worker:9100"] # host port 127.0.0.1:9112
+        labels:
+          service: course
+          binary: course-worker
+
+  - job_name: analytics-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["analytics-worker:9100"] # host port 127.0.0.1:9113
+        labels:
+          service: analytics
+          binary: analytics-worker
+
+  - job_name: notification-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["notification-worker:9100"] # host port 127.0.0.1:9114
+        labels:
+          service: notification
+          binary: notification-worker
+
+  - job_name: publishing-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["publishing-worker:9100"] # host port 127.0.0.1:9115
+        labels:
+          service: publishing
+          binary: publishing-worker
+
+  - job_name: audit-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["audit-worker:9100"] # host port 127.0.0.1:9116
+        labels:
+          service: audit
+          binary: audit-worker
