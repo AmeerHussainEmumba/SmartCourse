@@ -75,6 +75,7 @@ func doRequest(t *testing.T, r *gin.Engine, method, path, token string, body any
 
 func TestEnrollmentRoutes_RegisterRoutesBootsCleanly(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	// newTestEngine itself panics on a route-registration conflict —
 	// reaching this line at all is the assertion.
@@ -83,6 +84,7 @@ func TestEnrollmentRoutes_RegisterRoutesBootsCleanly(t *testing.T) {
 
 func TestEnrollmentRoutes_PostEnroll_NoAuthHeader_Returns401(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	r := newTestEngine(svc)
 
@@ -101,6 +103,7 @@ func TestEnrollmentRoutes_PostEnroll_NoAuthHeader_Returns401(t *testing.T) {
 
 func TestEnrollmentRoutes_PostEnroll_MissingCourseID_Returns400(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	r := newTestEngine(svc)
 
@@ -129,6 +132,7 @@ func TestEnrollmentRoutes_PostEnroll_MissingCourseID_Returns400(t *testing.T) {
 // passes its own tests in isolation.
 func TestEnrollmentRoutes_FullAuthenticatedRoundTrip(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	r := newTestEngine(svc)
 

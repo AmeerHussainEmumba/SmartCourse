@@ -1,50 +1,94 @@
 //go:build integration
 
-package workflows_test
+package activities_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
-	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/temporal"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
+	"github.com/AmeerHussainEmumba/SmartCourse/services/course/activities"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/assets"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/internal/miniotest"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/course/workflows"
 )
 
-// The real VerifyAssets, against a real MinIO, inside the publish workflow:
+// The real VerifyAssets, against a real MinIO, through the Activities:
 // a draft that references an asset which was never uploaded fails the publish
 // cleanly (publish_failed with a readable error, live version untouched, no
 // course_published event), and a draft whose asset was uploaded publishes.
 
-func runPublish(t *testing.T, svc *course.Service, in publishing.PublishWorkflowInput) error {
+// runPublish drives the activities in the order of the publish graph
+// (libs/contracts/publishing.ActivityNames), the way the publishing worker's
+// workflow does, and on the first failure records it with MarkPublishFailed.
+// It calls the Activities methods directly: the workflow itself lives in
+// services/publishing, and the combined workflow+activities path is proven by
+// the container E2E tests (E01, E12).
+func runPublish(t *testing.T, a *activities.Activities, in publishing.PublishWorkflowInput) error {
 	t.Helper()
-	var suite testsuite.WorkflowTestSuite
-	te := suite.NewTestWorkflowEnvironment()
-	te.RegisterActivity(workflows.NewActivities(svc))
-	te.ExecuteWorkflow(workflows.PublishCourseWorkflow, in)
-	if !te.IsWorkflowCompleted() {
-		t.Fatal("workflow did not complete")
+	ctx := context.Background()
+	fail := func(name string, err error) error {
+		var appErr *temporal.ApplicationError
+		if !errors.As(err, &appErr) || appErr.Type() != publishing.FailureType {
+			t.Fatalf("%s failed with %v, want an ApplicationError of type %s", name, err, publishing.FailureType)
+		}
+		if mErr := a.MarkPublishFailed(ctx, in.VersionID, appErr.Message(), name); mErr != nil {
+			t.Fatalf("MarkPublishFailed: %v", mErr)
+		}
+		return err
 	}
-	return te.GetWorkflowError()
+	if err := a.ValidateMetadata(ctx, in.VersionID); err != nil {
+		return fail(publishing.ActivityValidateMetadata, err)
+	}
+	if err := a.VerifyAssets(ctx, in.VersionID); err != nil {
+		return fail(publishing.ActivityVerifyAssets, err)
+	}
+	if err := a.ComputeMetadata(ctx, in.VersionID); err != nil {
+		return fail(publishing.ActivityComputeMetadata, err)
+	}
+	outline, err := a.BuildOutline(ctx, in.CourseID, in.VersionID)
+	if err != nil {
+		return fail(publishing.ActivityBuildOutline, err)
+	}
+	if err := a.IndexSearch(ctx, *outline); err != nil {
+		return fail(publishing.ActivityIndexSearch, err)
+	}
+	if err := a.WarmCache(ctx, *outline); err != nil {
+		return fail(publishing.ActivityWarmCache, err)
+	}
+	if err := a.PromoteAndPublish(ctx, in.CourseID, in.VersionID, in.OldVersionID, in.Title); err != nil {
+		return fail(publishing.ActivityPromoteAndPublish, err)
+	}
+	return nil
 }
 
-func TestPublishWorkflow_MissingAsset_FailsCleanly_LiveVersionUntouched(t *testing.T) {
+func seedInstructor(t *testing.T, env *testenv.Env) uuid.UUID {
+	t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	if err := env.DB.Exec(`INSERT INTO instructor_mirror (user_id, full_name) VALUES (?, 'Activities Instructor')`, id).Error; err != nil {
+		t.Fatalf("seed instructor_mirror: %v", err)
+	}
+	return id
+}
+
+func TestActivities_MissingAsset_FailsCleanly_LiveVersionUntouched(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	m := miniotest.Setup(t)
 	store, err := assets.New(m.Config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	svc := course.NewService(course.NewRepository(env.DB), env.RDB, nil, "").WithAssetStore(store)
+	acts := activities.NewActivities(svc)
 	ctx := context.Background()
-	instr := seedWorkflowInstructor(t, env)
+	instr := seedInstructor(t, env)
 
 	cResp, vResp, err := svc.CreateCourse(ctx, instr, course.CreateCourseRequest{Title: "Live Title", Slug: "asset-live", Description: "d"})
 	if err != nil {
@@ -58,7 +102,7 @@ func TestPublishWorkflow_MissingAsset_FailsCleanly_LiveVersionUntouched(t *testi
 	if _, err := svc.AddLesson(ctx, courseID, instr, uuid.MustParse(mod.ID), course.CreateLessonRequest{Title: "L", Position: 1, ContentType: "text", Content: map[string]any{"b": "x"}, DurationS: 5}); err != nil {
 		t.Fatal(err)
 	}
-	if err := runPublish(t, svc, publishing.PublishWorkflowInput{CourseID: courseID, VersionID: v1, Title: "Live Title"}); err != nil {
+	if err := runPublish(t, acts, publishing.PublishWorkflowInput{CourseID: courseID, VersionID: v1, Title: "Live Title"}); err != nil {
 		t.Fatalf("first publish: %v", err)
 	}
 
@@ -81,7 +125,7 @@ func TestPublishWorkflow_MissingAsset_FailsCleanly_LiveVersionUntouched(t *testi
 		t.Fatal(err)
 	}
 
-	err = runPublish(t, svc, publishing.PublishWorkflowInput{CourseID: courseID, VersionID: v2, OldVersionID: &v1, Title: "Draft Title"})
+	err = runPublish(t, acts, publishing.PublishWorkflowInput{CourseID: courseID, VersionID: v2, OldVersionID: &v1, Title: "Draft Title"})
 	if err == nil {
 		t.Fatal("publish succeeded although a lesson references a missing asset")
 	}
@@ -123,7 +167,7 @@ func TestPublishWorkflow_MissingAsset_FailsCleanly_LiveVersionUntouched(t *testi
 	if err := env.DB.Exec(`UPDATE lessons SET asset_key = ? WHERE asset_key = ?`, resp.AssetKey, missing).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := runPublish(t, svc, publishing.PublishWorkflowInput{CourseID: courseID, VersionID: v2, OldVersionID: &v1, Title: "Draft Title"}); err != nil {
+	if err := runPublish(t, acts, publishing.PublishWorkflowInput{CourseID: courseID, VersionID: v2, OldVersionID: &v1, Title: "Draft Title"}); err != nil {
 		t.Fatalf("publish after uploading the asset: %v", err)
 	}
 	env.DB.Raw(`SELECT published_version_id FROM courses WHERE id = ?`, courseID).Row().Scan(&published)

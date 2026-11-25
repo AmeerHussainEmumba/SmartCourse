@@ -16,6 +16,7 @@ import (
 // instructor ownership in analytics without a cross-schema read, ADR-0024).
 func TestCoursePublishedPayload_CarriesInstructorID(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	instr := seedInstructor(t, env)
 	courseID, draft := newCourse(t, svc, instr, "payload-instr", "Payload")

@@ -68,6 +68,7 @@ func certificateColumns(t *testing.T, db *gorm.DB) map[string]bool {
 
 func TestMigration000007_DownThenUpAgain(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 	if err := deliver(t, env.DB, completedEvent(t, f.enrollmentID, f.studentID)); err != nil {
 		t.Fatalf("deliver: %v", err)

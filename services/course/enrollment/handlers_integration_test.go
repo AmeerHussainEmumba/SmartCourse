@@ -29,6 +29,7 @@ import (
 // withdrawn_at alone, not just that it withdraws everyone indiscriminately.
 func TestHandleCourseArchived_WithdrawsActiveEnrollments(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	ctx := context.Background()
 

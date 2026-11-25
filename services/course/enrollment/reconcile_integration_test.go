@@ -35,6 +35,7 @@ func corrupt(t *testing.T, env *testenv.Env, courseID uuid.UUID, to int) {
 // courses. The completed enrollment keeps its seat, as Enroll/Withdraw treat it.
 func TestReconcileEnrollmentCounts_HealsHandCorruptedCounter(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	ctx := context.Background()
 
@@ -99,6 +100,7 @@ func TestReconcileEnrollmentCounts_HealsHandCorruptedCounter(t *testing.T) {
 // stale count.
 func TestReconcileEnrollmentCounts_WaitsForTheCourseRowLock(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	ctx := context.Background()
 	courseID := seedCourse(t, env, nil)
 	student := seedStudent(t, env)

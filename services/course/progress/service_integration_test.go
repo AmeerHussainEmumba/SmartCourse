@@ -27,12 +27,8 @@ func seedEnrollmentWithTwoLessons(t *testing.T, env *testenv.Env) (enrollmentID 
 	t.Helper()
 
 	instructorID := uuid.Must(uuid.NewV7())
-	env.DB.Exec(`INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, 'x', 'Instructor', 'instructor', 'active')`,
-		instructorID, instructorID.String()+"@example.com")
 
 	studentID = uuid.Must(uuid.NewV7())
-	env.DB.Exec(`INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, 'x', 'Student', 'student', 'active')`,
-		studentID, studentID.String()+"@example.com")
 
 	courseID := uuid.Must(uuid.NewV7())
 	versionID := uuid.Must(uuid.NewV7())
@@ -63,6 +59,7 @@ func seedEnrollmentWithTwoLessons(t *testing.T, env *testenv.Env) (enrollmentID 
 
 func TestMarkComplete_TransitionsEnrollmentOnlyWhenAllLessonsDone(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := progress.NewService(progress.NewRepository(env.DB))
 	ctx := context.Background()
 
@@ -96,6 +93,7 @@ func TestMarkComplete_TransitionsEnrollmentOnlyWhenAllLessonsDone(t *testing.T) 
 
 func TestMarkComplete_IsIdempotent(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := progress.NewService(progress.NewRepository(env.DB))
 	ctx := context.Background()
 
@@ -128,6 +126,7 @@ func TestMarkComplete_IsIdempotent(t *testing.T) {
 // must enforce ownership the same way MarkComplete does.
 func TestGetProgress_ReflectsRealStateAndRejectsNonOwner(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := progress.NewService(progress.NewRepository(env.DB))
 	ctx := context.Background()
 
@@ -186,6 +185,7 @@ func TestGetProgress_ReflectsRealStateAndRejectsNonOwner(t *testing.T) {
 
 func TestMarkComplete_RejectsNonOwner(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := progress.NewService(progress.NewRepository(env.DB))
 	ctx := context.Background()
 

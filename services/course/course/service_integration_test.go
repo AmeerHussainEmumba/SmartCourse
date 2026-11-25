@@ -31,19 +31,13 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
 )
 
-// seedInstructor seeds both identity.users (so the row exists, even
-// though nothing in this module reads it directly anymore — ADR-0024) and
-// course.instructor_mirror (what ListCatalogue actually joins against),
-// mirroring what services/course/course's relay handler would do in production
-// in response to identity.user_registered.
+// seedInstructor seeds course.instructor_mirror (what ListCatalogue joins
+// against), mirroring what the course relay handler does in production in
+// response to identity.user_registered. The course schema has no identity
+// tables (ADR-0024), so nothing else is seeded.
 func seedInstructor(t *testing.T, env *testenv.Env) uuid.UUID {
 	t.Helper()
 	id := uuid.Must(uuid.NewV7())
-	err := env.DB.Exec(`INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, 'x', 'Test Instructor', 'instructor', 'active')`,
-		id, id.String()+"@example.com").Error
-	if err != nil {
-		t.Fatalf("seed instructor: %v", err)
-	}
 	if err := env.DB.Exec(`INSERT INTO instructor_mirror (user_id, full_name) VALUES (?, 'Test Instructor')`, id).Error; err != nil {
 		t.Fatalf("seed instructor_mirror: %v", err)
 	}
@@ -113,6 +107,7 @@ func runPublishPipeline(t *testing.T, svc *course.Service, courseID, instructorI
 
 func TestCoursePublish_FullLifecycle(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)
@@ -198,6 +193,7 @@ func TestCoursePublish_FullLifecycle(t *testing.T) {
 
 func TestUpdateDraft_RejectsNonOwner(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 
@@ -222,6 +218,7 @@ func TestUpdateDraft_RejectsNonOwner(t *testing.T) {
 
 func TestCreateCourse_RejectsInvalidSlug(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)
@@ -236,6 +233,7 @@ func TestCreateCourse_RejectsInvalidSlug(t *testing.T) {
 
 func TestUpdateModule_UpdatesTitle_RejectsNonOwner(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)
@@ -268,6 +266,7 @@ func TestUpdateModule_UpdatesTitle_RejectsNonOwner(t *testing.T) {
 
 func TestUpdateLesson_UpdatesContentAndRecomputesTotals(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)
@@ -326,6 +325,7 @@ func TestUpdateLesson_UpdatesContentAndRecomputesTotals(t *testing.T) {
 // marshalled and written over the stored content as literal JSON null.
 func TestUpdateLesson_OmittingContentPreservesIt(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)
@@ -383,6 +383,7 @@ func TestUpdateLesson_OmittingContentPreservesIt(t *testing.T) {
 
 func TestArchiveCourse_HidesFromCatalogueAndDetail_RejectsNonOwner(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)
@@ -441,6 +442,7 @@ func TestArchiveCourse_HidesFromCatalogueAndDetail_RejectsNonOwner(t *testing.T)
 
 func TestListCatalogue_FiltersByCategoryLevelAndSearch(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)

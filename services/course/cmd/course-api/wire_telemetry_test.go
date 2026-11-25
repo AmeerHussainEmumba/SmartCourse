@@ -26,6 +26,7 @@ import (
 
 func TestArchiveCourse_OutboxRowCarriesTheRequestTrace(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	deps := &infra.Dependencies{DB: env.DB, RDB: env.RDB}
 	cfg := &config.Config{
 		Env: "test",

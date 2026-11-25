@@ -18,6 +18,7 @@ import (
 // released from the old claim.
 func TestReconcile_ReclaimedBetweenReadAndRelease_NotOverwritten(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	var vid uuid.UUID
 	fake := &reconcileFake{}

@@ -68,7 +68,11 @@ type Service struct {
 	rdb       *redis.Client
 	temporal  temporalclient.Client
 	taskQueue string
-	assets    AssetStore // nil until WithAssetStore; see assets.go
+	// activityQueue is the queue the workflow schedules its activities on,
+	// passed in publishing.PublishWorkflowInput.ActivityQueue; empty means the
+	// contract default.
+	activityQueue string
+	assets        AssetStore // nil until WithAssetStore; see assets.go
 }
 
 // temporal and taskQueue are nil/empty-safe for callers that never publish
@@ -76,6 +80,14 @@ type Service struct {
 // Service.Publish dereferences temporal, and only when actually called.
 func NewService(repo *Repository, rdb *redis.Client, temporal temporalclient.Client, taskQueue string) *Service {
 	return &Service{repo: repo, rdb: rdb, temporal: temporal, taskQueue: taskQueue}
+}
+
+// WithActivityQueue sets the task queue the publish workflow schedules its
+// activities on (cfg.Temporal.ActivityQueue); taskQueue (NewService) is the
+// queue the workflow itself starts on. Returns s for chaining.
+func (s *Service) WithActivityQueue(queue string) *Service {
+	s.activityQueue = queue
+	return s
 }
 
 // --- course & draft lifecycle ------------------------------------------------
@@ -525,7 +537,7 @@ func (s *Service) Publish(ctx context.Context, courseID, instructorID uuid.UUID)
 		ID:        workflowID,
 		TaskQueue: s.taskQueue,
 	}, publishing.WorkflowName, publishing.PublishWorkflowInput{
-		CourseID: courseID, VersionID: draft.ID, OldVersionID: c.PublishedVersionID, Title: draft.Title,
+		CourseID: courseID, VersionID: draft.ID, OldVersionID: c.PublishedVersionID, Title: draft.Title, ActivityQueue: s.activityQueue,
 	})
 	if err != nil {
 		// The workflow did not start, so nothing will ever move this version

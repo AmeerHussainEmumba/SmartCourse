@@ -28,6 +28,7 @@ func errCode(err error) string {
 // the same transaction.
 func TestSearch_Republish_OldVersionServedUntilPromote_ThenNew(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
@@ -64,6 +65,7 @@ func TestSearch_Republish_OldVersionServedUntilPromote_ThenNew(t *testing.T) {
 
 func TestPromoteAndPublish_ArchivedCourse_Refused_NoEvent(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
@@ -82,6 +84,7 @@ func TestPromoteAndPublish_ArchivedCourse_Refused_NoEvent(t *testing.T) {
 
 func TestValidateMetadata_RequiresALesson(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	instr := seedInstructor(t, env)
 	courseID, draft := newCourse(t, svc, instr, "has-lesson", "Has Lesson")
@@ -93,6 +96,7 @@ func TestValidateMetadata_RequiresALesson(t *testing.T) {
 
 func TestDeleteModuleAndLesson_RejectNonDraftVersion(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
@@ -116,6 +120,7 @@ func TestDeleteModuleAndLesson_RejectNonDraftVersion(t *testing.T) {
 
 func TestInputValidation_NULAndDeepContent_Are400(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
@@ -156,6 +161,7 @@ func TestInputValidation_NULAndDeepContent_Are400(t *testing.T) {
 
 func TestListCatalogue_SearchEscapesLikeMetacharacters(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
@@ -181,6 +187,7 @@ func TestListCatalogue_SearchEscapesLikeMetacharacters(t *testing.T) {
 
 func TestDetail_ServesLiveEnrollmentCount_AfterCacheWarm(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
