@@ -7,6 +7,11 @@
 // Requires Docker. Every module's integration tests call Setup once per
 // test (or per subtest) — testcontainers-go handles container lifecycle
 // and t.Cleanup handles teardown, so callers never manage this by hand.
+//
+// Service tests should act as the service: Env.ServiceDB connects as that
+// service's Postgres role with search_path "<schema>,public". Env.DB is the
+// OWNER connection and carries no service schema on its search_path (see
+// README, "Name-collision hazard").
 package testenv
 
 import (
@@ -21,7 +26,6 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/redis/go-redis/v9"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 	"gorm.io/gorm"
 
@@ -29,43 +33,63 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/db"
 )
 
+// Env is one test's infrastructure.
+//
+// DB is the OWNER connection (the database owner that runs migrations, a
+// superuser in the test container). Its search_path is OwnerSearchPath
+// ("public"), so an unqualified outbox, processed_events or idempotency_keys
+// fails with "relation does not exist" instead of silently resolving to the
+// wrong service's table. Use ServiceDB to act as a service, and Qualify (or
+// write schema.table) for owner-side fixtures and assertions.
 type Env struct {
-	DB  *gorm.DB
-	RDB *redis.Client
+	DB *gorm.DB
+	// Owner is the same owner connection DB starts as. A test that replaces DB
+	// with a ServiceDB connection (see the helpers in libs/relay's tests) keeps
+	// the owner here for DDL fixtures and cross-schema assertions.
+	Owner *gorm.DB
+	RDB   *redis.Client
+
+	dsn string // owner DSN, no search_path
 }
 
-// Setup starts fresh Postgres and Redis containers, applies every migration
-// in migrations/, and returns connected clients. Each call gets its own
-// containers — tests don't share state, which is what makes the
+// OwnerSearchPath is the search_path of Env.DB. It deliberately contains no
+// service schema: outbox exists in identity and course, processed_events in
+// course, analytics and notification, and idempotency_keys in course (more
+// can follow), and a combined search_path silently resolves such a name to
+// the FIRST schema listed. With only `public` on the path, every unqualified
+// use of a service table fails loudly.
+const OwnerSearchPath = "public"
+
+// Services lists the service schemas that have a role, in migration order.
+var Services = []string{"identity", "course", "analytics", "notification"}
+
+// Setup starts fresh Postgres and Redis containers, creates the per-service
+// roles (scripts/db-roles.sh, run inside the container), applies every
+// migration in migrations/, and returns connected clients. Each call gets its
+// own containers: tests don't share state, which is what makes the
 // concurrency tests (enrollment) trustworthy.
 func Setup(t *testing.T) *Env {
 	t.Helper()
 	ctx := context.Background()
 
-	pgContainer, err := tcpostgres.Run(ctx, "postgres:16-alpine",
-		tcpostgres.WithDatabase("smartcourse_test"),
-		tcpostgres.WithUsername("smartcourse"),
-		tcpostgres.WithPassword("smartcourse"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	if err != nil {
-		t.Fatalf("start postgres container: %v", err)
-	}
-	t.Cleanup(func() { _ = pgContainer.Terminate(context.Background()) })
-
-	dsn, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("get postgres connection string: %v", err)
-	}
-
-	if err := applyMigrations(dsn); err != nil {
+	pg := startPostgres(t)
+	pg.provisionRoles(t)
+	if err := applyMigrations(pg.dsn, migrationServices...); err != nil {
 		t.Fatalf("apply migrations: %v", err)
 	}
+	// Same order as `make migrate-up`: roles, migrations, roles again. The
+	// second run proves the script is idempotent and covers existing tables.
+	pg.provisionRoles(t)
 
-	gdb, err := db.Open(dbConfigFor(dsn))
+	gdb, err := db.Open(dbConfigFor(pg.dsn))
 	if err != nil {
 		t.Fatalf("open gorm connection: %v", err)
 	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
 
 	redisContainer, err := tcredis.Run(ctx, "redis:7-alpine",
 		tcredis.WithSnapshotting(0, 0), // no persistence needed for tests
@@ -87,38 +111,60 @@ func Setup(t *testing.T) *Env {
 		t.Fatalf("ping redis: %v", err)
 	}
 
-	return &Env{DB: gdb, RDB: rdb}
+	return &Env{DB: gdb, Owner: gdb, RDB: rdb, dsn: pg.dsn}
 }
 
-// migrationServices is the fixed apply order (schema-per-service,
-// ADR-0024): platform first (citext/pg_trgm live in `public`, needed
-// before identity/course's tables that use them), analytics last (nothing
-// else depends on it) — matches Makefile's MIGRATION_SERVICES.
-var migrationServices = []string{"platform", "identity", "course", "analytics", "notification"}
+// migrationServices is the fixed apply order (schema-per-service, ADR-0024):
+// platform first (citext/pg_trgm live in `public`, needed before
+// identity/course's tables that use them), cutover last (it moves and drops
+// the platform tables, so every service's own tables must exist). Matches
+// Makefile's MIGRATION_SERVICES.
+var migrationServices = []string{"platform", "identity", "course", "analytics", "notification", "cutover"}
 
-// applyMigrations runs all four services' migrations against one database,
-// each tracked by its own x-migrations-table so they don't collide on a
-// single shared schema_migrations row (same scheme Makefile's migrate-up
-// uses). Tests always apply every service's schema regardless of which
-// module is under test — fixtures commonly span schemas (e.g. an
-// enrollment test seeding a row into identity.users), same as before
-// ADR-0024 when it was one flat migrations/ directory.
-func applyMigrations(dsn string) error {
-	root, err := migrationsRoot()
-	if err != nil {
-		return err
-	}
-	for _, svc := range migrationServices {
-		svcDSN := dsn + "&x-migrations-table=" + svc + "_schema_migrations"
-		m, err := migrate.New("file://"+filepath.Join(root, svc), svcDSN)
+// applyMigrations runs the given migration sets against one database, each
+// tracked by its own x-migrations-table so they don't collide on a single
+// shared schema_migrations row (same scheme Makefile's migrate-up uses).
+// Tests always apply every set regardless of which module is under test:
+// fixtures commonly span schemas (e.g. an enrollment test seeding a row into
+// identity.users).
+func applyMigrations(dsn string, sets ...string) error {
+	for _, set := range sets {
+		m, err := newMigrator(dsn, set)
 		if err != nil {
-			return fmt.Errorf("create migrator for %s: %w", svc, err)
+			return err
 		}
-		if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-			return fmt.Errorf("run %s migrations: %w", svc, err)
+		err = m.Up()
+		_, _ = m.Close()
+		if err != nil && err != migrate.ErrNoChange {
+			return fmt.Errorf("run %s migrations: %w", set, err)
 		}
 	}
 	return nil
+}
+
+// migrateSteps applies n migrations of one set (negative n rolls back).
+func migrateSteps(dsn, set string, n int) error {
+	m, err := newMigrator(dsn, set)
+	if err != nil {
+		return err
+	}
+	defer func() { _, _ = m.Close() }()
+	if err := m.Steps(n); err != nil {
+		return fmt.Errorf("%s steps %d: %w", set, n, err)
+	}
+	return nil
+}
+
+func newMigrator(dsn, set string) (*migrate.Migrate, error) {
+	root, err := migrationsRoot()
+	if err != nil {
+		return nil, err
+	}
+	m, err := migrate.New("file://"+filepath.Join(root, set), dsn+"&x-migrations-table="+set+"_schema_migrations")
+	if err != nil {
+		return nil, fmt.Errorf("create migrator for %s: %w", set, err)
+	}
+	return m, nil
 }
 
 // migrationsRoot resolves migrations/ relative to this source file rather
@@ -134,17 +180,14 @@ func migrationsRoot() (string, error) {
 	return filepath.Join(root, "migrations"), nil
 }
 
-// dbConfigFor's search_path spans every schema: unlike a real binary, test
-// code routinely reaches into more than one service's tables (fixtures
-// seeding identity.users for a course/enrollment test, assertions reading
-// analytics' mirror tables directly), so tests keep every bare table name
-// resolvable the same way they were before ADR-0024's schema split.
+// dbConfigFor builds the OWNER pool. See OwnerSearchPath for why it carries no
+// service schema.
 func dbConfigFor(dsn string) config.PostgresConfig {
 	return config.PostgresConfig{
 		DSN:          dsn,
 		MaxOpenConns: 10,
 		MaxIdleConns: 5,
-		SearchPath:   "identity,course,analytics,platform,public",
+		SearchPath:   OwnerSearchPath,
 	}
 }
 

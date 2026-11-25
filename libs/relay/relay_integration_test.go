@@ -24,7 +24,6 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 func writeTestEvents(t *testing.T, db *gorm.DB, eventType string, n int) {
@@ -49,7 +48,7 @@ func writeTestEvents(t *testing.T, db *gorm.DB, eventType string, n int) {
 // parallelism bounded correctly, the observed concurrent count should
 // reach 3 but never exceed it.
 func TestRelay_BoundedConcurrency_NeverExceedsWorkerCount(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	const workerCount = 3
 	const eventCount = 20
 
@@ -100,7 +99,7 @@ func TestRelay_BoundedConcurrency_NeverExceedsWorkerCount(t *testing.T) {
 // processed_events row, not one per attempt — the check-then-insert inside
 // one transaction (runOne in relay.go) is what makes retries safe.
 func TestRelay_IdempotencyAcrossRetries(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeTestEvents(t, env.DB, "test.flaky", 1)
 
 	var attempts atomic.Int32
@@ -155,7 +154,7 @@ func TestRelay_IdempotencyAcrossRetries(t *testing.T) {
 // every poll forever (SmartCourse.md §7 — "Retry mechanisms" implies
 // bounded retries, not infinite ones).
 func TestRelay_GivesUpAfterMaxAttempts(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeTestEvents(t, env.DB, "test.poison", 1)
 
 	var attempts atomic.Int32
@@ -195,7 +194,7 @@ func TestRelay_GivesUpAfterMaxAttempts(t *testing.T) {
 // handler mid-execution. The handler sleeps past the cancellation point;
 // Run() must not return until it's genuinely finished.
 func TestRelay_GracefulShutdown_DrainsInFlightWork(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeTestEvents(t, env.DB, "test.slow", 1)
 
 	var finished atomic.Bool

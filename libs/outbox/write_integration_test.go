@@ -40,7 +40,7 @@ func newEvent() outbox.Event {
 }
 
 func TestWrite_FillsTraceAndActorFromContext(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	useResolver(t)
 	tid, _ := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
 	sid, _ := trace.SpanIDFromHex("00f067aa0ba902b7")
@@ -62,7 +62,7 @@ func TestWrite_FillsTraceAndActorFromContext(t *testing.T) {
 }
 
 func TestWrite_ExplicitValuesWinAndEmptyContextIsNull(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	useResolver(t)
 	caller := uuid.New()
 	ctx := context.WithValue(context.Background(), userKey{}, uuid.New())

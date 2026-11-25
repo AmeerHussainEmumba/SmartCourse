@@ -23,7 +23,6 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 // eventually polls cond until it is true or the deadline passes.
@@ -59,9 +58,11 @@ func startRelay(rl *relay.Relay) (stop func()) {
 	return func() { cancel(); <-done }
 }
 
+// createEffectsTable creates a fixture table in the course schema as the OWNER
+// (a service role has no DDL); the default privileges let svc_course use it.
 func createEffectsTable(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	if err := db.Exec(`CREATE TABLE public.test_effects (
+	if err := db.Exec(`CREATE TABLE course.test_effects (
 		consumer TEXT NOT NULL, event_id UUID NOT NULL, n SERIAL, PRIMARY KEY (consumer, event_id))`).Error; err != nil {
 		t.Fatalf("create test_effects: %v", err)
 	}
@@ -73,12 +74,12 @@ func createEffectsTable(t *testing.T, db *gorm.DB) {
 // counter the test could get wrong.
 func effectHandler(consumer string, types ...string) relay.Handler {
 	return relay.NewHandler(consumer, types, func(ctx context.Context, tx *gorm.DB, evt relay.DecodedEvent) error {
-		return tx.Exec(`INSERT INTO public.test_effects (consumer, event_id) VALUES (?, ?)`, consumer, evt.EventID).Error
+		return tx.Exec(`INSERT INTO course.test_effects (consumer, event_id) VALUES (?, ?)`, consumer, evt.EventID).Error
 	})
 }
 
 func TestRelayAdv_RolledBackAndUncommittedEventsAreNeverDelivered(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 
 	var mu sync.Mutex
 	var seen []string
@@ -147,8 +148,8 @@ func TestRelayAdv_RolledBackAndUncommittedEventsAreNeverDelivered(t *testing.T) 
 }
 
 func TestRelayAdv_TwoRelaysOneDB_NoEventLostNoDoubleEffect(t *testing.T) {
-	env := testenv.Setup(t)
-	createEffectsTable(t, env.DB)
+	env := setupCourse(t)
+	createEffectsTable(t, env.Owner)
 	const events = 200
 	writeTestEvents(t, env.DB, "t.two", events)
 
@@ -169,14 +170,14 @@ func TestRelayAdv_TwoRelaysOneDB_NoEventLostNoDoubleEffect(t *testing.T) {
 
 	// Each consumer applied each event exactly once, across both relays.
 	for _, c := range []string{"c1", "c2"} {
-		if n := countRows(t, env.DB, `SELECT count(DISTINCT event_id) FROM public.test_effects WHERE consumer = ?`, c); n != events {
+		if n := countRows(t, env.DB, `SELECT count(DISTINCT event_id) FROM course.test_effects WHERE consumer = ?`, c); n != events {
 			t.Fatalf("consumer %s: expected %d distinct effects, got %d (event lost)", c, events, n)
 		}
 		if n := countRows(t, env.DB, `SELECT count(*) FROM processed_events WHERE consumer_name = ?`, c); n != events {
 			t.Fatalf("consumer %s: expected %d processed_events rows, got %d", c, events, n)
 		}
 	}
-	if n := countRows(t, env.DB, `SELECT count(*) FROM public.test_effects`); n != 2*events {
+	if n := countRows(t, env.DB, `SELECT count(*) FROM course.test_effects`); n != 2*events {
 		t.Fatalf("expected %d total effects, got %d", 2*events, n)
 	}
 	if _, _, g1 := r1.Stats(); g1 != 0 {
@@ -188,7 +189,7 @@ func TestRelayAdv_TwoRelaysOneDB_NoEventLostNoDoubleEffect(t *testing.T) {
 }
 
 func TestRelayAdv_PartialFailure_OtherConsumerNotReRun_AttemptsCounted(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeTestEvents(t, env.DB, "t.partial", 1)
 
 	var aCalls, bCalls atomic.Int32
@@ -236,7 +237,7 @@ func TestRelayAdv_PartialFailure_OtherConsumerNotReRun_AttemptsCounted(t *testin
 }
 
 func TestRelayAdv_PoisonEventDoesNotBlockQueue_AndIsTriedExactlyMaxAttempts(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeTestEvents(t, env.DB, "t.poison2", 1) // lowest id: head of the queue
 	writeTestEvents(t, env.DB, "t.good", 8)
 
@@ -288,15 +289,15 @@ func TestRelayAdv_PoisonEventDoesNotBlockQueue_AndIsTriedExactlyMaxAttempts(t *t
 // written. Relay 2 then finishes the job. Every event must have exactly one
 // committed effect.
 func TestRelayAdv_CancelMidBatchThenRestart_ExactlyOneEffectPerEvent(t *testing.T) {
-	env := testenv.Setup(t)
-	createEffectsTable(t, env.DB)
+	env := setupCourse(t)
+	createEffectsTable(t, env.Owner)
 	const events = 80
 	writeTestEvents(t, env.DB, "t.crash", events)
 
 	var started atomic.Int32
 	flaky := relay.NewHandler("crashy", []string{"t.crash"}, func(ctx context.Context, tx *gorm.DB, evt relay.DecodedEvent) error {
 		n := started.Add(1)
-		if err := tx.Exec(`INSERT INTO public.test_effects (consumer, event_id) VALUES ('crashy', ?)`, evt.EventID).Error; err != nil {
+		if err := tx.Exec(`INSERT INTO course.test_effects (consumer, event_id) VALUES ('crashy', ?)`, evt.EventID).Error; err != nil {
 			return err
 		}
 		if n%3 == 0 {
@@ -325,10 +326,10 @@ func TestRelayAdv_CancelMidBatchThenRestart_ExactlyOneEffectPerEvent(t *testing.
 	})
 	stop2()
 
-	if n := countRows(t, env.DB, `SELECT count(DISTINCT event_id) FROM public.test_effects WHERE consumer = 'crashy'`); n != events {
+	if n := countRows(t, env.DB, `SELECT count(DISTINCT event_id) FROM course.test_effects WHERE consumer = 'crashy'`); n != events {
 		t.Fatalf("expected %d events with an effect, got %d (lost events)", events, n)
 	}
-	if n := countRows(t, env.DB, `SELECT count(*) FROM public.test_effects WHERE consumer = 'crashy'`); n != events {
+	if n := countRows(t, env.DB, `SELECT count(*) FROM course.test_effects WHERE consumer = 'crashy'`); n != events {
 		t.Fatalf("expected exactly %d committed effects, got %d (duplicated effect)", events, n)
 	}
 	if n := countRows(t, env.DB, `SELECT count(*) FROM processed_events WHERE consumer_name = 'crashy'`); n != events {
@@ -341,7 +342,7 @@ func TestRelayAdv_CancelMidBatchThenRestart_ExactlyOneEffectPerEvent(t *testing.
 // relayed will never see it (no replay). Documented as a limitation; this
 // test pins the behaviour so a change is noticed.
 func TestRelayAdv_UnhandledEventTypeIsMarkedPublished_NoReplayForLateConsumers(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeTestEvents(t, env.DB, "nobody.handles.this", 3)
 
 	rl := relay.New(env.DB, relay.WithPollInterval(10*time.Millisecond))
@@ -373,7 +374,7 @@ func effectNoop(name string, types ...string) relay.Handler {
 }
 
 func TestRelayAdv_LargeAndBinaryPayloadsSurviveIntact(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 
 	big := bytes.Repeat([]byte("0123456789abcdef"), 512*1024) // 8 MiB
 	bigHash := sha256.Sum256(big)
@@ -423,8 +424,8 @@ func TestRelayAdv_LargeAndBinaryPayloadsSurviveIntact(t *testing.T) {
 }
 
 func TestRelayAdv_RunAndShutdownLeaveNoGoroutinesBehind(t *testing.T) {
-	env := testenv.Setup(t)
-	createEffectsTable(t, env.DB)
+	env := setupCourse(t)
+	createEffectsTable(t, env.Owner)
 	// Warm the pool and anything lazily started so the baseline is honest.
 	_ = countRows(t, env.DB, `SELECT 1`)
 	baseline := goleak.IgnoreCurrent()
@@ -435,7 +436,7 @@ func TestRelayAdv_RunAndShutdownLeaveNoGoroutinesBehind(t *testing.T) {
 		rl := relay.New(env.DB, relay.WithPollInterval(5*time.Millisecond), relay.WithWorkerCount(6), relay.WithBatchSize(8))
 		rl.Register(relay.NewHandler("leak", []string{"t.leak"}, func(ctx context.Context, tx *gorm.DB, evt relay.DecodedEvent) error {
 			done.Add(1)
-			return tx.Exec(`INSERT INTO public.test_effects (consumer, event_id) VALUES ('leak', ?)`, evt.EventID).Error
+			return tx.Exec(`INSERT INTO course.test_effects (consumer, event_id) VALUES ('leak', ?)`, evt.EventID).Error
 		}))
 		stop := startRelay(rl)
 		eventually(t, 10*time.Second, "round events processed", func() bool { return done.Load() >= 20 })
@@ -447,7 +448,7 @@ func TestRelayAdv_RunAndShutdownLeaveNoGoroutinesBehind(t *testing.T) {
 }
 
 func TestRelayAdv_CancelledBeforeFirstTickReturnsPromptly(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupCourse(t)
 	writeTestEvents(t, env.DB, "t.never", 5)
 	rl := relay.New(env.DB, relay.WithPollInterval(time.Hour))
 	ctx, cancel := context.WithCancel(context.Background())
