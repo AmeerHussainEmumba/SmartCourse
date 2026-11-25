@@ -50,6 +50,19 @@ err := srv.Run(ctx) // blocks; cancel ctx to drain
 - **OnExhausted** is called once, on the final failed attempt (retries used up, or the handler returned `asynqx.SkipRetry`), before Asynq archives the task. A task whose handler returns `asynq.RevokeTask` is a deliberate discard and does not call it. If the process dies between the final attempt and the hook, the hook is not replayed.
 - **Panics** in a handler are recovered and returned as an error wrapping `asynqx.ErrPanic`: an ordinary failure (retry, then `OnExhausted`), never a crash. `Server.PanicCount()` counts them.
 
+## Queue namespaces
+
+Services that share one Redis database must not share queue names: a server of service A pulls B's task, finds no handler and archives it (lost work). Set the namespace once per service, to its name:
+
+```go
+ss, _ := asynqx.NewServers(asynqx.ServersConfig{Redis: redis, Namespace: "course", ...})
+sc, _ := asynqx.NewScheduler(asynqx.SchedulerConfig{Redis: redis, Namespace: "course"})
+c := asynqx.NewClient(redis, asynqx.WithNamespace("course"))
+i := asynqx.NewInspector(redis, asynqx.WithNamespace("course"))
+```
+
+Callers keep the logical names (`QueueCritical`, ...) in `Pools`, `Register`, `Job.Queue` and `Entry.Queue`; Redis holds `course:critical` etc. The prefixed name is reported back (`Servers.Queues()`, `Result.Queue`, `QueueStats.Queue`, the `queue` metric label) and is rejected as an input, so another namespace's queue cannot be named. Tick task IDs include the namespace (`TickIDIn`), so the same job name scheduled by two services does not dedupe. A namespace is `[a-z][a-z0-9_-]{0,31}` or empty (no prefix, the default).
+
 ## Servers: one pool per queue
 
 ```go

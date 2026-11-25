@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Per-service queue namespace (fixes workers of different services consuming and archiving each other's tasks on shared queue names). `ServersConfig.Namespace`, `ServerConfig.Namespace`, `SchedulerConfig.Namespace` and `NewClient/NewInspector(redis, asynqx.WithNamespace(ns))` map the logical queues (`QueueCritical`, ...) to `<ns>:<queue>`; `Servers.Queues()`, `Result.Queue`, `QueueStats.Queue`, `MetaFrom().Queue` and the `queue` metric label carry the prefixed name. Tick task IDs include the namespace (`TickIDIn`). A prefixed name passed as a queue is rejected, so another service's queue cannot be named. The default (empty namespace) is unchanged. `Servers`, `Scheduler`, `Client` and `Inspector` gain `Namespace()`.
+
 - Fixed retry gaps not following the backoff (E07): `ServerConfig.DelayedTaskCheckInterval` (and so `ServersConfig`) defaulted to Asynq's 5 s, so every retry waited for the next 5 s check and the gaps were about 5 s whatever `Backoff` said. Zero now means the new `DefaultDelayedTaskCheckInterval` (1 s); an explicit value is honoured and a negative one is rejected by `NewServer`. Behaviour change: retries now run roughly when scheduled (earlier than before for delays under 5 s).
 
 - Trace propagation through the queue (ADR-0032): `Client.Enqueue` under a context that carries a trace starts an enqueue span and sets the task header `traceparent`; `Server.Handle` continues from that header (the job span is the enqueue span's child). The payload and the task id are untouched, so tasks already queued and untraced enqueues behave as before. New direct dependency in the client: `go.opentelemetry.io/otel/trace`.
