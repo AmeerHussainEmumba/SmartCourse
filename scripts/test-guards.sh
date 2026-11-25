@@ -219,7 +219,7 @@ expect_fail "dev-defaults C: []byte conversion of a credential" "FAIL \[C\]" "$d
 d=$(fresh dd9); printf 'package inject\n\nvar cfg = struct{ Password string }{Password: "hunter2hunter2"}\n' >"$d/libs/errors/zz_inject.go"
 expect_fail "dev-defaults C: struct field credential" "FAIL \[C\]" "$d" $DD
 # D: a comment mentioning APP_ENV is not a refusal to seed in production
-d=$(fresh dd10); perl -0pi -e 's/if cfg\.Env != "development" \{/if false \/* APP_ENV cfg.Env production *\/ {/' "$d/tools/seed/main.go"
+d=$(fresh dd10); perl -0pi -e 's/env != "" && env != "development"/false \/* APP_ENV env production *\//' "$d/tools/seed/main.go"
 expect_fail "dev-defaults D: the environment check disabled, comments still mention APP_ENV (S-12b)" "FAIL \[D\]" "$d" $DD
 # G: ports published beyond loopback, inline and list form
 d=$(fresh dd11); perl -0pi -e 's/\["127\.0\.0\.1:5433:5432"\]/["5433:5432"]/' "$d/docker-compose.yml"
