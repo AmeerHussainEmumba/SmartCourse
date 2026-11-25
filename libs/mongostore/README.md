@@ -2,7 +2,7 @@
 
 MongoDB archive, audit log and failed-event parking (ADR-0031, ADR-0004, RFC §5.4, §6.9).
 
-Status: implemented for Week 3 (`docs/plans/week-3.md`, section 4a). ADR-0031 is still `Proposed`. Used by the audit service (`audit-worker`: the archiver; `audit-api`: failed-event list, get and replay; packages `services/audit/{archive,deadletter,replay,admin,store}`, ADR-0034), as the dead-letter sink of the services that consume events (`course-worker`, `notification-worker`, `analytics-worker`) and by `analytics-api` (failed-events metric). Mongo is the audit service's own store; the other services only park into `failed_events`. See ADR-0031's implementation notes and ADR-0033/0034. Phase 4 additions: replay metadata on parked events, `AppendAuditOnce`, `SummarizeFailed`.
+Status: implemented for Week 3 (`docs/plans/week-3.md`, section 4a). ADR-0031 was accepted by the project owner on 2026-11-26. Used by the audit service (`audit-worker`: the archiver; `audit-api`: failed-event list, get and replay; packages `services/audit/{archive,deadletter,replay,admin,store}`, ADR-0034), as the dead-letter sink of the services that consume events (`course-worker`, `notification-worker`, `analytics-worker`) and by `analytics-api` (failed-events metric). Mongo is the audit service's own store; the other services only park into `failed_events`. See ADR-0031's implementation notes and ADR-0033/0034. Phase 4 additions: replay metadata on parked events, `AppendAuditOnce`, `SummarizeFailed`.
 
 Driver: `go.mongodb.org/mongo-driver/v2` v2.10.0 (Apache-2.0, pure Go, no cgo). Tests run against `mongo:7` through `libs/testenv.SetupMongo`.
 

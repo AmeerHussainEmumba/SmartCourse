@@ -134,9 +134,9 @@
 | AD-7 | ADR-0027 relay holds the claim through handling | The claim semantics still hold with Kafka | `cd libs/relay && GOWORK=off go test -race -tags=integration -count=1 -run 'Claim\|Replica' ./...` | exit 0 with two replicas: one effect | pending | |
 | AD-8 | DR-019 (observability deferred) / ADR-0032 supersedes | DR-019 is marked superseded, not edited | `grep -n 'DR-019' docs/rfc/differences-from-requirements.md` | Entry states `Superseded by ADR-0032` | pending | |
 | AD-9 | ADR-0029 (status Proposed) | Accepted when its phase passes | `grep -n 'ADR-0029' docs/adr/smartcourse-adr.md \| head -3`; the `Status:` line | `Accepted` and the matching E2E ids (E05, E06) PASS | pending | |
-| AD-10 | ADR-0030 (status Proposed) | Accepted when Phase 2 passes | the `Status:` line; `cd libs/events && GOWORK=off go test -race -count=1 ./...` | `Accepted`; round-trip and golden tests exit 0; E11 PASS | pending | |
-| AD-11 | ADR-0031 (status Proposed) | Accepted when Phase 4 passes | the `Status:` line; E04, E13 PASS | `Accepted` | pending | |
-| AD-12 | ADR-0032 (status Proposed) | Accepted when Phase 7 passes | the `Status:` line; E02 PASS | `Accepted` | pending | |
+| AD-10 | ADR-0030 (status Proposed) | Accepted when Phase 2 passes | the `Status:` line; `cd libs/events && GOWORK=off go test -race -count=1 ./...` | `Accepted`; round-trip and golden tests exit 0; E11 PASS | partial | The `Status:` line is `Accepted` (project owner, 2026-11-26); the test condition in the Proof column is still pending |
+| AD-11 | ADR-0031 (status Proposed) | Accepted when Phase 4 passes | the `Status:` line; E04, E13 PASS | `Accepted` | partial | The `Status:` line is `Accepted` (project owner, 2026-11-26); the test condition in the Proof column is still pending |
+| AD-12 | ADR-0032 (status Proposed) | Accepted when Phase 7 passes | the `Status:` line; E02 PASS | `Accepted` | partial | The `Status:` line is `Accepted` (project owner, 2026-11-26); the test condition in the Proof column is still pending |
 | AD-13 | ADR-0014 notification decision / week-3.md D6 | Mailpit as the sink is documented as a deliberate limit | `grep -n -i 'mailpit' README.md docs/rfc/differences-from-requirements.md` | A statement that no real mail provider is integrated | pending | |
 | AD-14 | Week 3 plan section 2: "no `Idempotency-Key` middleware" (RFC 15.1) | Same key twice returns the stored response | see P1-3 | see P1-3 | built, live run pending | `libs/idempotency` tests; `enrollment_idempotency_http_test.go` |
 

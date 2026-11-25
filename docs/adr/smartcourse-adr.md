@@ -61,10 +61,10 @@ The distinction matters when something changes. Six months from now, a contribut
 | [0026](#adr-0026--one-go-module-per-service-and-per-shared-library) | One Go module per service and per shared library | Accepted — superseded in part by ADR-0033 (the worker's coupling) | §4.1, §4.2, §4.4 |
 | [0027](#adr-0027--the-relay-holds-each-rows-claim-through-handling) | The relay holds each row's claim through handling | Accepted | §6.3 |
 | [0028](#adr-0028--publish-claims-the-version-before-starting-the-workflow) | Publish claims the version before starting the workflow | Accepted | §7.5 |
-| [0029](#adr-0029--two-event-transports-behind-one-seam-in-process-and-kafka) | Two event transports behind one seam: in-process and Kafka | Proposed — superseded in part by ADR-0033 (in-process transport removed) | §6.2, §6.3 |
-| [0030](#adr-0030--event-contracts-protobuf-generated-code-and-client-library-selection) | Event contracts: Protobuf, generated code, and client library selection | Proposed | §6.4, §6.8 |
-| [0031](#adr-0031--mongodb-archive-dead-letter-parking-and-replay) | MongoDB archive, dead-letter parking, and replay | Proposed | §5.4, §6.9 |
-| [0032](#adr-0032--observability-in-week-3-trace-context-through-the-event-envelope) | Observability in Week 3: trace context through the event envelope | Proposed | §12 |
+| [0029](#adr-0029--two-event-transports-behind-one-seam-in-process-and-kafka) | Two event transports behind one seam: in-process and Kafka | Accepted (project owner, 2026-11-26) — superseded in part by ADR-0033 (in-process transport removed) | §6.2, §6.3 |
+| [0030](#adr-0030--event-contracts-protobuf-generated-code-and-client-library-selection) | Event contracts: Protobuf, generated code, and client library selection | Accepted (project owner, 2026-11-26) | §6.4, §6.8 |
+| [0031](#adr-0031--mongodb-archive-dead-letter-parking-and-replay) | MongoDB archive, dead-letter parking, and replay | Accepted (project owner, 2026-11-26) | §5.4, §6.9 |
+| [0032](#adr-0032--observability-in-week-3-trace-context-through-the-event-envelope) | Observability in Week 3: trace context through the event envelope | Accepted (project owner, 2026-11-26) | §12 |
 | [0033](#adr-0033--independent-services-per-service-outbox-and-idempotency-tables-kafka-only-integration-per-service-roles) | Independent services: per-service outbox and idempotency tables, Kafka-only integration, per-service roles | Accepted | §4.4, §6 |
 | [0034](#adr-0034--the-audit-service-archive-dead-letter-store-and-replay-as-republish) | The audit service: archive, dead-letter store, and replay as republish | Accepted | §6.8, §6.9 |
 | [0035](#adr-0035--the-publishing-service-workflows-and-activities-on-separate-task-queues) | The publishing service: workflows and activities on separate task queues | Accepted | §7 |
@@ -1238,7 +1238,7 @@ If publishes legitimately approach the lease (longer activities, queueing behind
 
 > **Superseded in part by ADR-0033 (2026-11-25):** the in-process transport is removed; Kafka is the only transport and each service consumes independently.
 
-**Status:** Proposed · **Date:** 2026-11-18 · **RFC:** §6.2, §6.3 · **Would amend:** ADR-0021's reversal trigger, ADR-0027
+**Status:** Accepted (project owner, 2026-11-26) · **Date:** 2026-11-18 · **RFC:** §6.2, §6.3 · **Would amend:** ADR-0021's reversal trigger, ADR-0027
 
 ### Context
 
@@ -1268,7 +1268,7 @@ If the two transports diverge in behaviour more than once, or nobody uses `inpro
 
 ### Implementation notes (2026-11-24, Phase 3: `libs/relay`, `libs/config`, `services/worker/transport`)
 
-What was built (draft for the owner's review; the ADR stays `Proposed`):
+What was built (accepted by the project owner on 2026-11-26):
 
 - **Selection.** `EVENT_TRANSPORT=inprocess|kafka` (default `inprocess`; any other value fails `config.Load`, so it fails startup in every binary). Kafka mode requires `KAFKA_BROKERS` and `SCHEMA_REGISTRY_URL`. Consumer tuning: `KAFKA_CONSUMER_MAX_IN_FLIGHT` (4), `..._MAX_ATTEMPTS` (5), `..._BACKOFF_BASE` / `..._BACKOFF_MAX`, `..._SHUTDOWN_TIMEOUT`, and `KAFKA_PRODUCE_TIMEOUT` (20s, at most 25s because the relay gives one row 30s).
 - **The seam is in the relay, the Kafka code is not.** `libs/relay` gained `Publisher` (`Publish(ctx, DecodedEvent) error`), `WithPublisher`, `Deliver` (the existing check-`processed_events`-then-handle-then-mark transaction, now exported) and `Handlers()`. It still imports no Kafka client and no `libs/events`, so the link-graph guard's ban on Kafka code in identity-api and analytics-api (which link the handler packages, hence `libs/relay`) is unaffected. The implementation is the new package `services/worker/transport` (encoding, `Publisher`, consumer `Runner`, start-up checks).
@@ -1290,7 +1290,7 @@ Verified (local, `go test -race -tags=integration`, real Postgres and Redis, a r
 
 ## ADR-0030 — Event contracts: Protobuf, generated code, and client library selection
 
-**Status:** Proposed · **Date:** 2026-11-18 · **RFC:** §6.4, §6.8 · **Builds on:** ADR-0008
+**Status:** Accepted (project owner, 2026-11-26) · **Date:** 2026-11-18 · **RFC:** §6.4, §6.8 · **Builds on:** ADR-0008
 
 ### Context
 
@@ -1315,7 +1315,7 @@ If registry compatibility checks block legitimate evolution more than they preve
 
 ### Implementation notes (2026-11-18, `libs/events`, `libs/asynqx`, `libs/mongostore`, `libs/telemetry`)
 
-These record what was built and chosen. The ADR stays `Proposed` until the Kafka client library is chosen in Phase 3.
+These record what was built and chosen. The ADR was `Proposed` until the Kafka client library was chosen and the owner accepted it on 2026-11-26.
 
 - **Protobuf toolchain:** buf v1.75.0 (Apache-2.0) and protoc-gen-go v1.36.11 (BSD-3-Clause), matching the `google.golang.org/protobuf` v1.36.11 runtime; generated code is committed and `generate.sh` reproduces it byte for byte. Confluent's wire format (magic byte, 4-byte schema id, message-index list) was checked against Confluent's documentation; a real Confluent client has **not** yet read these bytes (Phase 3).
 - **Registry client:** standard-library `net/http`, no third-party dependency. Twelve subjects registered at BACKWARD against a real Schema Registry; an additive change was accepted and a field-type change rejected (409).
@@ -1334,13 +1334,13 @@ These record what was built and chosen. The ADR stays `Proposed` until the Kafka
 - **A test found a default that matters:** franz-go does not retry an EOF on the first read of a connection (it assumes a TLS or SASL misconfiguration), and a restarting broker behind a port proxy produces exactly that. Both clients set `kgo.AlwaysRetryEOF()`. Revisit this when TLS or SASL is introduced.
 - **Not verified:** multi-broker behaviour (replication, leader election, `min.insync.replicas`); TLS and SASL; throughput and consumer lag under load; a Confluent-format consumer reading `libs/events` bytes through this transport (still the Phase 3 interop item above); crash recovery when the broker also loses its producer-state snapshot; `govulncheck` on the new dependencies.
 - **Topic list** is in `libs/kafka/topics` (RFC §6.5, three partitions, replication factor one) and equals docker-compose's `kafka-init` (a unit test compares them). The partition count is still the RFC §20 (D5) placeholder.
-- **Still open:** the ADR stays `Proposed` until the relay and consumers use this module; what a consumer does when `OnExhausted` cannot park (ADR-0031's open item) is left to the hook, which has no error return and always lets the offset advance.
+- **Was open when written (now accepted, 2026-11-26; the relay and consumers use this module):** what a consumer does when `OnExhausted` cannot park (ADR-0031's open item) is left to the hook, which has no error return and always lets the offset advance.
 
 ---
 
 ## ADR-0031 — MongoDB archive, dead-letter parking, and replay
 
-**Status:** Proposed · **Date:** 2026-11-18 · **RFC:** §5.4, §6.9 · **Builds on:** ADR-0004 · **Closes:** ADR-0021's "no dead-letter store"
+**Status:** Accepted (project owner, 2026-11-26) · **Date:** 2026-11-18 · **RFC:** §5.4, §6.9 · **Builds on:** ADR-0004 · **Closes:** ADR-0021's "no dead-letter store"
 
 ### Context
 
@@ -1405,7 +1405,7 @@ If the archive's only users are replay and the failed-events metric, and operati
 
 ## ADR-0032 — Observability in Week 3: trace context through the event envelope
 
-**Status:** Proposed · **Date:** 2026-11-18 · **RFC:** §12 · **Would supersede:** DR-019
+**Status:** Accepted (project owner, 2026-11-26) · **Date:** 2026-11-18 · **RFC:** §12 · **Would supersede:** DR-019
 
 ### Context
 
