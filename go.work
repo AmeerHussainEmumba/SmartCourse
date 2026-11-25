@@ -13,6 +13,7 @@ use (
 	./libs/httpx
 	./libs/idempotency
 	./libs/infra
+	./libs/jobs
 	./libs/kafka
 	./libs/logging
 	./libs/mongostore
