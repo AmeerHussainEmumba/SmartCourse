@@ -19,14 +19,16 @@ DSN ?= $(POSTGRES_DSN)
 # Postgres schema, each tracked by its own x-migrations-table so they don't
 # collide on a single shared schema_migrations row. Order matters only for
 # `up`/`migrate-down-all` — platform first (citext/pg_trgm live in `public`,
-# needed before identity/course's tables that use them), analytics last
-# (nothing else depends on it) — not for individual-service migrate-down,
-# where cross-schema ordering doesn't apply (ADR-0024: no cross-schema FKs).
-MIGRATION_SERVICES := platform identity course analytics notification
-MIGRATION_SERVICES_REVERSED := notification analytics course identity platform
+# needed before identity/course's tables that use them), `cutover` last (it
+# moves the old platform tables' rows into the per-service tables and drops
+# `platform`, so every service set must exist first) — not for
+# individual-service migrate-down, where cross-schema ordering doesn't apply
+# (ADR-0024: no cross-schema FKs).
+MIGRATION_SERVICES := platform identity course analytics notification cutover
+MIGRATION_SERVICES_REVERSED := cutover notification analytics course identity platform
 
 .PHONY: dev-core dev-workflow dev-events dev-observability dev-full dev-down \
-        migrate-up migrate-down migrate-down-all migrate-create \
+        migrate-up migrate-down migrate-down-all migrate-create db-roles \
         run-identity-api run-course-api run-analytics-api run-worker \
         build build-identity-api build-course-api build-analytics-api build-worker \
         lint check-link-graph check-module-graph check-dockerfile-modules check-module-hygiene check-dev-defaults check-http-hardening check-pending-e2e test-guards verify-deliverables test test-race test-integration test-e2e seed fmt
@@ -58,6 +60,13 @@ migrate-up:
 		echo "--- $$svc ---"; \
 		$(MIGRATE) -path migrations/$$svc -database "$(DSN)&x-migrations-table=$${svc}_schema_migrations" up || exit 1; \
 	done
+	@$(MAKE) --no-print-directory db-roles
+
+# Creates/re-converges the per-service Postgres roles and their grants
+# (scripts/db-roles.sh; passwords come from SVC_*_PASSWORD in .env, see
+# env.example). Runs as the migration owner ($(DSN)); safe to repeat.
+db-roles:
+	@DB_OWNER_DSN="$(DSN)" ./scripts/db-roles.sh
 
 # Rolls back one migration for a single service: `make migrate-down service=course`.
 migrate-down:
