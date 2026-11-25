@@ -54,6 +54,7 @@ func getFrom(r *gin.Engine, path string, hdr map[string]string) *httptest.Respon
 // ground down faster than 30 a minute per real peer.
 func TestAdversarial_Verify_RateLimitNotBypassedBySpoofedHeaders(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	r := productionEngine(t, env)
 	limited := 0
 	for i := 0; i < 80; i++ {
@@ -75,6 +76,7 @@ func TestAdversarial_Verify_RateLimitNotBypassedBySpoofedHeaders(t *testing.T) {
 // match; owner-only fields never appear on the public view.
 func TestAdversarial_Verify_FormatAbuseAndFieldMinimisation(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	r := newTestEngine(t, env, 1000)
 	_, id, code := issued(t, env)
 	hostile := []string{
@@ -132,6 +134,7 @@ func certificateRandomCode(i int) string {
 // role does not widen access.
 func TestAdversarial_Certificates_OwnerRoutesAbuse(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	r := newTestEngine(t, env, 1000)
 	a, aID, _ := issued(t, env)
 	b, bID, _ := issued(t, env)

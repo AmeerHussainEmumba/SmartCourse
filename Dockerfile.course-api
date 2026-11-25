@@ -1,28 +1,39 @@
-# The course-api service (ADR-0023, extending ADR-0022) — one of four
-# independently built images (identity-api, course-api, analytics-api,
-# worker). Each service is its own Go module (docs/plans/module-split.md),
-# so this image is built from that module plus only the library modules it
-# depends on; nothing else in the repo is copied in. Keep the COPY list in
-# step with the module's go.mod `replace` directives — GOWORK=off below means
-# a missing module fails this build instead of being papered over by go.work.
+# The course-api binary: the course service's public HTTP API (ADR-0023). Its
+# background half is Dockerfile.course-worker. /metrics and the health probes
+# are on the internal listener (METRICS_HTTP_ADDR, default :9100), never on
+# the public port 8080.
+# Both course binaries build from the one services/course Go module, so both
+# images copy the same module set: the one in that module's go.mod `replace`
+# directives, which Go needs on disk even for modules a given binary does not
+# link (GOWORK=off below, so go.work cannot paper over a missing module;
+# scripts/check-dockerfile-modules.sh keeps the list exact). What each binary
+# actually LINKS is budgeted by scripts/check-link-graph.sh: course-api must
+# not link Kafka.
 # Build context is the repo root: docker build -f Dockerfile.course-api .
 FROM golang:1.26.11-alpine AS build
 ENV GOWORK=off CGO_ENABLED=0
 WORKDIR /src
+COPY libs/asynqx ./libs/asynqx
 COPY libs/auth ./libs/auth
 COPY libs/cache ./libs/cache
 COPY libs/config ./libs/config
 COPY libs/contracts/publishing ./libs/contracts/publishing
 COPY libs/db ./libs/db
 COPY libs/errors ./libs/errors
+COPY libs/eventbus ./libs/eventbus
+COPY libs/events ./libs/events
 COPY libs/httpx ./libs/httpx
 COPY libs/idempotency ./libs/idempotency
 COPY libs/infra ./libs/infra
+COPY libs/jobs ./libs/jobs
+COPY libs/kafka ./libs/kafka
 COPY libs/logging ./libs/logging
+COPY libs/mongostore ./libs/mongostore
 COPY libs/outbox ./libs/outbox
 COPY libs/ratelimit ./libs/ratelimit
 COPY libs/relay ./libs/relay
 COPY libs/router ./libs/router
+COPY libs/runtime ./libs/runtime
 COPY libs/telemetry ./libs/telemetry
 COPY libs/temporal ./libs/temporal
 COPY libs/testenv ./libs/testenv

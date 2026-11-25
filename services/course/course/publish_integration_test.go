@@ -5,7 +5,7 @@
 // every other test in this package deliberately bypasses (see
 // runPublishPipeline's doc comment in service_integration_test.go). A fake
 // client.Client stands in for Temporal here (not a real server — that's
-// services/course/workflows/publish_workflow_integration_test.go's job, and
+// services/publishing's job, with the activities tested in services/course/activities, and
 // tools/seed's make-seed smoke test for the full live wire-up): this file is
 // about Publish's own logic — the workflow ID it constructs, that it calls
 // ExecuteWorkflow with the right options, that it writes workflow_id/state
@@ -54,21 +54,24 @@ func (f *fakeWorkflowRun) GetWithOptions(context.Context, any, temporalclient.Wo
 
 func TestPublish_CallsExecuteWorkflowAndPersistsState(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instructorID := seedInstructor(t, env)
 	ctx := context.Background()
 
 	var gotOptions temporalclient.StartWorkflowOptions
 	var gotWorkflow any
+	var gotArgs []any
 	called := false
 	fake := &fakeTemporalClient{
-		executeWorkflow: func(_ context.Context, options temporalclient.StartWorkflowOptions, workflow any, _ ...any) (temporalclient.WorkflowRun, error) {
+		executeWorkflow: func(_ context.Context, options temporalclient.StartWorkflowOptions, workflow any, args ...any) (temporalclient.WorkflowRun, error) {
 			called = true
+			gotArgs = args
 			gotOptions = options
 			gotWorkflow = workflow
 			return &fakeWorkflowRun{id: options.ID}, nil
 		},
 	}
-	svc := course.NewService(course.NewRepository(env.DB), env.RDB, fake, "course-publish")
+	svc := course.NewService(course.NewRepository(env.DB), env.RDB, fake, "course-publish").WithActivityQueue("course-activities-x")
 
 	courseResp, _, err := svc.CreateCourse(ctx, instructorID, course.CreateCourseRequest{Title: "Publish Me", Slug: "publish-me"})
 	if err != nil {
@@ -103,6 +106,15 @@ func TestPublish_CallsExecuteWorkflowAndPersistsState(t *testing.T) {
 	if gotWorkflow != publishing.WorkflowName {
 		t.Fatalf("expected workflow name %q, got %v", publishing.WorkflowName, gotWorkflow)
 	}
+	// The workflow runs on the workflow queue and is told which queue its
+	// activities run on (contract: publishing.PublishWorkflowInput.ActivityQueue).
+	if len(gotArgs) != 1 {
+		t.Fatalf("ExecuteWorkflow got %d arguments, want 1", len(gotArgs))
+	}
+	in, ok := gotArgs[0].(publishing.PublishWorkflowInput)
+	if !ok || in.ActivityQueue != "course-activities-x" || in.CourseID != courseID {
+		t.Fatalf("workflow input = %#v, want ActivityQueue course-activities-x for course %s", gotArgs[0], courseID)
+	}
 	if accepted.WorkflowID != wantID || accepted.State != "publishing" {
 		t.Fatalf("unexpected accepted response: %+v", accepted)
 	}
@@ -121,6 +133,7 @@ func TestPublish_CallsExecuteWorkflowAndPersistsState(t *testing.T) {
 
 func TestPublish_NoDraft_ReturnsErrorWithoutCallingTemporal(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instructorID := seedInstructor(t, env)
 	ctx := context.Background()
 
@@ -161,6 +174,7 @@ func TestPublish_NoDraft_ReturnsErrorWithoutCallingTemporal(t *testing.T) {
 
 func TestPublish_ExecuteWorkflowFails_ReturnsUnavailableWithoutPersisting(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instructorID := seedInstructor(t, env)
 	ctx := context.Background()
 

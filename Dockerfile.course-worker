@@ -1,0 +1,50 @@
+# The course-worker binary: the course service's relay, Kafka consumers, jobs and
+# Temporal activities worker (docs/plans/microservices-split.md §6). No public
+# port; the internal listener (METRICS_HTTP_ADDR, default :9100) serves
+# /metrics and the health probes.
+# Both course binaries build from the one services/course Go module, so both
+# images copy the same module set: the one in that module's go.mod `replace`
+# directives, which Go needs on disk even for modules a given binary does not
+# link (GOWORK=off below, so go.work cannot paper over a missing module;
+# scripts/check-dockerfile-modules.sh keeps the list exact). What each binary
+# actually LINKS is budgeted by scripts/check-link-graph.sh: course-api must
+# not link Kafka.
+# Build context is the repo root: docker build -f Dockerfile.course-worker .
+FROM golang:1.26.11-alpine AS build
+ENV GOWORK=off CGO_ENABLED=0
+WORKDIR /src
+COPY libs/asynqx ./libs/asynqx
+COPY libs/auth ./libs/auth
+COPY libs/cache ./libs/cache
+COPY libs/config ./libs/config
+COPY libs/contracts/publishing ./libs/contracts/publishing
+COPY libs/db ./libs/db
+COPY libs/errors ./libs/errors
+COPY libs/eventbus ./libs/eventbus
+COPY libs/events ./libs/events
+COPY libs/httpx ./libs/httpx
+COPY libs/idempotency ./libs/idempotency
+COPY libs/infra ./libs/infra
+COPY libs/jobs ./libs/jobs
+COPY libs/kafka ./libs/kafka
+COPY libs/logging ./libs/logging
+COPY libs/mongostore ./libs/mongostore
+COPY libs/outbox ./libs/outbox
+COPY libs/ratelimit ./libs/ratelimit
+COPY libs/relay ./libs/relay
+COPY libs/router ./libs/router
+COPY libs/runtime ./libs/runtime
+COPY libs/telemetry ./libs/telemetry
+COPY libs/temporal ./libs/temporal
+COPY libs/testenv ./libs/testenv
+COPY services/course ./services/course
+WORKDIR /src/services/course
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    go build -trimpath -o /out/course-worker ./cmd/course-worker
+
+FROM alpine:3.20
+# Run as an unprivileged user: a compromise of the service should not be root in the container.
+RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 app
+USER app
+COPY --from=build /out/course-worker /usr/local/bin/course-worker
+ENTRYPOINT ["/usr/local/bin/course-worker"]

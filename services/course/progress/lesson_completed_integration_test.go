@@ -26,6 +26,7 @@ func outboxCount(t *testing.T, env *testenv.Env, eventType string, enrollmentID 
 
 func TestMarkComplete_WritesLessonCompletedOncePerLesson(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := progress.NewService(progress.NewRepository(env.DB))
 	ctx := context.Background()
 	enrollmentID, lessonKeys, studentID := seedEnrollmentWithTwoLessons(t, env)
@@ -99,6 +100,7 @@ func TestMarkComplete_WritesLessonCompletedOncePerLesson(t *testing.T) {
 
 func TestMarkComplete_ConcurrentSameLessonWritesLessonCompletedOnce(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := progress.NewService(progress.NewRepository(env.DB))
 	enrollmentID, lessonKeys, studentID := seedEnrollmentWithTwoLessons(t, env)
 
@@ -120,6 +122,7 @@ func TestMarkComplete_ConcurrentSameLessonWritesLessonCompletedOnce(t *testing.T
 
 func TestMarkComplete_RejectedRequestWritesNoLessonEvent(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := progress.NewService(progress.NewRepository(env.DB))
 	enrollmentID, _, studentID := seedEnrollmentWithTwoLessons(t, env)
 

@@ -21,6 +21,7 @@ import (
 
 func TestListCatalogue_SecondPage_ViaCursor(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := course.NewService(course.NewRepository(env.DB), env.RDB, nil, "")
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)

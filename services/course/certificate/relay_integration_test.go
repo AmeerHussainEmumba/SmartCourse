@@ -64,6 +64,7 @@ func runRelayUntilDrained(t *testing.T, db *gorm.DB, workers int) {
 
 func TestRelay_CompletionEvent_IssuesOnceAndReplayIsNoOp(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 
 	writeCompleted(t, env.DB, f.enrollmentID, f.studentID)
@@ -95,6 +96,7 @@ func TestRelay_CompletionEvent_IssuesOnceAndReplayIsNoOp(t *testing.T) {
 
 func TestRelay_ManyDuplicateEventsAcrossWorkers_OneCertificate(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 	for i := 0; i < 20; i++ {
 		writeCompleted(t, env.DB, f.enrollmentID, f.studentID) // 20 distinct event_ids, one enrollment
@@ -113,6 +115,7 @@ func TestRelay_ManyDuplicateEventsAcrossWorkers_OneCertificate(t *testing.T) {
 
 func TestRelay_UnknownAndWithdrawnEnrollmentDoNotBlockTheStream(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	withdrawn := seedEnrollment(t, env, "withdrawn", "Ada Lovelace")
 	good := seedCompletedEnrollment(t, env)
 

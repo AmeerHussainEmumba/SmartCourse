@@ -61,11 +61,13 @@ func bearerToken(t *testing.T, userID uuid.UUID, role string) string {
 // instance of this bug class, found live, not by any test.
 func TestRegisterRoutes_BootsWithoutPanicking(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	_ = newTestEngine(t, env)
 }
 
 func TestGetProgress_NoAuthHeader_Rejected(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	r := newTestEngine(t, env)
 
 	enrollmentID, _, _ := seedEnrollmentWithTwoLessons(t, env)
@@ -81,6 +83,7 @@ func TestGetProgress_NoAuthHeader_Rejected(t *testing.T) {
 
 func TestMarkComplete_NoAuthHeader_Rejected(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	r := newTestEngine(t, env)
 
 	enrollmentID, lessonKeys, _ := seedEnrollmentWithTwoLessons(t, env)
@@ -101,6 +104,7 @@ func TestMarkComplete_NoAuthHeader_Rejected(t *testing.T) {
 // not just that each layer passes in isolation.
 func TestMarkComplete_ThenGetProgress_FullAuthenticatedRoundTrip(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	r := newTestEngine(t, env)
 
 	enrollmentID, lessonKeys, studentID := seedEnrollmentWithTwoLessons(t, env)
@@ -148,6 +152,7 @@ func TestMarkComplete_ThenGetProgress_FullAuthenticatedRoundTrip(t *testing.T) {
 // service_integration_test.go proves it at the Go-call layer.
 func TestGetProgress_NonOwner_Rejected(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	r := newTestEngine(t, env)
 
 	enrollmentID, _, _ := seedEnrollmentWithTwoLessons(t, env)

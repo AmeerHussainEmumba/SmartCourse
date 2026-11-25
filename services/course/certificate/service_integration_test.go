@@ -54,10 +54,6 @@ func seedEnrollment(t *testing.T, env *testenv.Env, status, studentName string) 
 		enrollmentID: uuid.Must(uuid.NewV7()),
 	}
 	instructorID := uuid.Must(uuid.NewV7())
-	mustExec(t, env.DB, `INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, 'x', 'Instructor', 'instructor', 'active')`,
-		instructorID, instructorID.String()+"@example.com")
-	mustExec(t, env.DB, `INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, 'x', ?, 'student', 'active')`,
-		f.studentID, f.studentID.String()+"@example.com", studentName)
 	if studentName != "" {
 		mustExec(t, env.DB, `INSERT INTO instructor_mirror (user_id, full_name) VALUES (?, ?)`, f.studentID, studentName)
 	}
@@ -125,6 +121,7 @@ func deliver(t *testing.T, db *gorm.DB, evt relay.DecodedEvent) error {
 
 func TestHandler_IssuesCertificateWithSnapshot(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 
 	if err := deliver(t, env.DB, completedEvent(t, f.enrollmentID, f.studentID)); err != nil {
@@ -155,6 +152,7 @@ func TestHandler_IssuesCertificateWithSnapshot(t *testing.T) {
 
 func TestHandler_SnapshotSurvivesRenameAndRetitle(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 	if err := deliver(t, env.DB, completedEvent(t, f.enrollmentID, f.studentID)); err != nil {
 		t.Fatalf("deliver: %v", err)
@@ -172,6 +170,7 @@ func TestHandler_SnapshotSurvivesRenameAndRetitle(t *testing.T) {
 
 func TestHandler_ReplayProducesNoSecondRow(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 	evt := completedEvent(t, f.enrollmentID, f.studentID)
 
@@ -206,6 +205,7 @@ func TestHandler_ReplayProducesNoSecondRow(t *testing.T) {
 // "does one exist?" read and each insert.
 func TestHandler_TwentyConcurrentDeliveries_ExactlyOneCertificate(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 	evt := completedEvent(t, f.enrollmentID, f.studentID)
 
@@ -236,6 +236,7 @@ func TestHandler_TwentyConcurrentDeliveries_ExactlyOneCertificate(t *testing.T) 
 
 func TestDatabase_UniqueEnrollmentAndCodeFormatAreEnforced(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 
 	insert := func(code string) error {
@@ -255,6 +256,7 @@ func TestDatabase_UniqueEnrollmentAndCodeFormatAreEnforced(t *testing.T) {
 
 func TestHandler_UnknownEnrollment_AcknowledgedNotFailed(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	if err := deliver(t, env.DB, completedEvent(t, uuid.New(), uuid.New())); err != nil {
 		t.Fatalf("an event for an unknown enrollment must be acknowledged, got error: %v", err)
 	}
@@ -265,6 +267,7 @@ func TestHandler_UnknownEnrollment_AcknowledgedNotFailed(t *testing.T) {
 
 func TestHandler_WithdrawnEnrollment_AcknowledgedNotIssued(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedEnrollment(t, env, "withdrawn", "Ada Lovelace")
 	if err := deliver(t, env.DB, completedEvent(t, f.enrollmentID, f.studentID)); err != nil {
 		t.Fatalf("an event for a withdrawn enrollment must be acknowledged, got error: %v", err)
@@ -276,6 +279,7 @@ func TestHandler_WithdrawnEnrollment_AcknowledgedNotIssued(t *testing.T) {
 
 func TestHandler_StudentMismatch_AcknowledgedNotIssued(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 	if err := deliver(t, env.DB, completedEvent(t, f.enrollmentID, uuid.New())); err != nil {
 		t.Fatalf("a mismatched student_id must be acknowledged, got error: %v", err)
@@ -287,6 +291,7 @@ func TestHandler_StudentMismatch_AcknowledgedNotIssued(t *testing.T) {
 
 func TestHandler_MalformedPayload_ReturnsError(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	for name, payload := range map[string]string{
 		"not json":       `{"enrollment_id": `,
 		"missing ids":    `{}`,
@@ -304,6 +309,7 @@ func TestHandler_MalformedPayload_ReturnsError(t *testing.T) {
 // the relay), never a certificate with a blank or invented name.
 func TestHandler_NameNotMirroredYet_ErrorsAndIssuesNothing(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedEnrollment(t, env, "completed", "")
 	err := deliver(t, env.DB, completedEvent(t, f.enrollmentID, f.studentID))
 	if err == nil {
@@ -329,6 +335,7 @@ func TestHandler_NameNotMirroredYet_ErrorsAndIssuesNothing(t *testing.T) {
 // still honoured because it reports a fact that was true when it was written.
 func TestCertificate_SurvivesCompletionBeingRevoked(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 	if err := deliver(t, env.DB, completedEvent(t, f.enrollmentID, f.studentID)); err != nil {
 		t.Fatalf("deliver: %v", err)
@@ -355,6 +362,7 @@ func TestCertificate_SurvivesCompletionBeingRevoked(t *testing.T) {
 
 func TestService_GetByIDAndList_OwnerOnly(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 	other := seedCompletedEnrollment(t, env)
 	for _, x := range []fixture{f, other} {
@@ -381,6 +389,7 @@ func TestService_GetByIDAndList_OwnerOnly(t *testing.T) {
 
 func TestService_Verify(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	f := seedCompletedEnrollment(t, env)
 	if err := deliver(t, env.DB, completedEvent(t, f.enrollmentID, f.studentID)); err != nil {
 		t.Fatalf("deliver: %v", err)

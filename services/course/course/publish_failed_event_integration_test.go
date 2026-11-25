@@ -46,6 +46,7 @@ func publishFailedEvents(t *testing.T, env *testenv.Env, courseID uuid.UUID) []c
 
 func TestMarkPublishFailed_WritesPublishFailedWithTheTransition(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
@@ -89,6 +90,7 @@ func TestMarkPublishFailed_WritesPublishFailedWithTheTransition(t *testing.T) {
 
 func TestMarkPublishFailed_ASecondFailureAfterARetryIsASecondEvent(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
@@ -112,6 +114,7 @@ func TestMarkPublishFailed_ASecondFailureAfterARetryIsASecondEvent(t *testing.T)
 
 func TestMarkPublishFailed_ReasonAndActivityAreBounded(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	instr := seedInstructor(t, env)
 	courseID, draft := newCourse(t, svc, instr, "pf-long", "Long")
@@ -134,6 +137,7 @@ func TestMarkPublishFailed_ReasonAndActivityAreBounded(t *testing.T) {
 
 func TestReconcile_ReleaseWritesPublishFailedOnce(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	fake := &reconcileFake{describe: func(string) (enumspb.WorkflowExecutionStatus, error) {
 		return enumspb.WORKFLOW_EXECUTION_STATUS_TERMINATED, nil
@@ -167,6 +171,7 @@ func TestReconcile_ReleaseWritesPublishFailedOnce(t *testing.T) {
 
 func TestReconcile_LosingToACompletionWritesNoPublishFailed(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	var svc *course.Service
 	var courseID, vid uuid.UUID
@@ -189,6 +194,7 @@ func TestReconcile_LosingToACompletionWritesNoPublishFailed(t *testing.T) {
 
 func TestPublishSuccess_WritesNoPublishFailed(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	instr := seedInstructor(t, env)
 	courseID, _ := newCourse(t, svc, instr, "pf-ok", "Fine")

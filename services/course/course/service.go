@@ -68,7 +68,11 @@ type Service struct {
 	rdb       *redis.Client
 	temporal  temporalclient.Client
 	taskQueue string
-	assets    AssetStore // nil until WithAssetStore; see assets.go
+	// activityQueue is the queue the workflow schedules its activities on,
+	// passed in publishing.PublishWorkflowInput.ActivityQueue; empty means the
+	// contract default.
+	activityQueue string
+	assets        AssetStore // nil until WithAssetStore; see assets.go
 }
 
 // temporal and taskQueue are nil/empty-safe for callers that never publish
@@ -76,6 +80,14 @@ type Service struct {
 // Service.Publish dereferences temporal, and only when actually called.
 func NewService(repo *Repository, rdb *redis.Client, temporal temporalclient.Client, taskQueue string) *Service {
 	return &Service{repo: repo, rdb: rdb, temporal: temporal, taskQueue: taskQueue}
+}
+
+// WithActivityQueue sets the task queue the publish workflow schedules its
+// activities on (cfg.Temporal.ActivityQueue); taskQueue (NewService) is the
+// queue the workflow itself starts on. Returns s for chaining.
+func (s *Service) WithActivityQueue(queue string) *Service {
+	s.activityQueue = queue
+	return s
 }
 
 // --- course & draft lifecycle ------------------------------------------------
@@ -453,14 +465,14 @@ func (s *Service) DeleteLesson(ctx context.Context, courseID, instructorID, less
 // --- publish -----------------------------------------------------------------
 //
 // M2 implements RFC §7.4's full activity graph as a Temporal workflow
-// (services/course/workflows.PublishCourseWorkflow, ADR-0009/0025):
+// (services/publishing's PublishCourseWorkflow, ADR-0009/0025):
 //
 //	ValidateMetadata -> {VerifyAssets, ComputeMetadata} -> BuildOutline -> {IndexSearch, WarmCache} -> PromoteVersion
 //
 // Every exported method below this comment up to PromoteAndPublish is one
 // node in that graph — plain, Temporal-agnostic Go methods on Service, each
 // independently retryable because Temporal calls them as separate
-// activities (services/course/workflows.Activities just forwards to these; the
+// activities (services/course/activities.Activities just forwards to these; the
 // Temporal SDK import stays out of this package entirely, matching RFC
 // §4.4's module-boundary discipline extended to the new package). This
 // replaces M1's runPublishChecks/validateMetadata/validateLessonContent,
@@ -525,7 +537,7 @@ func (s *Service) Publish(ctx context.Context, courseID, instructorID uuid.UUID)
 		ID:        workflowID,
 		TaskQueue: s.taskQueue,
 	}, publishing.WorkflowName, publishing.PublishWorkflowInput{
-		CourseID: courseID, VersionID: draft.ID, OldVersionID: c.PublishedVersionID, Title: draft.Title,
+		CourseID: courseID, VersionID: draft.ID, OldVersionID: c.PublishedVersionID, Title: draft.Title, ActivityQueue: s.activityQueue,
 	})
 	if err != nil {
 		// The workflow did not start, so nothing will ever move this version

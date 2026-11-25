@@ -33,6 +33,7 @@ func waitUntil(t *testing.T, d time.Duration, what string, cond func() bool) {
 
 func TestAdvResources_CancelledRequests_NoPoolConnectionTransactionOrGoroutineLeak(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	instr := seedInstructor(t, env)
 	r := newTestEngine(svc)
@@ -103,6 +104,7 @@ func TestAdvResources_CancelledRequests_NoPoolConnectionTransactionOrGoroutineLe
 
 func TestAdvResources_RedisConnectionsReusedAndBounded(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	instr := seedInstructor(t, env)
 	courseID, _ := newCourse(t, svc, instr, "redis-reuse", "Redis Reuse")

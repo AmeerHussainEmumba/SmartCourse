@@ -28,6 +28,7 @@ import (
 
 func TestBugrepro_ConcurrentDoubleWithdraw_DriftsEnrollmentCount(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	ctx := context.Background()
 	courseID := seedCourse(t, env, nil)

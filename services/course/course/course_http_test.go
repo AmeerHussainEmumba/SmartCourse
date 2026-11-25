@@ -83,12 +83,14 @@ func doJSON(t *testing.T, r *gin.Engine, method, path, token string, body any) *
 
 func TestRegisterRoutes_BootsWithoutPanic(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := course.NewService(course.NewRepository(env.DB), env.RDB, nil, "")
 	_ = newTestEngine(svc) // panics here, not in a later test, if any route registration conflicts (e.g. :slug vs :id at the same depth)
 }
 
 func TestCreateCourse_HTTP_RequiresAuth(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := course.NewService(course.NewRepository(env.DB), env.RDB, nil, "")
 	r := newTestEngine(svc)
 
@@ -100,6 +102,7 @@ func TestCreateCourse_HTTP_RequiresAuth(t *testing.T) {
 
 func TestCreateCourse_HTTP_RequiresInstructorRole(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := course.NewService(course.NewRepository(env.DB), env.RDB, nil, "")
 	r := newTestEngine(svc)
 
@@ -112,6 +115,7 @@ func TestCreateCourse_HTTP_RequiresInstructorRole(t *testing.T) {
 
 func TestCreateCourse_HTTP_RejectsMalformedBody(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := course.NewService(course.NewRepository(env.DB), env.RDB, nil, "")
 	r := newTestEngine(svc)
 
@@ -136,6 +140,7 @@ func TestCreateCourse_HTTP_RejectsMalformedBody(t *testing.T) {
 
 func TestCreateCourse_HTTP_SuccessRoundTrip(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := course.NewService(course.NewRepository(env.DB), env.RDB, nil, "")
 	r := newTestEngine(svc)
 

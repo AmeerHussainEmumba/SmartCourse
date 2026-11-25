@@ -35,6 +35,7 @@ type assetWorld struct {
 func newAssetWorld(t *testing.T) *assetWorld {
 	t.Helper()
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	m := miniotest.Setup(t)
 	store, err := assets.New(m.Config)
 	if err != nil {
@@ -84,6 +85,7 @@ func isAppErr(err error, status int, code string) bool {
 
 func TestVerifyAssets_LessonsWithoutAssetsPass_EvenWithNoStore(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := course.NewService(course.NewRepository(env.DB), env.RDB, nil, "")
 	instr := seedInstructor(t, env)
 	courseID, draftID := newCourse(t, svc, instr, "noassets", "No assets")
@@ -209,6 +211,7 @@ func TestAssetKey_TraversalAndMalformedKeysRejectedAtWrite(t *testing.T) {
 // fails closed instead of waving the asset through.
 func TestVerifyAssets_AssetReferencedButNoStore_FailsClosed(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := course.NewService(course.NewRepository(env.DB), env.RDB, nil, "")
 	instr := seedInstructor(t, env)
 	courseID, draftID := newCourse(t, svc, instr, "nostore", "No store")

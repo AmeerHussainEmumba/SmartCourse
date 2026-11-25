@@ -284,7 +284,6 @@ func TestEnroll_OverHTTP_ConcurrentSeats_NeverOversold(t *testing.T) {
 	var tokens []string
 	for i := 0; i < 12; i++ {
 		id := uuid.Must(uuid.NewV7())
-		w.env.DB.Exec(`INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, 'x', 's', 'student', 'active')`, id, id.String()+"@e.com")
 		tok, _ := issue(id, "student")
 		tokens = append(tokens, tok)
 	}

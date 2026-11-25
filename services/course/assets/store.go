@@ -2,7 +2,7 @@
 // (MinIO locally, ADR-0019) using the AWS SDK for Go v2, the client ADR-0019
 // names: the application is coded against the S3 API, so moving to real S3 is
 // a configuration change. It imports services/course/course for the interface
-// types, never the other way, the same direction services/course/workflows uses.
+// types, never the other way, the same direction services/course/activities uses.
 package assets
 
 import (

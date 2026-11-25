@@ -27,6 +27,7 @@ import (
 
 func TestDeleteModule_RemovesModule_RejectsNonOwner(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)
@@ -60,6 +61,7 @@ func TestDeleteModule_RemovesModule_RejectsNonOwner(t *testing.T) {
 
 func TestDeleteLesson_RemovesLesson_RecomputesTotals(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)
@@ -116,6 +118,7 @@ func TestDeleteLesson_RemovesLesson_RecomputesTotals(t *testing.T) {
 
 func TestGetPublishStatus_RejectsNonOwner_And_NotFound(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)
@@ -149,6 +152,7 @@ func TestGetPublishStatus_RejectsNonOwner_And_NotFound(t *testing.T) {
 // read's cache hit proves the fill-on-miss actually wrote back.
 func TestGetPublishedDetail_CacheMissFallsBackToPostgresAndRefillsCache(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instructorID := seedInstructor(t, env)

@@ -75,6 +75,7 @@ func assertNoDup(t *testing.T, slugs []string) {
 
 func TestAdvPagination_DuplicateSortKeys_EveryRowExactlyOnce(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	instr := seedInstructor(t, env)
 	same := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
@@ -112,6 +113,7 @@ func TestAdvPagination_DuplicateSortKeys_EveryRowExactlyOnce(t *testing.T) {
 
 func TestAdvPagination_ChangesBetweenPages_NoDuplicatesNoSkipsOfStableRows(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	instr := seedInstructor(t, env)
 	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Microsecond)
@@ -148,6 +150,7 @@ func TestAdvPagination_ChangesBetweenPages_NoDuplicatesNoSkipsOfStableRows(t *te
 
 func TestAdvPagination_HTTP_LimitAndCursorEdgeCases(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	instr := seedInstructor(t, env)
 	r := newTestEngine(svc)
