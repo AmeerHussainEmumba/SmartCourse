@@ -40,10 +40,10 @@ func realBackend() backend {
 
 func wire(p *runtime.Process) error { return wireWith(p, realBackend()) }
 
-const (
-	initialBackoff = time.Second
-	maxBackoff     = 30 * time.Second
-)
+const maxBackoff = 30 * time.Second
+
+// initialBackoff is a variable only so tests can shorten the retry.
+var initialBackoff = time.Second
 
 // wireWith registers the one component (the Temporal worker with its
 // start/retry loop) and the Temporal readiness check. Temporal is non-fatal for
