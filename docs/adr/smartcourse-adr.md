@@ -64,6 +64,9 @@ The distinction matters when something changes. Six months from now, a contribut
 | [0030](#adr-0030--event-contracts-protobuf-generated-code-and-client-library-selection) | Event contracts: Protobuf, generated code, and client library selection | Proposed | §6.4, §6.8 |
 | [0031](#adr-0031--mongodb-archive-dead-letter-parking-and-replay) | MongoDB archive, dead-letter parking, and replay | Proposed | §5.4, §6.9 |
 | [0032](#adr-0032--observability-in-week-3-trace-context-through-the-event-envelope) | Observability in Week 3: trace context through the event envelope | Proposed | §12 |
+| [0033](#adr-0033--independent-services-per-service-outbox-and-idempotency-tables-kafka-only-integration-per-service-roles) | Independent services: per-service outbox and idempotency tables, Kafka-only integration, per-service roles | Accepted | §4.4, §6 |
+| [0034](#adr-0034--the-audit-service-archive-dead-letter-store-and-replay-as-republish) | The audit service: archive, dead-letter store, and replay as republish | Accepted | §6.8, §6.9 |
+| [0035](#adr-0035--the-publishing-service-workflows-and-activities-on-separate-task-queues) | The publishing service: workflows and activities on separate task queues | Accepted | §7 |
 
 ---
 
@@ -835,6 +838,8 @@ None anticipated. If Redis itself is ever removed from the stack, rate limiting 
 
 ## ADR-0021 — In-process outbox relay with a worker pool, ahead of Kafka
 
+> **Superseded in part by ADR-0033 (2026-11-25):** the in-process relay that ran every module's handlers is replaced by one publish-only relay per service and Kafka consumers; this record stays as the history of the bridge.
+
 **Status:** Accepted (claim mechanism amended by ADR-0027) · **Date:** 2026-09-25 · **RFC:** §6.3, §21.0
 
 ### Context
@@ -952,6 +957,8 @@ If `identity-api`, `course-api`, or `analytics-api` ever need to call each other
 
 ## ADR-0024 — Schema-per-service within one shared database
 
+> **Superseded in part by ADR-0033 (2026-11-25):** the shared `platform` schema (outbox, `processed_events`, `idempotency_keys`) is removed; each service owns those tables in its own schema.
+
 **Status:** Accepted (deferred `go.mod`/`libs/common` item resolved by ADR-0026) · **Date:** 2026-11-03 · **RFC:** §5.3
 
 ### Context
@@ -1065,6 +1072,8 @@ If `internal/search` lands as its own module in M3 with its own schema and ranki
 ---
 
 ## ADR-0026 — One Go module per service and per shared library
+
+> **Superseded in part by ADR-0033 (2026-11-25):** the worker no longer imports `course` or `analytics`; services require only `libs/*`.
 
 **Status:** Accepted · **Date:** 2026-11-17 · **RFC:** §4.1, §4.2, §4.4 · **Supersedes in part:** ADR-0001 (single `go.mod`; boundaries enforced by `depguard`) · **Extends:** ADR-0022, ADR-0023 · **Resolves:** the `go.mod`/`libs/common` item ADR-0024 deferred
 
@@ -1215,6 +1224,8 @@ If publishes legitimately approach the lease (longer activities, queueing behind
 ---
 
 ## ADR-0029 — Two event transports behind one seam: in-process and Kafka
+
+> **Superseded in part by ADR-0033 (2026-11-25):** the in-process transport is removed; Kafka is the only transport and each service consumes independently.
 
 **Status:** Proposed · **Date:** 2026-11-18 · **RFC:** §6.2, §6.3 · **Would amend:** ADR-0021's reversal trigger, ADR-0027
 
@@ -1485,6 +1496,95 @@ What was chosen and why. Address the strongest counter-argument directly.
 The observable condition that should prompt revisiting this.
 "None anticipated" is acceptable when true, with a reason.
 ```
+
+---
+
+## ADR-0033 — Independent services: per-service outbox and idempotency tables, Kafka-only integration, per-service roles
+
+**Status:** Accepted (project owner, 2026-11-25) · **Date:** 2026-11-25 · **RFC:** §4.4, §6 · **Supersedes in part:** ADR-0021 (in-process relay), ADR-0024 (the shared `platform` schema), ADR-0026 (the worker's coupling), ADR-0029 (dual transport), DR-009 (one worker) · **Plan:** `docs/plans/microservices-split.md`
+
+### Context
+
+The Week 2 review accepted the module split and fixes and asked for two things to make the services genuinely independent: the shared worker still imported `course` and `analytics` code (so the Temporal workflows should move into their own service, and each service should run its own relay), and each service needed its own outbox table instead of the shared `platform.outbox`. The shared worker and the shared `platform` schema were the last two couplings left from ADR-0021 and ADR-0024, both of which recorded them as stopgaps ahead of Kafka.
+
+### Decision
+
+1. **No service imports another service's code.** Services share `libs/*` only (the kernel and the contracts). The module-graph guard enforces it.
+2. **Each service owns its outbox, its consumer-idempotency table (`processed_events`) and its HTTP idempotency table (`idempotency_keys`) in its own schema.** Outbox tables exist only where events are produced (`identity.outbox`, `course.outbox`); `processed_events` only where events are consumed (`course`, `analytics`, `notification`). The `platform` schema is removed; a one-off `cutover` migration moves existing rows to the owning service with ids and ordering intact.
+3. **Kafka is the only integration transport.** The in-process delivery mode is removed. Each service's relay only publishes: it claims its own outbox rows, produces after the broker ack, and marks them published. Consumers run in the owning service's worker, one consumer group per consumer name, with the effect and the `processed_events` marker in one transaction and the offset committed afterwards.
+4. **Each service has a separate API binary and worker binary** (DR-009's principle, now per service): `identity-api`/`identity-worker`, `course-api`/`course-worker`, `analytics-api`/`analytics-worker`, plus `notification-worker`, `publishing-worker` and `audit-api`/`audit-worker`.
+5. **Independence is enforced by the database.** Each service connects with its own Postgres role with rights on its own schema only; a table-driven test proves that every role is refused on every other schema (for example `svc_identity` cannot read `course`). One database remains, with per-service schemas and roles; the design survives a later database split because every guarantee below is per schema.
+
+### The rule that keeps dual writes out
+
+The outbox row (producer) and the `processed_events` marker (consumer) are written in the **same database transaction as the state change or effect they protect, in the owning service's schema**. That is what makes splitting the tables safe. It would be broken by: an outbox in a different database from its business tables; a `processed_events` table detached from the effect it guards; a service writing events for state another service owns; or copying outbox or `processed_events` state between tables asynchronously (a mirror-and-sync scheme is itself a dual write, and no unified view is needed because each table is read only by its owner).
+
+### Consequences
+
+**Positive.** Services can be built, tested, scaled and (later) deployed independently; the guarantees no longer depend on every service sharing one schema; the database proves the boundary.
+
+**Negative.** Ten binaries instead of four. Kafka and the Schema Registry are required for any cross-service effect, including in development. Cross-service causal order is not guaranteed (an event may arrive before the one it depends on): consumers must tolerate a missing dependency by retrying for long enough (the default budget is about a minute) or by keeping a pending state. "Published" now means the broker acknowledged; how far a consumer is behind is Kafka lag. Each worker prunes its own tables.
+
+### Alternatives considered
+
+- **Mirror each service's outbox and `processed_events` into a unified table** to keep a single view: rejected (asynchronous copying is a dual write, needs constant sync jobs, and the single view is not needed).
+- **Separate databases per service:** not required by the review; deferred. Nothing here prevents it.
+- **Keep the in-process transport for development:** impossible across independent services (it ran other services' handlers).
+- **Store consumed offsets in the service database instead of `processed_events`:** workable but needs partition-assignment handling; per-event markers are simpler and already proven by the end-to-end tests.
+
+### Reversal trigger
+
+If operating ten binaries proves too costly for the team, merge API and worker per service into one binary (a runtime role flag) without changing the data model.
+
+---
+
+## ADR-0034 — The audit service: archive, dead-letter store, and replay as republish
+
+**Status:** Accepted (project owner, 2026-11-25) · **Date:** 2026-11-25 · **RFC:** §6.8, §6.9 · **Related:** ADR-0031, ADR-0033
+
+### Context
+
+With services independent, nothing may re-run another service's handlers. The Week 3 replay re-invoked a consumer's handler by importing it into the worker; that cannot survive the split. The event archive, the audit log and the failed-event store are cross-cutting: one consumer reads every topic and one store holds every service's failures.
+
+### Decision
+
+- A separate **audit service** owns the MongoDB store (`events` archive, `audit_log`, `failed_events`). `audit-worker` is the single consumer of every topic and its own retry topic, idempotent by event id in Mongo. `audit-api` lists, shows and replays failed events (admin role only, fail-closed token freshness).
+- **Each service's worker parks its own exhausted events** into `failed_events` (park before drop; with no store configured the event is logged and dropped as before). The audit service lists and replays them.
+- **Replay is republish.** `audit-api` encodes the stored record and produces it to `retry.<consumer>`; the consuming service's own consumer group handles that topic through its normal idempotent path. The order is produce first, mark replayed second, then an audit entry with the admin's id: a failure in between leaves the record parked and a second replay is absorbed by `processed_events`. A record that cannot be decoded or encoded, an unknown event type, a missing schema id or a consumer not in the known list is refused and stays parked (replaying garbage, or into a topic nobody reads, would mark the event done and lose it).
+- `analytics-api` reads the failed-event counts from the same Mongo collection through `libs/mongostore`. This read-only use of a store owned by another service is a deliberate, documented exception to independence, kept because the metric is an analytics feature and the shared library is the contract.
+
+### Consequences
+
+**Positive.** One place to see and repair failures and to audit; replay needs no knowledge of any service's code.
+
+**Negative.** Two more processes to run (`audit-api`, `audit-worker`); a retry topic per consumer; the Mongo `failed_events` collection is a shared contract between each worker (writer), `audit-api` (reader and replayer) and `analytics-api` (reader).
+
+### Alternative considered and rejected
+
+Each service owning its own dead letters and replay endpoint is purer but an operator would have to query every service and there would be no unified audit trail.
+
+---
+
+## ADR-0035 — The publishing service: workflows and activities on separate task queues
+
+**Status:** Accepted (project owner, 2026-11-25) · **Date:** 2026-11-25 · **RFC:** §7 · **Related:** ADR-0009, ADR-0025, ADR-0033
+
+### Context
+
+The publish workflow's activities touch course data, the object store, the search index and the cache, so the old worker imported the course service to run them. The review asked for the workflows to live in their own service.
+
+### Decision
+
+- `services/publishing` (`publishing-worker`) holds only the deterministic orchestration: the activity graph, retry policies and failure handling of `PublishCourseWorkflow`. It has no database and imports no service code.
+- The activities run in `course-worker`, which owns the data, on a separate task queue. The workflow calls every activity **by name** on that queue. `course-api` starts the workflow by name on the workflow queue and passes the activity queue in the workflow input.
+- `libs/contracts/publishing` is the contract (workflow name, the two queues `publish-workflows` and `course-activities`, activity names, the DTOs). It is **wire format**: Temporal history stores the names and the JSON field names, so they are pinned by tests and must not change without a versioning plan.
+- A test requires the set of activities the workflow schedules to equal the contract's list, so adding an activity on one side fails the build of the other.
+
+### Consequences
+
+**Positive.** Orchestration and business logic deploy and fail independently; no code import and no new API between the services.
+
+**Negative.** The combined workflow-and-activities path is only proven by the container end-to-end tests (E01, E12); a Temporal outage degrades the publishing worker's readiness instead of crashing it. In-flight workflows scheduled before a contract change must be drained or versioned.
 
 ---
 
