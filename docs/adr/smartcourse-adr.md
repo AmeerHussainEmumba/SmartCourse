@@ -1372,6 +1372,13 @@ If the archive's only users are replay and the failed-events metric, and operati
 
 **Not verified:** the relay's give-up path (`libs/relay`) still marks a poison row published until the dead-letter hook is wired to `Sink`; replay under Kafka and of Protobuf payloads; a MongoDB replica set, authentication or TLS; the admin port from the built image or Compose; anything about throughput. Replay is not written to `audit_log` (who replayed what is not recorded).
 
+### Note (2026-11-25, E10 and E13 fixes; still Proposed)
+
+- **Admin surface fails closed.** The 2026-11-18 note above says the worker's `RequireFreshPrivilege` treats a Redis miss as version 1. E10 showed the consequence: after a Redis flush the old token of an admin demoted from version 1 got 200 on `GET /api/v1/admin/failed-events`. The worker (and `GET /analytics/issues` in analytics-api) now use `auth.RequireFreshPrivilegeStrict`: a miss is 401 `token_stale`. Cost: a bounded lockout of admins from these two surfaces after a flush (identity's re-seeder runs every 15 s and rewrites versions above 1; a version-1 admin is unlocked by login, refresh or any identity `/me` or admin call). The alternative (reading `identity.users`) is refused by ADR-0022 to 0024. See DR-022.
+- **Replay is audited.** Each replay attempt appends an `audit_log` entry per consumer outcome (`failed_event_replayed`: admin id from the verified token, event id, consumer, outcome); entries are per attempt (no `event_id`, so the unique partial index does not collapse them). A failed audit write is logged and counted and does not undo the replay.
+- **Archive carries its source.** Over Kafka the archive document stores the frame's registry schema id as `schema_id` and the record's topic, key, partition and offset, carried to the handler in the context (`relay.Source`). In-process delivery stores `schema_id` 0 (header `schema_id_source: none`) and no coordinates. `schema_id` is the topic's envelope schema, as the frame header carries it, not a per-event-type payload schema.
+- **Audit set follows the RFC table:** role change, publish, publish failure, archive, certificate issuance.
+
 ---
 
 ## ADR-0032 — Observability in Week 3: trace context through the event envelope

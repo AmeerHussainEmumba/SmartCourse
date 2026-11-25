@@ -52,7 +52,10 @@ func testConfig() *config.Config {
 	}
 }
 
-func setup(t *testing.T, handlers ...relay.Handler) *env {
+func setup(t *testing.T, handlers ...relay.Handler) *env { return setupWith(t, nil, handlers...) }
+
+// setupWith is setup with a replacement for the audit store (nil keeps the real one).
+func setupWith(t *testing.T, aud admin.Auditor, handlers ...relay.Handler) *env {
 	t.Helper()
 	e := &env{t: t, pg: testenv.Setup(t), mongo: testenv.SetupMongo(t), cfg: testConfig()}
 	s, err := mongostore.Open(context.Background(), mongostore.Config{URI: e.mongo.URI, ServerSelectionTimeout: time.Second, OpTimeout: 2 * time.Second})
@@ -61,11 +64,14 @@ func setup(t *testing.T, handlers ...relay.Handler) *env {
 	}
 	t.Cleanup(func() { _ = s.Close(context.Background()) })
 	e.store, e.sink = s, deadletter.NewSink(s)
+	if aud == nil {
+		aud = s
+	}
 	if len(handlers) == 0 {
 		handlers = course.Handlers()
 	}
 	e.r, err = admin.Handler(admin.Deps{
-		Config: e.cfg, RDB: e.pg.RDB, Failed: s, Replayer: deadletter.NewReplayer(e.pg.DB, s, handlers),
+		Config: e.cfg, RDB: e.pg.RDB, Failed: s, Replayer: deadletter.NewReplayer(e.pg.DB, s, handlers), Auditor: aud,
 		Required: map[string]router.Checker{"postgres": func(context.Context) error { return nil }, "redis": func(ctx context.Context) error { return e.pg.RDB.Ping(ctx).Err() }},
 		Optional: map[string]router.Checker{"mongodb": s.Ping},
 	})
@@ -75,13 +81,27 @@ func setup(t *testing.T, handlers ...relay.Handler) *env {
 	return e
 }
 
+// token issues a version-1 token. An admin's version is also written to Redis,
+// as identity does at login: the admin routes fail closed on a cache miss.
 func (e *env) token(role string) string {
 	e.t.Helper()
-	tok, err := auth.IssueAccessToken(e.cfg.JWT, uuid.New(), role, 1)
+	tok, _ := e.tokenFor(role)
+	return tok
+}
+
+func (e *env) tokenFor(role string) (string, uuid.UUID) {
+	e.t.Helper()
+	id := uuid.New()
+	tok, err := auth.IssueAccessToken(e.cfg.JWT, id, role, 1)
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	return tok
+	if role == "admin" {
+		if err := e.pg.RDB.Set(context.Background(), auth.TokenVersionRedisKey(id.String()), 1, 0).Err(); err != nil {
+			e.t.Fatal(err)
+		}
+	}
+	return tok, id
 }
 
 func (e *env) do(method, path, token string, body []byte) *httptest.ResponseRecorder {

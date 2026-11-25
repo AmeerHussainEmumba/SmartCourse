@@ -7,8 +7,11 @@
 // engine (body cap, security headers, request id, recovery), libs/auth for the
 // JWT (the same JWT_SIGNING_KEY as every service), errors as
 // {code, message, details}. The failed-events routes demand an admin role and
-// a fresh token (RequireFreshPrivilege). MongoDB being unreachable answers
-// 503 on those routes and shows as degraded, not failed, on /health/ready.
+// a fresh token (RequireFreshPrivilegeStrict: the worker cannot read identity's
+// tables, so a token-version cache miss fails closed, 401 token_stale). A replay
+// is written to the audit_log (who, which event, which consumer, the outcome).
+// MongoDB being unreachable answers 503 on those routes and shows as degraded,
+// not failed, on /health/ready.
 package admin
 
 import (
@@ -20,6 +23,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -51,15 +55,31 @@ type Replayer interface {
 	Replay(ctx context.Context, eventID string) (*deadletter.Result, error)
 }
 
+// Auditor appends audit_log records (*mongostore.Store; the worker's MongoDB
+// wiring). AppendAudit, not AppendAuditOnce: a replay has no domain event id,
+// and every attempt is its own record.
+type Auditor interface {
+	AppendAudit(ctx context.Context, a mongostore.AuditEntry) (string, error)
+}
+
+// ActionReplayed is the audit_log action of an admin replay of a failed event.
+const ActionReplayed = "failed_event_replayed"
+
+// ResourceFailedEvent is the audit_log resource type of the replayed event.
+const ResourceFailedEvent = "failed_event"
+
 // Deps is what the admin surface needs.
 type Deps struct {
 	Config *config.Config
-	// RDB backs RequireFreshPrivilege (the token-version cache).
+	// RDB backs RequireFreshPrivilegeStrict (the token-version cache).
 	RDB *redis.Client
 	// Failed and Replayer may be nil when MongoDB is not configured: the
 	// failed-events routes then answer 503.
 	Failed   FailedStore
 	Replayer Replayer
+	// Auditor records each replay in audit_log. Nil means replays are not
+	// audited (logged and counted as audit failures), never that they fail.
+	Auditor Auditor
 	// Required are the dependencies whose failure makes /health/ready 503
 	// (Postgres, Redis); Optional ones only mark it degraded (MongoDB).
 	Required map[string]router.Checker
@@ -79,11 +99,11 @@ func Handler(d Deps) (*gin.Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &handler{failed: d.Failed, replayer: d.Replayer}
+	h := &handler{failed: d.Failed, replayer: d.Replayer, auditor: d.Auditor}
 	registerHealth(r, d.Required, d.Optional)
 
 	g := r.Group("/api/v1/admin/failed-events")
-	g.Use(auth.RequireAuth(cfg.JWT), auth.RequireRole("admin"), auth.RequireFreshPrivilege(d.RDB))
+	g.Use(auth.RequireAuth(cfg.JWT), auth.RequireRole("admin"), auth.RequireFreshPrivilegeStrict(d.RDB))
 	g.GET("", h.list)
 	g.GET("/:event_id", h.get)
 	g.POST("/:event_id/replay", h.replay)
@@ -147,6 +167,61 @@ func registerHealth(r *gin.Engine, required, optional map[string]router.Checker)
 type handler struct {
 	failed   FailedStore
 	replayer Replayer
+	auditor  Auditor
+}
+
+// auditFailures counts replay audit entries that could not be written. There
+// is no Prometheus series for it (libs/telemetry has no such counter yet); the
+// worker logs every one at error level and AuditFailures exposes the count.
+var auditFailures atomic.Int64
+
+// AuditFailures is the number of replay audit entries that could not be
+// written since the process started.
+func AuditFailures() int64 { return auditFailures.Load() }
+
+// auditTimeout bounds one audit write; it runs detached from the request so a
+// client that hangs up after a replay does not lose the record.
+const auditTimeout = 5 * time.Second
+
+// auditReplay appends one audit_log record per consumer outcome of a replay
+// attempt: the admin from the verified token, the event id, the consumer and
+// the outcome (replayed, already_replayed or failed). Entries are per attempt,
+// not per event: a second replay of the same event is recorded again. A write
+// failure never changes the replay's response (the replay already happened);
+// it is logged loudly and counted.
+func (h *handler) auditReplay(c *gin.Context, res *deadletter.Result) {
+	id, ok := auth.FromContext(c.Request.Context())
+	if !ok { // RequireAuth ran, so this cannot happen; do not guess an actor
+		h.auditFailed(res.EventID, "", errors.New("no verified identity on the request"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), auditTimeout)
+	defer cancel()
+	at := time.Now().UTC()
+	for _, o := range res.Outcomes {
+		after := map[string]any{"consumer": o.Consumer, "outcome": o.Status, "applied": o.Applied}
+		if o.Error != "" {
+			after["error"] = o.Error
+		}
+		entry := mongostore.AuditEntry{
+			ActorID: id.UserID.String(), ActorRole: id.Role, Action: ActionReplayed,
+			ResourceType: ResourceFailedEvent, ResourceID: res.EventID, After: after,
+			IP: c.ClientIP(), UserAgent: c.Request.UserAgent(), At: at,
+		}
+		if h.auditor == nil {
+			h.auditFailed(res.EventID, o.Consumer, errors.New("no audit store configured"))
+			continue
+		}
+		if _, err := h.auditor.AppendAudit(ctx, entry); err != nil {
+			h.auditFailed(res.EventID, o.Consumer, err)
+		}
+	}
+}
+
+func (h *handler) auditFailed(eventID, consumer string, err error) {
+	auditFailures.Add(1)
+	slog.Error("admin: replay happened but its audit_log entry could not be written",
+		slog.String("event_id", eventID), slog.String("consumer", consumer), slog.Any("error", err))
 }
 
 const maxConsumerLen = 128
@@ -328,6 +403,7 @@ func (h *handler) replay(c *gin.Context) {
 		unavailable(c, err)
 		return
 	}
+	h.auditReplay(c, res)
 	outcomes := make([]gin.H, 0, len(res.Outcomes))
 	for _, o := range res.Outcomes {
 		m := gin.H{"consumer": o.Consumer, "status": o.Status, "applied": o.Applied}

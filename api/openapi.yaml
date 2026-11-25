@@ -541,8 +541,9 @@ paths:
                     properties:
                       failed: { type: integer, format: int64, description: "Publish failures recorded since course.publish_failed existed" }
                       by_workflow: { type: object, additionalProperties: { type: integer, format: int64 }, description: "Failures per workflow type, for example PublishCourseWorkflow; {} when none" }
+        '401': { description: "Missing or invalid token, or token_stale: the admin's token version no longer matches the cached one, or the cache has no entry (for example after a Redis flush; this route fails closed, see DR-022). Refresh or log in again.", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '403': { description: "Caller is not an admin", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '503': { description: "The failed-events store is not configured or not reachable", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: "The failed-events store is not configured or not reachable, or Redis (the token-version check) is unreachable", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /analytics/courses/{id}:
     get:

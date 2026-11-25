@@ -52,7 +52,7 @@ func (f *fakeWorkflowIssues) SummarizeWorkflowIssues(context.Context) (*analytic
 
 func issuesEnv(t *testing.T, fe analytics.FailedEventsSource, wf analytics.WorkflowIssuesSource) *secEnv {
 	env := testenv.Setup(t)
-	svc := analytics.NewService(analytics.NewRepository(env.DB))
+	svc := analytics.NewService(analytics.NewRepository(env.DB)).WithPopularCache(env.RDB)
 	if fe != nil || wf != nil {
 		svc = svc.WithIssueSources(fe, wf)
 	}
@@ -174,5 +174,50 @@ func TestIssues_SourceFailure_Is500WithoutLeakingTheCause(t *testing.T) {
 	}
 	if body := rec.Body.String(); strings.Contains(body, "10.0.0.5") || strings.Contains(body, "mongo") {
 		t.Errorf("error body leaks the source error: %s", body)
+	}
+}
+
+// The E10 / access-scenario defect: GET /analytics/issues had no token-version
+// check, so a demoted admin's old token kept reading failed-event aggregates.
+func TestIssues_StaleAdminToken_Is401TokenStale(t *testing.T) {
+	s := issuesEnv(t, &fakeFailedEvents{sum: &analytics.FailedEventsSummary{}}, &fakeWorkflowIssues{sum: &analytics.WorkflowIssuesSummary{}})
+	id := uuid.New()
+	tok, err := auth.IssueAccessToken(testJWTCfg(), id, "admin", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := auth.TokenVersionRedisKey(id.String())
+	ctx := context.Background()
+
+	// Demoted and promoted again since the token was issued: cached version 2.
+	if err := s.env.RDB.Set(ctx, key, 2, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if rec := s.get(issuesPath, tok); rec.Code != 401 || !strings.Contains(rec.Body.String(), "token_stale") {
+		t.Errorf("stale version: want 401 token_stale, got %d %s", rec.Code, rec.Body.String())
+	}
+	// A Redis flush: the miss must NOT read as version 1 (fail closed).
+	if err := s.env.RDB.Del(ctx, key).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if rec := s.get(issuesPath, tok); rec.Code != 401 || !strings.Contains(rec.Body.String(), "token_stale") {
+		t.Errorf("after a flush: want 401 token_stale, got %d %s", rec.Code, rec.Body.String())
+	}
+	// Re-seeded (identity's re-seeder, or a login): the same token passes.
+	if err := s.env.RDB.Set(ctx, key, 1, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if rec := s.get(issuesPath, tok); rec.Code != 200 {
+		t.Errorf("fresh admin token: want 200, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Without a Redis client the check cannot run: 503, never an unchecked 200.
+func TestIssues_NoRedisClient_Is503(t *testing.T) {
+	env := testenv.Setup(t)
+	svc := analytics.NewService(analytics.NewRepository(env.DB)).WithIssueSources(&fakeFailedEvents{sum: &analytics.FailedEventsSummary{}}, nil)
+	s := &secEnv{t: t, env: env, r: newTestEngine(t, svc)}
+	if rec := s.get(issuesPath, s.token("admin")); rec.Code != 503 {
+		t.Errorf("no Redis client: want 503, got %d", rec.Code)
 	}
 }

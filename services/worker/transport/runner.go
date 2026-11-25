@@ -201,13 +201,15 @@ func (r *Runner) runGroup(ctx context.Context, g group) {
 // handler's failure does not stop the others for this record; a retry re-runs
 // them all, and Deliver's processed_events check makes the finished ones no-ops.
 func (r *Runner) handle(ctx context.Context, g group, rec kafka.Record) (err error) {
-	evt, err := Decode(rec)
+	evt, schemaID, err := decodeFramed(rec)
 	if err != nil {
 		r.count(g.name, telemetry.OutcomeFailed)
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, handleTimeout)
 	defer cancel()
+	// Where the record came from, for handlers that keep it (relay.SourceFrom).
+	ctx = relay.WithSource(ctx, SourceOf(rec, schemaID))
 	ctx = logging.WithContext(ctx, logging.WithEventID(logging.FromContext(ctx), evt.EventID.String()))
 	if r.cfg.Tracing {
 		var span trace.Span

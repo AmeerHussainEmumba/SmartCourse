@@ -4,6 +4,11 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- E10: the worker admin API's failed-events routes use `auth.RequireFreshPrivilegeStrict`: a token-version cache miss is 401 `token_stale` (fail closed), not "version 1". After a Redis flush an admin is refused there until identity's re-seeder or a login/refresh rewrites the key. Integration tests that call the routes as an admin must seed `user:tv:<id>`.
+- E13: admin replay appends an `audit_log` entry per consumer outcome (`failed_event_replayed`, actor, event id, consumer, outcome; per attempt). `admin.Deps.Auditor` (wired to the MongoDB store in `cmd/worker/mongo_wire.go`), `admin.AuditFailures()`. An audit write failure never undoes the replay; it is logged and counted.
+- E13: the Kafka runner attaches `relay.Source` (topic, partition, offset, key, frame schema id) to each handler's context (`transport.SourceOf`; `Decode` is unchanged); the archiver stores it, so `schema_id` is the registry id and the document has `topic`, `key`, `partition`, `offset` in Kafka mode. In-process stores 0 with header `schema_id_source: none` and no coordinates.
+- E13/RFC: `auditSpec` audits `course.publish_failed` and `progress.certificate_issued` besides role change, publish and archive (RFC §4.6 "archive + audit"). A test pins the set and covers each type.
+
 - Notification dispatcher mails the student on `progress.certificate_issued` and the instructor on `course.publish_failed` (DR-026); `analytics-aggregator` also consumes `course.publish_failed`. `wire_test.go` pins the new consumer/event pairs, its emitted-type scan now resolves `Event*` constants, and `progress.lesson_completed` is listed as archive-only (no relay consumer by design). `payload_contract_test.go` runs each producer's payload through the transport's strict codec.
 - E07: delivery retries now follow the configured backoff; the cause was Asynq's 5 s delayed-task check, fixed in `libs/asynqx` (see its CHANGELOG), not the delivery handler or the sweeper.
 

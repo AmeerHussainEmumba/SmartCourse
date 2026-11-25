@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
@@ -26,9 +27,25 @@ func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig) {
 	g.Use(auth.RequireAuth(jwtCfg))
 	g.GET("/platform", h.getPlatformSnapshot)
 	g.GET("/popular-courses", h.listPopularCourses)
-	g.GET("/issues", auth.RequireRole("admin"), h.getIssues)
+	g.GET("/issues", auth.RequireRole("admin"), requireFreshAdmin(svc.rdb), h.getIssues)
 	g.GET("/courses/:id", h.authorizeCourse, h.getCourseStats)
 	g.GET("/courses/:id/daily-enrollments", h.authorizeCourse, h.listDailyEnrollments)
+}
+
+// requireFreshAdmin is the token-version check of the admin-only issues route.
+// analytics cannot read identity's users table (ADR-0024), so a Redis miss on
+// the version key fails CLOSED (auth.RequireFreshPrivilegeStrict): after a
+// flush an admin is refused with token_stale until the key is rewritten, and a
+// demoted admin's old token is never accepted because the cache forgot. With
+// no Redis client the check cannot run, and the route answers 503 rather than
+// skip it.
+func requireFreshAdmin(rdb *redis.Client) gin.HandlerFunc {
+	if rdb == nil {
+		return func(c *gin.Context) {
+			httpx.Fail(c, apperrors.ErrUnavailable.Wrap(errors.New("analytics: no Redis client for the token-version check")))
+		}
+	}
+	return auth.RequireFreshPrivilegeStrict(rdb)
 }
 
 // authorizeCourse gates the per-course routes (Service.CanReadCourse).

@@ -47,7 +47,7 @@ var errMongoNotReady = errors.New("mongodb is not connected")
 // archiver reports to its transport, the dead-letter sink reports to its
 // caller and the admin routes turn into 503. The relay and analytics never
 // touch it. It implements archive.Store, deadletter.ReplayStore and
-// admin.FailedStore.
+// admin.FailedStore and admin.Auditor.
 type mongoWiring struct {
 	cfg   config.MongoConfig
 	store atomic.Pointer[mongostore.Store]
@@ -144,6 +144,14 @@ func (m *mongoWiring) AppendAuditOnce(ctx context.Context, a mongostore.AuditEnt
 	return s.AppendAuditOnce(ctx, a)
 }
 
+func (m *mongoWiring) AppendAudit(ctx context.Context, a mongostore.AuditEntry) (string, error) {
+	s, err := m.get()
+	if err != nil {
+		return "", err
+	}
+	return s.AppendAudit(ctx, a)
+}
+
 func (m *mongoWiring) ParkFailedEvent(ctx context.Context, in mongostore.ParkInput) (*mongostore.FailedEvent, error) {
 	s, err := m.get()
 	if err != nil {
@@ -184,6 +192,7 @@ func newAdminHandler(deps *infra.Dependencies, cfg *config.Config, mg *mongoWiri
 		RDB:      deps.RDB,
 		Failed:   mg,
 		Replayer: deadletter.NewReplayer(deps.DB, mg, handlers),
+		Auditor:  mg,
 		Required: deps.HealthCheckers(),
 		Optional: map[string]router.Checker{"mongodb": mg.Ping},
 	})

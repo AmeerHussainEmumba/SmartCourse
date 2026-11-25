@@ -26,6 +26,13 @@ type Event struct {
 	Payload       []byte            `bson:"payload"`
 	Headers       map[string]string `bson:"headers,omitempty"`
 	ArchivedAt    time.Time         `bson:"archived_at"`
+	// The Kafka record the event arrived in (RFC §6.8), set only when it came
+	// over a broker. Partition and Offset are pointers because 0 is a real
+	// value; nil means "not recorded" (in-process delivery has no broker).
+	Topic     string `bson:"topic,omitempty"`
+	Key       string `bson:"key,omitempty"`
+	Partition *int32 `bson:"partition,omitempty"`
+	Offset    *int64 `bson:"offset,omitempty"`
 }
 
 // ArchiveEvent stores e once, keyed by e.ID (the event_id). It is idempotent:
@@ -55,6 +62,18 @@ func (s *Store) ArchiveEvent(ctx context.Context, e Event) (inserted bool, err e
 		{Key: "payload", Value: e.Payload},
 		{Key: "headers", Value: e.Headers},
 		{Key: "archived_at", Value: e.ArchivedAt},
+	}
+	if e.Topic != "" {
+		doc = append(doc, bson.E{Key: "topic", Value: e.Topic})
+	}
+	if e.Key != "" {
+		doc = append(doc, bson.E{Key: "key", Value: e.Key})
+	}
+	if e.Partition != nil {
+		doc = append(doc, bson.E{Key: "partition", Value: *e.Partition})
+	}
+	if e.Offset != nil {
+		doc = append(doc, bson.E{Key: "offset", Value: *e.Offset})
 	}
 	ctx, cancel := s.withTimeout(ctx)
 	defer cancel()

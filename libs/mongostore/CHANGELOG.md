@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- `Event` gains optional `Topic`, `Key`, `Partition *int32`, `Offset *int64` (the Kafka record an archived event arrived in; stored by `ArchiveEvent` only when set, so partition and offset 0 are kept). Additive. `AppendAudit` (no `event_id`, never deduplicated) is the call for per-attempt administrative records such as a failed-event replay; tests added.
+
 - `ParkInput.History []string`: one message per attempt; when set, each becomes its own error-history entry (numbered 1..n within the parking) instead of a single entry for `Err`. Additive.
 - Module created (Week 3 plan, ADR-0026).
 - Added `Open`/`Ping`/`Close` with context-bounded timeouts and idempotent index creation (no TTL).

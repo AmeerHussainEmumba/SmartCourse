@@ -127,11 +127,31 @@ func (c *Codec) Encode(evt relay.DecodedEvent) (kafka.Message, error) {
 // relay) decodes with OutboxID 0, which the mirror handlers' last_event_id guard
 // treats as older than anything already applied.
 func Decode(rec kafka.Record) (relay.DecodedEvent, error) {
+	evt, _, err := decodeFramed(rec)
+	return evt, err
+}
+
+// SourceOf is the relay.Source of rec: its Kafka coordinates and key, and the
+// registry schema id of its frame (the envelope schema of the topic). The
+// runner attaches it to the context of every handler call so a handler can
+// record where the event came from (the audit archiver does).
+func SourceOf(rec kafka.Record, schemaID uint32) relay.Source {
+	return relay.Source{Topic: rec.Topic, Partition: rec.Partition, Offset: rec.Offset, Key: string(rec.Key), SchemaID: schemaID}
+}
+
+// decodeFramed is Decode that also returns the schema id from the frame header.
+func decodeFramed(rec kafka.Record) (relay.DecodedEvent, uint32, error) {
 	var env events.Envelope
-	if _, err := events.DecodeInto(rec.Value, &env); err != nil {
-		return relay.DecodedEvent{}, fmt.Errorf("transport: %s[%d]@%d: %w", rec.Topic, rec.Partition, rec.Offset, err)
+	schemaID, err := events.DecodeInto(rec.Value, &env)
+	if err != nil {
+		return relay.DecodedEvent{}, 0, fmt.Errorf("transport: %s[%d]@%d: %w", rec.Topic, rec.Partition, rec.Offset, err)
 	}
-	payload, err := events.OpenPayload(&env)
+	evt, err := decodeEnvelope(rec, &env)
+	return evt, schemaID, err
+}
+
+func decodeEnvelope(rec kafka.Record, env *events.Envelope) (relay.DecodedEvent, error) {
+	payload, err := events.OpenPayload(env)
 	if err != nil {
 		return relay.DecodedEvent{}, fmt.Errorf("transport: %s[%d]@%d: %w", rec.Topic, rec.Partition, rec.Offset, err)
 	}
