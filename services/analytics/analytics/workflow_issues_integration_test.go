@@ -155,7 +155,7 @@ func TestMigration000004_DownDropsTheTables_UpRestoresThemEmpty(t *testing.T) {
 	}
 	apply := func(name string) {
 		t.Helper()
-		sqlDB, err := s.env.DB.DB()
+		sqlDB, err := s.env.Owner.DB()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -164,7 +164,7 @@ func TestMigration000004_DownDropsTheTables_UpRestoresThemEmpty(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() {
-			_, _ = conn.ExecContext(t.Context(), `SET search_path TO identity,course,analytics,platform,public`)
+			_, _ = conn.ExecContext(t.Context(), `SET search_path TO public`)
 			_ = conn.Close()
 		}()
 		for _, st := range migrationStatements(t, name) {

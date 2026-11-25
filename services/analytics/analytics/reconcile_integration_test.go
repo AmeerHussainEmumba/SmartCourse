@@ -79,7 +79,7 @@ func TestReconciler_RebuildsMissingAggregates(t *testing.T) {
 	want := stateDump(t, env, true)
 
 	// Aggregates wiped entirely (a restore, a manual truncate); the mirrors survive.
-	if err := env.DB.Exec(`TRUNCATE course_stats, daily_enrollments, platform_snapshot`).Error; err != nil {
+	if err := env.Owner.Exec(`TRUNCATE analytics.course_stats, analytics.daily_enrollments, analytics.platform_snapshot`).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := analytics.NewReconciler(env.DB, nil).Run(context.Background()); err != nil {
