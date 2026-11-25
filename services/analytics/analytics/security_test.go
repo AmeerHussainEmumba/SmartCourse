@@ -27,7 +27,7 @@ type secEnv struct {
 }
 
 func newSecEnv(t *testing.T) *secEnv {
-	env := testenv.Setup(t)
+	env := setup(t)
 	svc := analytics.NewService(analytics.NewRepository(env.DB)).WithPopularCache(env.RDB)
 	return &secEnv{t: t, env: env, r: newTestEngine(t, svc)}
 }

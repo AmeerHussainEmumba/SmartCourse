@@ -23,7 +23,6 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/analytics/analytics"
 )
 
@@ -46,13 +45,13 @@ func newTestEngine(t *testing.T, svc *analytics.Service) *gin.Engine {
 }
 
 func TestRegisterRoutes_BootsWithoutPanicking(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	svc := analytics.NewService(analytics.NewRepository(env.DB))
 	_ = newTestEngine(t, svc) // the test is that this line doesn't panic
 }
 
 func TestGetPlatformSnapshot_NoAuthHeader_Rejected(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	svc := analytics.NewService(analytics.NewRepository(env.DB))
 	r := newTestEngine(t, svc)
 
@@ -66,7 +65,7 @@ func TestGetPlatformSnapshot_NoAuthHeader_Rejected(t *testing.T) {
 }
 
 func TestGetPlatformSnapshot_RealRequest_ReflectsSeededRow(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	svc := analytics.NewService(analytics.NewRepository(env.DB))
 	r := newTestEngine(t, svc)
 
@@ -111,7 +110,7 @@ func TestGetPlatformSnapshot_RealRequest_ReflectsSeededRow(t *testing.T) {
 // counterpart to service_integration_test.go's GetCourseStats coverage —
 // GET /analytics/courses/{id} previously didn't exist at all.
 func TestGetCourseStats_RealRequest_ReflectsSeededRow(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	svc := analytics.NewService(analytics.NewRepository(env.DB))
 	r := newTestEngine(t, svc)
 	courseID := uuid.Must(uuid.NewV7())

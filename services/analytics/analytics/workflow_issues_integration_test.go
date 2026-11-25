@@ -37,7 +37,7 @@ func workflowFailed(t *testing.T, env *testenv.Env) int64 {
 }
 
 func TestPublishFailed_MirrorsTheEventAndCountsOnce(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	e := ev(1, "course.publish_failed", publishFailedPayload("asset missing"))
 	feed(t, env, e)
 	feed(t, env, e) // redelivery with the same event id: processed_events skips it
@@ -67,7 +67,7 @@ func TestPublishFailed_MirrorsTheEventAndCountsOnce(t *testing.T) {
 }
 
 func TestPublishFailed_MalformedPayloadIsAnError(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	for name, payload := range map[string]map[string]any{
 		"not an object field": {"course_id": 5},
 		"missing ids":         {"reason": "x"},
@@ -82,7 +82,7 @@ func TestPublishFailed_MalformedPayloadIsAnError(t *testing.T) {
 }
 
 func TestPublishFailed_ConcurrentFailuresAreAllCounted(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	const n = 20
 	var wg sync.WaitGroup
 	start := make(chan struct{})
@@ -104,7 +104,7 @@ func TestPublishFailed_ConcurrentFailuresAreAllCounted(t *testing.T) {
 }
 
 func TestPublishFailed_ReconcilerHealsTheCountFromTheMirror(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	for i := range 3 {
 		feed(t, env, ev(int64(i+1), "course.publish_failed", publishFailedPayload("x")))
 	}
@@ -130,7 +130,7 @@ func TestPublishFailed_ReconcilerHealsTheCountFromTheMirror(t *testing.T) {
 }
 
 func TestWorkflowIssuesSource_ReportsTheCounts(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	src := analytics.NewWorkflowIssuesSource(env.DB)
 	empty, err := src.SummarizeWorkflowIssues(context.Background())
 	if err != nil || empty.Failed != 0 || empty.ByWorkflow == nil || len(empty.ByWorkflow) != 0 {
@@ -155,7 +155,7 @@ func TestMigration000004_DownDropsTheTables_UpRestoresThemEmpty(t *testing.T) {
 	}
 	apply := func(name string) {
 		t.Helper()
-		sqlDB, err := s.env.DB.DB()
+		sqlDB, err := s.env.Owner.DB()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -164,7 +164,7 @@ func TestMigration000004_DownDropsTheTables_UpRestoresThemEmpty(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() {
-			_, _ = conn.ExecContext(t.Context(), `SET search_path TO identity,course,analytics,platform,public`)
+			_, _ = conn.ExecContext(t.Context(), `SET search_path TO public`)
 			_ = conn.Close()
 		}()
 		for _, st := range migrationStatements(t, name) {

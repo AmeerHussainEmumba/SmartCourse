@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 // The relay's worker pool has no per-aggregate ordering (migration comment on
@@ -22,7 +20,7 @@ import (
 // (user_role_mirror and instructor_mirror have a last_event_id guard for the
 // same hazard; enrollment_mirror has none.)
 func TestBugrepro_WithdrawnBeforeEnrolled_MirrorEndsActive(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	course, enr, stu := uuid.New(), uuid.New(), uuid.New()
 	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 
@@ -51,7 +49,7 @@ func TestBugrepro_WithdrawnBeforeEnrolled_MirrorEndsActive(t *testing.T) {
 // wrong day; so is any enrollment whose DB session timezone is not UTC.
 // The function's own comment promises "an enrollment happened on this UTC day".
 func TestBugrepro_DailyEnrollment_UsesProcessingDayNotEnrolledAt(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	course, enr, stu := uuid.New(), uuid.New(), uuid.New()
 	enrolledAt := time.Now().UTC().Truncate(24 * time.Hour).Add(-time.Second) // yesterday 23:59:59 UTC
 	if err := deliver(env, ev(1, "enrollment.student_enrolled", map[string]any{

@@ -19,12 +19,11 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/analytics/analytics"
 )
 
 func TestGetPlatformSnapshot_ReflectsRecompute(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	ctx := context.Background()
 	svc := analytics.NewService(analytics.NewRepository(env.DB))
 
@@ -77,7 +76,7 @@ func TestGetPlatformSnapshot_ReflectsRecompute(t *testing.T) {
 // exists and actually reflects what a recompute wrote, the same way
 // TestGetPlatformSnapshot_ReflectsRecompute does for the platform row.
 func TestGetCourseStats_ReflectsRecompute(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	ctx := context.Background()
 	svc := analytics.NewService(analytics.NewRepository(env.DB))
 	courseID := uuid.Must(uuid.NewV7())
@@ -122,7 +121,7 @@ func TestGetCourseStats_ReflectsRecompute(t *testing.T) {
 // "New Enrollments Over Time" — IncrementDailyEnrollment has written this
 // table since M0/M1; nothing ever read it back before this.
 func TestListDailyEnrollments_ReturnsTimeSeries(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	ctx := context.Background()
 	svc := analytics.NewService(analytics.NewRepository(env.DB))
 	courseID := uuid.Must(uuid.NewV7())

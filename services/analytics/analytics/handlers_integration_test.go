@@ -1,48 +1,59 @@
 //go:build integration
 
-// What this file checks, against real Postgres and the real relay (RFC
-// §18.2): that this module's 5 relay handlers (handlers.go) actually
-// decode a real outbox event's JSON payload and apply the right effect,
-// driven through the same outbox -> relay -> handler path production
-// traffic uses — not a direct call to the underlying repository upsert
-// function, which (as mirror_integration_test.go and
-// service_integration_test.go already do) only proves the SQL is right,
-// never that the handler's own json.Unmarshal against the real payload
-// shape each event is actually written with (services/identity/identity,
-// services/course/course, services/course/enrollment, services/course/progress) is correct.
+// What this file checks, against real Postgres as svc_analytics: that this
+// module's relay handlers (handlers.go) decode the JSON payload each event is
+// published with and apply the right effect, driven through the consumer's own
+// path (relay.Deliver: handler plus the processed_events marker in one
+// transaction), not a direct call to the repository upsert, which only proves
+// the SQL is right. The payload shapes are the ones the producing services
+// publish (libs/events), asserted here as literals because analytics may not
+// import those services.
 package analytics_test
 
 import (
 	"context"
+	"encoding/json"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/analytics/analytics"
 )
 
-func newTestRelay(env *testenv.Env) *relay.Relay {
-	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(50*time.Millisecond))
-	for _, h := range analytics.Handlers() {
-		rl.Register(h)
-	}
-	return rl
-}
+// outboxSeq numbers the delivered events: the outbox id analytics' handlers see
+// is whatever the producing service's outbox assigned, here just a counter.
+var outboxSeq atomic.Int64
 
+// writeEvent delivers one event the way the analytics-worker's Kafka consumer
+// does: every handler registered for the event type runs through relay.Deliver,
+// which commits its effect and the analytics.processed_events marker in one
+// transaction. Analytics has no outbox, so there is nothing to write to one.
 func writeEvent(t *testing.T, env *testenv.Env, aggType string, aggID uuid.UUID, eventType string, payload map[string]any) {
 	t.Helper()
-	if err := env.DB.Transaction(func(tx *gorm.DB) error {
-		return outbox.Write(context.Background(), tx, outbox.Event{
-			AggregateType: aggType, AggregateID: aggID,
-			EventType: eventType, SchemaVersion: 1, Payload: payload,
-		})
-	}); err != nil {
-		t.Fatalf("write %s event: %v", eventType, err)
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evt := relay.DecodedEvent{
+		OutboxID: outboxSeq.Add(1), EventID: uuid.New(), AggregateType: aggType, AggregateID: aggID,
+		EventType: eventType, SchemaVersion: 1, Payload: raw, OccurredAt: time.Now().UTC(),
+	}
+	n := 0
+	for _, h := range analytics.Handlers() {
+		if !h.Handles(eventType) {
+			continue
+		}
+		n++
+		if err := relay.Deliver(context.Background(), env.DB, h, evt); err != nil {
+			t.Fatalf("deliver %s event: %v", eventType, err)
+		}
+	}
+	if n == 0 {
+		t.Fatalf("no analytics handler handles %s", eventType)
 	}
 }
 
@@ -64,13 +75,8 @@ func pollUntil(t *testing.T, deadline time.Duration, fn func() bool) {
 }
 
 func TestHandlePlatformCounts_UserRegistered_UpsertsRoleMirrorAndRecomputesSnapshot(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	userID := uuid.Must(uuid.NewV7())
-
-	rl := newTestRelay(env)
-	runCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	go rl.Run(runCtx)
 
 	writeEvent(t, env, "identity", userID, "identity.user_registered", map[string]any{
 		"user_id": userID, "email": "a@example.com", "role": "student", "full_name": "A Student",
@@ -90,13 +96,8 @@ func TestHandlePlatformCounts_UserRegistered_UpsertsRoleMirrorAndRecomputesSnaps
 }
 
 func TestHandlePlatformCounts_UserRoleChanged_UpdatesRoleMirror(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	userID := uuid.Must(uuid.NewV7())
-
-	rl := newTestRelay(env)
-	runCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	go rl.Run(runCtx)
 
 	writeEvent(t, env, "identity", userID, "identity.user_registered", map[string]any{
 		"user_id": userID, "email": "b@example.com", "role": "student", "full_name": "B Student",
@@ -118,13 +119,8 @@ func TestHandlePlatformCounts_UserRoleChanged_UpdatesRoleMirror(t *testing.T) {
 }
 
 func TestHandleCoursePublished_UpsertsCourseMirrorAndStatsRow(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	courseID := uuid.Must(uuid.NewV7())
-
-	rl := newTestRelay(env)
-	runCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	go rl.Run(runCtx)
 
 	writeEvent(t, env, "course", courseID, "course.course_published", map[string]any{
 		"course_id": courseID, "version_id": uuid.Must(uuid.NewV7()), "title": "A Course",
@@ -144,16 +140,11 @@ func TestHandleCoursePublished_UpsertsCourseMirrorAndStatsRow(t *testing.T) {
 }
 
 func TestHandleStudentEnrolled_InsertsEnrollmentMirror(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	courseID := uuid.Must(uuid.NewV7())
 	studentID := uuid.Must(uuid.NewV7())
 	enrollmentID := uuid.Must(uuid.NewV7())
 	enrolledAt := time.Now().UTC()
-
-	rl := newTestRelay(env)
-	runCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	go rl.Run(runCtx)
 
 	writeEvent(t, env, "enrollment", enrollmentID, "enrollment.student_enrolled", map[string]any{
 		"enrollment_id": enrollmentID, "student_id": studentID, "course_id": courseID, "enrolled_at": enrolledAt,
@@ -181,15 +172,10 @@ func TestHandleStudentEnrolled_InsertsEnrollmentMirror(t *testing.T) {
 }
 
 func TestHandleStudentWithdrawn_UpdatesEnrollmentMirrorStatus(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	courseID := uuid.Must(uuid.NewV7())
 	studentID := uuid.Must(uuid.NewV7())
 	enrollmentID := uuid.Must(uuid.NewV7())
-
-	rl := newTestRelay(env)
-	runCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	go rl.Run(runCtx)
 
 	writeEvent(t, env, "enrollment", enrollmentID, "enrollment.student_enrolled", map[string]any{
 		"enrollment_id": enrollmentID, "student_id": studentID, "course_id": courseID, "enrolled_at": time.Now().UTC(),
@@ -224,15 +210,10 @@ func TestHandleStudentWithdrawn_UpdatesEnrollmentMirrorStatus(t *testing.T) {
 // first) — a real cross-handler dependency, not just a single handler in
 // isolation.
 func TestHandleCourseCompleted_ResolvesCourseIDAndUpdatesStats(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	courseID := uuid.Must(uuid.NewV7())
 	studentID := uuid.Must(uuid.NewV7())
 	enrollmentID := uuid.Must(uuid.NewV7())
-
-	rl := newTestRelay(env)
-	runCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	go rl.Run(runCtx)
 
 	writeEvent(t, env, "enrollment", enrollmentID, "enrollment.student_enrolled", map[string]any{
 		"enrollment_id": enrollmentID, "student_id": studentID, "course_id": courseID, "enrolled_at": time.Now().UTC(),

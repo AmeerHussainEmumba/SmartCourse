@@ -19,7 +19,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/analytics/analytics"
 )
 
@@ -51,7 +50,7 @@ func (f *fakeWorkflowIssues) SummarizeWorkflowIssues(context.Context) (*analytic
 }
 
 func issuesEnv(t *testing.T, fe analytics.FailedEventsSource, wf analytics.WorkflowIssuesSource) *secEnv {
-	env := testenv.Setup(t)
+	env := setup(t)
 	svc := analytics.NewService(analytics.NewRepository(env.DB)).WithPopularCache(env.RDB)
 	if fe != nil || wf != nil {
 		svc = svc.WithIssueSources(fe, wf)
@@ -214,7 +213,7 @@ func TestIssues_StaleAdminToken_Is401TokenStale(t *testing.T) {
 
 // Without a Redis client the check cannot run: 503, never an unchecked 200.
 func TestIssues_NoRedisClient_Is503(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	svc := analytics.NewService(analytics.NewRepository(env.DB)).WithIssueSources(&fakeFailedEvents{sum: &analytics.FailedEventsSummary{}}, nil)
 	s := &secEnv{t: t, env: env, r: newTestEngine(t, svc)}
 	if rec := s.get(issuesPath, s.token("admin")); rec.Code != 503 {
