@@ -30,7 +30,6 @@ use (
 	./services/course
 	./services/identity
 	./services/publishing
-	./services/worker
 	./test/e2e
 	./tools/guardcheck
 	./tools/seed

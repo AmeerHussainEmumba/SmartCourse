@@ -29,8 +29,7 @@ MIGRATION_SERVICES_REVERSED := cutover notification analytics course identity pl
 
 .PHONY: dev-core dev-workflow dev-events dev-observability dev-full dev-down \
         migrate-up migrate-down migrate-down-all migrate-create db-roles \
-        run-identity-api run-course-api run-analytics-api run-worker \
-        build build-identity-api build-course-api build-analytics-api build-worker \
+        build run \
         lint check-link-graph check-module-graph check-dockerfile-modules check-module-hygiene check-dev-defaults check-http-hardening check-pending-e2e test-guards verify-deliverables test test-race test-integration test-e2e seed fmt
 
 ## --- Local environment (ADR-0018) ---------------------------------------
@@ -96,36 +95,12 @@ migrate-create:
 #     without fighting over 8080 — override with `HTTP_PORT=... make
 #     run-course-api` if you need something else.
 #   - Fully containerized: `make dev-core` on its own now also builds and
-#     starts the identity-api/course-api/analytics-api/worker containers,
+#     starts the service containers (every binary in docs/plans/microservices-split.md),
 #     since they're in the `core` profile too (docker-compose.yml) —
 #     migrations still need `make migrate-up` as a separate, explicit
 #     step either way (RFC §5.8 — no auto-migration on container start).
 
-run-identity-api:
-	HTTP_PORT=$${HTTP_PORT:-8090} POSTGRES_SEARCH_PATH=identity,platform,public go run ./services/identity/cmd/identity-api
-
-run-course-api:
-	HTTP_PORT=$${HTTP_PORT:-8091} POSTGRES_SEARCH_PATH=course,platform,public go run ./services/course/cmd/course-api
-
-run-analytics-api:
-	HTTP_PORT=$${HTTP_PORT:-8092} POSTGRES_SEARCH_PATH=analytics,public go run ./services/analytics/cmd/analytics-api
-
-run-worker:
-	POSTGRES_SEARCH_PATH=platform,course,analytics,public go run ./services/worker/cmd/worker
-
-build: build-identity-api build-course-api build-analytics-api build-worker
-
-build-identity-api:
-	go build -o bin/identity-api ./services/identity/cmd/identity-api
-
-build-course-api:
-	go build -o bin/course-api ./services/course/cmd/course-api
-
-build-analytics-api:
-	go build -o bin/analytics-api ./services/analytics/cmd/analytics-api
-
-build-worker:
-	go build -o bin/worker ./services/worker/cmd/worker
+# run-<binary> and build-<binary> are generic pattern rules at the end of this file.
 
 ## --- Quality gates (CI runs the same targets — see .github/workflows/ci.yml)
 
@@ -216,3 +191,22 @@ seed:
 	POSTGRES_DSN="$$dsn" REDIS_ADDR="$$redis" MINIO_ENDPOINT="$$minio" \
 	TEMPORAL_HOST_PORT="$(SEED_TEMPORAL_HOST_PORT)" \
 	POSTGRES_SEARCH_PATH=identity,course,platform,public go run ./tools/seed
+
+## --- Binaries (docs/plans/microservices-split.md) -----------------------
+# One module per service, one or two binaries each. BINARY is <service>/<binary>.
+BINARIES := identity/identity-api identity/identity-worker identity/identity-admin \
+            course/course-api course/course-worker \
+            analytics/analytics-api analytics/analytics-worker \
+            notification/notification-worker publishing/publishing-worker \
+            audit/audit-api audit/audit-worker
+
+# `make build` builds every binary into bin/; `make build-course-api` builds one.
+build:
+	@for b in $(BINARIES); do go build -o bin/$${b##*/} ./services/$${b%%/*}/cmd/$${b##*/} || exit 1; done
+
+build-%:
+	@b=$$(for x in $(BINARIES); do case $$x in */$*) echo $$x;; esac; done); [ -n "$$b" ] || { echo "unknown binary $*"; exit 1; }; go build -o bin/$* ./services/$${b%%/*}/cmd/$*
+
+# `make run-course-api` runs one binary natively (its environment comes from your shell or .env).
+run-%:
+	@b=$$(for x in $(BINARIES); do case $$x in */$*) echo $$x;; esac; done); [ -n "$$b" ] || { echo "unknown binary $*"; exit 1; }; go run ./services/$${b%%/*}/cmd/$*

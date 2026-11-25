@@ -76,7 +76,7 @@ expect_pass "check-module-graph on the clean tree"      "$work/base" scripts/che
 expect_pass "check-link-graph on the clean tree"        "$work/base" scripts/check-link-graph.sh
 expect_pass "check-dockerfile-modules on the clean tree" "$work/base" scripts/check-dockerfile-modules.sh
 expect_pass "check-dev-defaults on the clean tree (S-12f: it used to exit 1 here)" "$work/base" scripts/check-dev-defaults.sh
-for m in services/identity services/course services/analytics services/worker; do
+for m in services/identity services/course services/analytics services/notification services/publishing services/audit; do
   expect_pass "standalone build of $m (GOWORK=off)" "$work/base/$m" env GOWORK=off go build ./...
 done
 

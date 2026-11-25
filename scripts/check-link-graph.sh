@@ -34,16 +34,15 @@ mod=github.com/AmeerHussainEmumba/SmartCourse
 # course-api serves HTTP only and must not link Kafka (libs/kafka, libs/eventbus),
 # Asynq, MongoDB or libs/jobs; those are course-worker's (docs/plans/microservices-split.md §6).
 rules=(
-  "services/identity  identity-api  services/course,services/analytics,services/worker,libs/temporal,libs/mongostore,libs/asynqx,libs/kafka,libs/eventbus,libs/jobs  yes 580"
-  "services/identity  identity-admin services/course,services/analytics,services/worker,libs/temporal,libs/mongostore,libs/asynqx,libs/kafka,libs/eventbus,libs/jobs  yes 580"
-  "services/identity  identity-worker services/course,services/analytics,services/worker,libs/mongostore                                   yes 640"
-  "services/analytics analytics-api services/identity,services/course,services/worker,libs/temporal,libs/asynqx,libs/kafka   yes 650"
-  "services/course    course-api    services/identity,services/analytics,services/worker,libs/kafka,libs/eventbus,libs/asynqx,libs/mongostore,libs/jobs no  765"
-  "services/course    course-worker services/identity,services/analytics,services/worker                no  875"
-  "services/worker    worker        services/identity                                                   no  855"
-  "services/publishing publishing-worker services/identity,services/course,services/analytics,services/worker,libs/asynqx,libs/kafka,libs/eventbus,libs/events,libs/mongostore,libs/relay,libs/idempotency,libs/ratelimit no 680 github.com/(segmentio|twmb|confluentinc|IBM/sarama|hibiken/asynq|golang-migrate)/|go.mongodb.org/mongo-driver/v2/mongo$"
-  "services/audit     audit-api     services/identity,services/course,services/analytics,services/worker,libs/temporal,libs/asynqx   yes 680"
-  "services/audit     audit-worker  services/identity,services/course,services/analytics,services/worker,libs/temporal,libs/asynqx   yes 680"
+  "services/identity  identity-api  services/course,services/analytics,libs/temporal,libs/mongostore,libs/asynqx,libs/kafka,libs/eventbus,libs/jobs  yes 580"
+  "services/identity  identity-admin services/course,services/analytics,libs/temporal,libs/mongostore,libs/asynqx,libs/kafka,libs/eventbus,libs/jobs  yes 580"
+  "services/identity  identity-worker services/course,services/analytics,libs/mongostore                                   yes 640"
+  "services/analytics analytics-api services/identity,services/course,libs/temporal,libs/asynqx,libs/kafka   yes 650"
+  "services/course    course-api    services/identity,services/analytics,libs/kafka,libs/eventbus,libs/asynqx,libs/mongostore,libs/jobs no  765"
+  "services/course    course-worker services/identity,services/analytics                no  875"
+  "services/publishing publishing-worker services/identity,services/course,services/analytics,libs/asynqx,libs/kafka,libs/eventbus,libs/events,libs/mongostore,libs/relay,libs/idempotency,libs/ratelimit no 680 github.com/(segmentio|twmb|confluentinc|IBM/sarama|hibiken/asynq|golang-migrate)/|go.mongodb.org/mongo-driver/v2/mongo$"
+  "services/audit     audit-api     services/identity,services/course,services/analytics,libs/temporal,libs/asynqx   yes 680"
+  "services/audit     audit-worker  services/identity,services/course,services/analytics,libs/temporal,libs/asynqx   yes 680"
 )
 # publishing-worker (Wave B5): no Kafka, Mongo, Asynq or migration code and no other
 # service; Temporal is its whole job. The last column is an extra regex for
