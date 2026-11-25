@@ -382,7 +382,7 @@ services:
     command:
       - |
         set -euo pipefail
-        for t in identity.events course.events enrollment.events progress.events; do
+        for t in identity.events course.events enrollment.events progress.events retry.certificate-issuer retry.analytics-aggregator retry.course-instructor-mirror retry.enrollment-course-archival retry.notification-dispatcher retry.audit-archiver; do
           /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
             --topic "$$t" --partitions "$$KAFKA_TOPIC_PARTITIONS" --replication-factor "$$KAFKA_TOPIC_REPLICATION_FACTOR"
         done

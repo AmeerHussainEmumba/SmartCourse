@@ -14,7 +14,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
-// partitions describes every topic of topics.All on the broker.
+// partitions describes every provisioned topic on the broker.
 func partitions(t *testing.T, brokers []string) map[string]int {
 	t.Helper()
 	cl, err := kgo.NewClient(kgo.SeedBrokers(brokers...))
@@ -24,7 +24,7 @@ func partitions(t *testing.T, brokers []string) map[string]int {
 	defer cl.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	details, err := kadm.NewClient(cl).ListTopics(ctx, topics.Names()...)
+	details, err := kadm.NewClient(cl).ListTopics(ctx, topics.ProvisionedNames()...)
 	if err != nil {
 		t.Fatalf("list topics: %v", err)
 	}
@@ -46,8 +46,8 @@ func TestEnsure_CreatesIdempotentlyAndNeverAlters(t *testing.T) {
 		t.Fatalf("first Ensure: %v", err)
 	}
 	got := partitions(t, env.Brokers)
-	if len(got) != len(topics.All()) {
-		t.Fatalf("after Ensure the broker has %v, want all of %v", got, topics.Names())
+	if len(got) != len(topics.Provisioned()) {
+		t.Fatalf("after Ensure the broker has %v, want all of %v", got, topics.ProvisionedNames())
 	}
 	for name, n := range got {
 		if n != int(topics.DefaultPartitions) {
