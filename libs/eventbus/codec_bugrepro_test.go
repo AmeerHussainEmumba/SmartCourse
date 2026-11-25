@@ -1,9 +1,7 @@
-//go:build bugrepro
-
-// Reproducers for behaviour defects found by the second adversarial pass
-// (docs/plans/week-3-findings-behaviour.md). They fail today by design.
+// Regression test for B-04 (docs/plans/week-3-findings-behaviour.md), fixed: it
+// began as a bugrepro reproducer that failed by design. No Docker needed.
 //
-//	cd services/worker && go test -tags=bugrepro -run Bugrepro ./transport/
+//	cd libs/eventbus && go test -run Bugrepro .
 package eventbus_test
 
 import (
@@ -16,7 +14,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
 )
 
-// B-04: the codec parses the outbox JSON leniently for MISSING fields: a payload
+// B-04 (was): the codec parsed the outbox JSON leniently for MISSING fields: a payload
 // of {} (or one with null ids) encodes, is produced, and every consumer receives
 // an event whose ids are absent, which handlers decode as the nil UUID. The
 // poison then surfaces as a garbage effect (B-01 shows what a handler does

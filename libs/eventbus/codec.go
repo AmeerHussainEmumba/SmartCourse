@@ -8,6 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/events"
@@ -55,7 +57,8 @@ var ErrUnencodable = errors.New("eventbus: event cannot be encoded")
 // event-type prefix, the aggregate id as the partition key (per-aggregate order,
 // RFC §6.5), and the registry-framed Envelope as the value. The row's JSON
 // payload is parsed strictly into the Protobuf message the event type names; an
-// unknown event type, a field the schema does not have or a mistyped value is an
+// unknown event type, a field the schema does not have, a mistyped value or a
+// payload that sets none of the event's fields ({}, null ids) is an
 // ErrUnencodable error.
 func (c *Codec) Encode(evt relay.DecodedEvent) (kafka.Message, error) {
 	if _, ok := events.Lookup(evt.EventType); !ok {
@@ -129,6 +132,14 @@ func encodeTo(topic string, schemaID uint32, version int32, evt relay.DecodedEve
 	payload := t.New()
 	if err := (protojson.UnmarshalOptions{}).Unmarshal(evt.Payload, payload); err != nil {
 		return kafka.Message{}, fmt.Errorf("%w: payload of %s does not match %s: %w", ErrUnencodable, evt.EventType, t.Subject(), err)
+	}
+	// The parse above is lenient about MISSING fields, so {} (or only nulls)
+	// would encode into a message of nil ids that every consumer decodes as
+	// zero values (B-04). A payload that sets none of the event's fields is a
+	// malformed row, not an event: refuse it here so it is parked at the
+	// producer instead of producing a garbage effect downstream.
+	if !hasSetField(payload) {
+		return kafka.Message{}, fmt.Errorf("%w: payload of %s sets none of the fields of %s (empty payload)", ErrUnencodable, evt.EventType, t.Subject())
 	}
 	meta := &events.Envelope{
 		EventId:       evt.EventID.String(),
@@ -251,4 +262,14 @@ func decodeEnvelope(rec kafka.Record, env *events.Envelope) (relay.DecodedEvent,
 		evt.OutboxID = n
 	}
 	return evt, nil
+}
+
+// hasSetField reports whether m has at least one populated field.
+func hasSetField(m proto.Message) bool {
+	set := false
+	m.ProtoReflect().Range(func(protoreflect.FieldDescriptor, protoreflect.Value) bool {
+		set = true
+		return false
+	})
+	return set
 }
