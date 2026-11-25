@@ -5,15 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka/topics"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/mongostore"
 	rt "github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/archive"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/consume"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/deadletter"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/store"
 )
@@ -33,7 +35,7 @@ const topicsTimeout = 30 * time.Second
 //     archiver catches up when it is back).
 //
 // Postgres is not used (no runtime.WithDependencies): the archive is
-// idempotent by event id in MongoDB.
+// idempotent by event id in MongoDB, and the consumer is eventbus.NewStreamConsumers.
 func wire(p *rt.Process) error {
 	cfg := p.Config
 	mongo := store.New(cfg.Mongo)
@@ -43,9 +45,11 @@ func wire(p *rt.Process) error {
 
 	sink := deadletter.ForRelay(deadletter.NewSink(countParked(mongo, p.Obs.Metrics)))
 	handlers := archive.Handlers(mongo)
-	runner, err := consume.New(handlers[0], consume.Options{
-		Kafka: cfg.Kafka, Sink: sink, Logger: p.Logger, Tracing: p.Obs.TracingEnabled(), Metrics: p.Obs.Metrics,
-	})
+	// The stream mode: no Postgres transaction and no processed_events marker. The
+	// archiver is idempotent by event id in MongoDB (first write wins), which is
+	// what makes the at-least-once delivery and a replay safe.
+	runner, err := eventbus.NewStreamConsumers(cfg.Kafka, handlers,
+		eventbus.WithSink(sink), eventbus.WithLogger(p.Logger), eventbus.WithTracing(p.Obs.TracingEnabled()), eventbus.WithMetrics(p.Obs.Metrics))
 	if err != nil {
 		return fmt.Errorf("archiver: %w", err)
 	}
@@ -84,4 +88,29 @@ func (c countParkStore) ParkFailedEvent(ctx context.Context, in mongostore.ParkI
 		c.m.DeadLettered(in.Consumer)
 	}
 	return fe, err
+}
+
+// loadConfig is audit-worker's configuration: MongoDB and Kafka only (no Redis, no JWT key). It needs no POSTGRES_* or MINIO_*
+// (config.Requirements asks only for what is listed), and checks what is
+// specific to this service: MongoDB and the Kafka brokers.
+func loadConfig() (*config.Config, error) {
+	// FOLLOW-UP (after libs/config gains the Kafka and Mongo requirement groups and
+	// drops EVENT_TRANSPORT): delete these two lines, add Kafka and Mongo to the
+	// Requirements below and drop the two checks after the load.
+	_ = os.Setenv("EVENT_TRANSPORT", config.TransportKafka) // the brokers are parsed only in kafka mode today
+	if os.Getenv("SCHEMA_REGISTRY_URL") == "" {
+		_ = os.Setenv("SCHEMA_REGISTRY_URL", "http://unused.invalid") // required in kafka mode; this binary never dials a registry
+	}
+
+	cfg, err := config.LoadWith(config.Requirements{})
+	if err != nil {
+		return nil, err
+	}
+	if !cfg.Mongo.Configured() {
+		return nil, errors.New("MONGO_URI is required")
+	}
+	if len(cfg.Kafka.Brokers) == 0 {
+		return nil, errors.New("KAFKA_BROKERS is required")
+	}
+	return cfg, nil
 }

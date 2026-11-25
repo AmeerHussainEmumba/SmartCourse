@@ -31,7 +31,6 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/archive"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/consume"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/deadletter"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/replay"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/store"
@@ -160,10 +159,8 @@ func (s *stack) archived(id uuid.UUID) *mongostore.Event {
 func (s *stack) startArchiver(st archive.Store) func() {
 	s.t.Helper()
 	handlers := archive.Handlers(st)
-	r, err := consume.New(handlers[0], consume.Options{
-		Kafka: s.kafkaCfg(), Logger: quiet,
-		Sink: deadletter.ForRelay(deadletter.NewSink(s.wiring)),
-	})
+	r, err := eventbus.NewStreamConsumers(s.kafkaCfg(), handlers,
+		eventbus.WithLogger(quiet), eventbus.WithSink(deadletter.ForRelay(deadletter.NewSink(s.wiring))))
 	if err != nil {
 		s.t.Fatal(err)
 	}

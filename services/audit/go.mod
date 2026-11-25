@@ -11,7 +11,6 @@ require (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/events v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/httpx v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/kafka v0.0.0
-	github.com/AmeerHussainEmumba/SmartCourse/libs/logging v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/mongostore v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/relay v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/router v0.0.0
@@ -23,7 +22,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/redis/go-redis/v9 v9.22.0
 	go.mongodb.org/mongo-driver/v2 v2.10.0
-	go.opentelemetry.io/otel/trace v1.44.0
 	google.golang.org/protobuf v1.36.11
 	gorm.io/gorm v1.31.2
 )
@@ -32,7 +30,7 @@ require (
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/db v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/infra v0.0.0 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox v0.0.0 // indirect
+	github.com/AmeerHussainEmumba/SmartCourse/libs/logging v0.0.0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -130,6 +128,7 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.44.0 // indirect
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.44.0 // indirect
+	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/arch v0.22.0 // indirect

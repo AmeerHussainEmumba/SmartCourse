@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/cache"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/router"
@@ -80,4 +82,29 @@ func wire(p *rt.Process) error {
 		}
 	}, rt.Critical())
 	return nil
+}
+
+// loadConfig is audit-api's configuration: Redis (the token-version check), the JWT key, MongoDB and Kafka (the replay producer). It needs no POSTGRES_* or MINIO_*
+// (config.Requirements asks only for what is listed), and checks what is
+// specific to this service: MongoDB and the Kafka brokers.
+func loadConfig() (*config.Config, error) {
+	// FOLLOW-UP (after libs/config gains the Kafka and Mongo requirement groups and
+	// drops EVENT_TRANSPORT): delete these two lines, add Kafka and Mongo to the
+	// Requirements below and drop the two checks after the load.
+	_ = os.Setenv("EVENT_TRANSPORT", config.TransportKafka) // the brokers are parsed only in kafka mode today
+	if os.Getenv("SCHEMA_REGISTRY_URL") == "" {
+		_ = os.Setenv("SCHEMA_REGISTRY_URL", "http://unused.invalid") // required in kafka mode; this binary never dials a registry
+	}
+
+	cfg, err := config.LoadWith(config.Requirements{Redis: true, JWT: true})
+	if err != nil {
+		return nil, err
+	}
+	if !cfg.Mongo.Configured() {
+		return nil, errors.New("MONGO_URI is required")
+	}
+	if len(cfg.Kafka.Brokers) == 0 {
+		return nil, errors.New("KAFKA_BROKERS is required")
+	}
+	return cfg, nil
 }

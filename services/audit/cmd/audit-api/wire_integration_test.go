@@ -17,7 +17,6 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	rt "github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/auditconfig"
 )
 
 func freeAddr(t *testing.T) string {
@@ -65,7 +64,7 @@ func TestAuditAPI_MongoUnreachable_Degraded503NoCrash(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- rt.Run(ctx, "audit-api", wire, rt.WithConfig(auditconfig.LoadAPI))
+		done <- rt.Run(ctx, "audit-api", wire, rt.WithConfig(loadConfig))
 	}()
 	t.Cleanup(cancel)
 
@@ -142,17 +141,17 @@ func TestAuditAPI_ConfigurationErrors(t *testing.T) {
 	t.Setenv("REDIS_ADDR", "127.0.0.1:6379")
 	t.Setenv("KAFKA_BROKERS", "127.0.0.1:9092")
 	t.Setenv("MONGO_URI", "")
-	if _, err := auditconfig.LoadAPI(); err == nil || !strings.Contains(err.Error(), "MONGO_URI") {
+	if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "MONGO_URI") {
 		t.Fatalf("missing MONGO_URI: %v", err)
 	}
 	t.Setenv("MONGO_URI", "mongodb://u:topsecret@127.0.0.1:27017")
 	t.Setenv("KAFKA_BROKERS", "")
-	if _, err := auditconfig.LoadAPI(); err == nil {
+	if _, err := loadConfig(); err == nil {
 		t.Fatal("missing KAFKA_BROKERS accepted")
 	}
 	t.Setenv("KAFKA_BROKERS", "127.0.0.1:9092")
 	t.Setenv("JWT_SIGNING_KEY", "short")
-	if _, err := auditconfig.LoadAPI(); err == nil || strings.Contains(err.Error(), "topsecret") {
+	if _, err := loadConfig(); err == nil || strings.Contains(err.Error(), "topsecret") {
 		t.Fatalf("short JWT key: %v", err)
 	}
 }
