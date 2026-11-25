@@ -7,49 +7,64 @@ This README is the fast path to running the system and finding your way around. 
 ## Quick start
 
 ```bash
-cp env.example .env          # fill in real values; nothing here has a working default (see env.example)
-make dev-core                # Postgres, Redis, MinIO — also starts identity-api/course-api/analytics-api/worker, containerized
-make migrate-up              # apply the full schema
+cp env.example .env          # for native `make run-*` and the Makefile; docker compose does not need it
+make dev-workflow            # the whole stack: infrastructure + all ten binaries + Temporal (see Profiles below)
+make migrate-up              # apply the schema (six migration sets) and create the per-service Postgres roles
 make seed                    # optional — a realistic dataset to develop against, safe to re-run
 ```
 
-Check it's alive:
+On a fresh machine, `make stack-up` does the first-run sequence in one go: starts the infrastructure, runs `migrate-up`, registers the event schemas, starts every service and, when `IDENTITY_ADMIN_EMAIL` and `IDENTITY_ADMIN_PASSWORD` are set, creates the first admin (`identity-admin`).
+
+Check it's alive (each binary also has an internal listener with `/health/ready` and `/metrics`, on `127.0.0.1` only):
 
 ```bash
-curl localhost:8090/health/ready    # identity-api
-curl localhost:8091/health/ready    # course-api
-curl localhost:8092/health/ready    # analytics-api
+curl localhost:8090/health/ready    # identity-api   (internal listener :9101)
+curl localhost:8091/health/ready    # course-api     (:9102)
+curl localhost:8092/health/ready    # analytics-api  (:9103)
+curl localhost:8093/health/ready    # audit-api      (:9104)
+curl localhost:9111/health/ready    # identity-worker; course-worker 9112, analytics-worker 9113, notification-worker 9114, publishing-worker 9115, audit-worker 9116
 ```
 
 Browse and run every endpoint without writing curl by hand: **http://localhost:8089** (a Swagger UI reading `api/openapi.yaml` live, also started by `make dev-core`) — or `File → Import` that same file into Postman. See `docs/for-the-devs/GETTING_STARTED.md`'s "Browsing and running the API" section for both.
 
-That's a handful of containers, not the dozen the full stack eventually needs (Kafka, Temporal, MongoDB, the observability stack). Those come up via `make dev-workflow` / `make dev-events` / `make dev-observability` / `make dev-full` as you need them — see [`docs/adr/smartcourse-adr.md` ADR-0018](docs/adr/smartcourse-adr.md#adr-0018--docker-compose-profiles-for-tiered-local-development) for why the environment is tiered instead of all-or-nothing.
+### Profiles
+
+| Command | Starts |
+|---|---|
+| `make dev-core` | Postgres, Redis, MinIO, Mailpit, Kafka, Schema Registry (+ schema bootstrap), MongoDB, Swagger UI and nine binaries: identity-api/-worker, course-api/-worker, analytics-api/-worker, notification-worker, audit-api/-worker |
+| `make dev-workflow` | `core` + Temporal, Temporal UI and `publishing-worker`. **Course publishing needs this profile**: on plain `core` there is no `publishing-worker`, so `POST /courses/{id}/publish` starts a workflow that nothing executes |
+| `make dev-observability` | `workflow` + Prometheus, Grafana, Jaeger |
+| `make dev-full` | everything |
+
+`make dev-events` still works as an alias of `dev-core` (Kafka is in `core` now); `make dev-down` stops everything (volumes are kept). See [`docs/guides/local-stack.md`](docs/guides/local-stack.md) for ports, per-service Postgres roles, memory and known issues, and [`docs/adr/smartcourse-adr.md` ADR-0018](docs/adr/smartcourse-adr.md#adr-0018--docker-compose-profiles-for-tiered-local-development) for why the environment is tiered.
+
+| Host port | What |
+|---|---|
+| 8090 / 8091 / 8092 / 8093 | identity-api / course-api / analytics-api / audit-api |
+| 9101-9104 / 9111-9116 | internal listeners (`/metrics`, `/health/*`) of the APIs / of the workers (identity, course, analytics, notification, publishing, audit) |
+| 8089 / 8025 / 8088 | Swagger UI / Mailpit web / Temporal UI |
+| 5433 / 6380 / 9002 / 9003 | Postgres / Redis / MinIO S3 / MinIO console |
+| 29092 / 8081 / 27017 | Kafka (host listener) / Schema Registry / MongoDB |
+| 7233 / 9090 / 3001 / 16686 | Temporal / Prometheus / Grafana / Jaeger UI |
+
+### Known issue: MinIO images
+
+On 2026-11-25 the pinned `minio/minio` and `minio/mc` images could not be pulled from Docker Hub or quay.io on a fresh machine (`pull access denied` / 401), so `make dev-core` fails there at the `minio` service. A machine that already holds the images is unaffected. The tags in `docker-compose.yml` were deliberately left unchanged: replacing the object store (a self-built image, or another S3-compatible store) is an [ADR-0019](docs/adr/smartcourse-adr.md#adr-0019--minio-for-learning-asset-object-storage) decision for the owner.
 
 ## Architecture, in one paragraph
 
-PostgreSQL is the single system of record (everything a user can assert as fact about their own account — enrolled, completed, certified — is strongly consistent, enforced by database constraints, not application code that can race). Redis and MongoDB hold only derived, rebuildable data. State changes are recorded and their side effects (search indexing, analytics, notifications, caching) happen asynchronously via a transactional outbox, so a crash mid-request never silently loses work or desyncs a dashboard from reality — today via an in-process worker-pool relay ([ADR-0021](docs/adr/smartcourse-adr.md#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka)), migrating to Kafka in M3 without changing this guarantee. Four independently deployable services — `services/identity/cmd/identity-api`, `services/course/cmd/course-api`, `services/analytics/cmd/analytics-api` for HTTP, `services/worker/cmd/worker` for everything asynchronous — share one codebase and one database (ADR-0022, further split by ADR-0023; each binary wires only its own modules in `cmd/*/wire.go`), so they scale and restart independently without domain code ever drifting apart on a shared change. Each service also owns its own Postgres schema within that one database ([ADR-0024](docs/adr/smartcourse-adr.md#adr-0024--schema-per-service-within-one-shared-database)) — no foreign key or query crosses a schema boundary, so a service that only ever needed another's data for display (an instructor's name on the course catalogue, say) keeps its own event-fed copy rather than reaching across.
-
-```mermaid
-flowchart TB
-    Client[API clients] --> GIN[Gin API] --> PG[(PostgreSQL)]
-    GIN --> RD[(Redis)]
-    GIN -->|pre-signed URLs| S3[(MinIO)]
-    RELAY[Outbox relay] -->|poll| PG
-    RELAY -->|publish| KF[[Kafka]]
-    KF --> KC[Consumers] --> PG
-    KC --> MG[(MongoDB)]
-```
-
-Full diagrams, the consistency model, and the reasoning behind every major choice: [`docs/rfc/smartcourse-rfc.md`](docs/rfc/smartcourse-rfc.md). Every individual decision, including the ones that were reconsidered and changed: [`docs/adr/smartcourse-adr.md`](docs/adr/smartcourse-adr.md).
+PostgreSQL is the system of record (everything a user can assert as fact about their own account — enrolled, completed, certified — is strongly consistent, enforced by database constraints, not application code that can race). Redis and MongoDB hold only derived, rebuildable data. State changes are recorded and their side effects (search indexing, analytics, notifications, caching) happen asynchronously via a transactional outbox, so a crash mid-request never silently loses work or desyncs a dashboard from reality. The system is split into services that share no code but the libraries in `libs/*` (the plan is `docs/plans/microservices-split.md`): `identity`, `course`, `analytics`, `notification`, `publishing` and `audit`, built as ten binaries (an `-api` and a `-worker` per service where it has both; `publishing-worker` runs the Temporal publish workflow, `notification-worker` and `audit-worker` have no API). Each service owns its Postgres schema, its own outbox and its own idempotency tables, and connects with its own Postgres role (`svc_identity`, `svc_course`, `svc_analytics`, `svc_notification`), so a query across a service boundary fails with `permission denied` instead of silently working ([ADR-0024](docs/adr/smartcourse-adr.md#adr-0024--schema-per-service-within-one-shared-database), superseded in part by the split plan). Services talk through Kafka events (Protobuf, Schema Registry); where one needs another's data it keeps an event-fed copy rather than reaching across. Each service's worker relays its own outbox to Kafka; consumers are idempotent through a `processed_events` marker written in the same transaction as the effect. The audit service archives every event in MongoDB and replays failed ones by republishing to a per-consumer retry topic. Every binary serves `/metrics` and `/health/*` on an internal listener that is never on a public port. This text describes the target topology the compose stack runs; the RFC and ADRs not yet revised for it are listed in the split plan's wave D.
 
 ## Repository layout
 
 ```
-services/              One Go module per deployable service, each with its own go.mod (ADR-0022/0023, docs/plans/module-split.md)
-  identity/            identity/ (domain package) + cmd/identity-api
-  course/              course/ enrollment/ progress/ workflows/ + cmd/course-api — one module, because the seat limit needs one transaction (ADR-0012)
-  analytics/           analytics/ + cmd/analytics-api — outbox relay's first handler (ADR-0021)
-  worker/              cmd/worker (outbox relay + Temporal worker); audit/ notification/ search/ are README-only plans (M3)
+services/              One Go module per service, each with its own go.mod; no service imports another (docs/plans/microservices-split.md)
+  identity/            identity-api, identity-worker, identity-admin (CLI: first admin)
+  course/              course-api, course-worker — course, enrollment, progress and certificate in one module, because the seat limit needs one transaction (ADR-0012)
+  analytics/           analytics-api, analytics-worker
+  notification/        notification-worker
+  publishing/          publishing-worker (the Temporal publish workflow)
+  audit/               audit-api, audit-worker (MongoDB archive, failed-event replay)
 libs/                  Shared kernel, one Go module per package: auth cache config db errors httpx idempotency infra logging outbox ratelimit relay router temporal, plus testenv and the Week 3 libraries (events, mongostore, asynqx, telemetry — built and tested, not yet wired into the services; see docs/plans/week-3.md)
 tools/seed/            `make seed` — populates a local database through the real service layer
 migrations/          Versioned SQL schema (golang-migrate) — see migrations/README.md
@@ -61,7 +76,7 @@ docs/
   guides/            How-to docs, including testing.md
 api/                 openapi.yaml — the API contract
 proto/               Pointer only; the Protobuf event contracts live in libs/events (see proto/README.md)
-observability/       Prometheus config and rules, Grafana provisioning and dashboard (`make dev-observability`; placeholder alert thresholds)
+observability/       Prometheus config and rules, Grafana provisioning and dashboard (`make dev-observability`; placeholder alert thresholds; scrapes all ten binaries)
 scripts/             Guards and helpers: check-link-graph.sh, check-module-graph.sh, check-module-hygiene.sh, check-dockerfile-modules.sh, check-dev-defaults.sh, check-http-hardening.sh, test-guards.sh, verify-deliverables.sh, for-each-module.sh
 test/e2e/            Tests that run services side by side (its own Go module; see test/README.md)
 go.work              Lists every Go module for local development; CI and Docker build with GOWORK=off
@@ -89,7 +104,7 @@ Errors are always `{ "code", "message", "details" }` with a stable, documented `
 
 Go 1.26+ (toolchain 1.26.11 in CI and the images), Gin, GORM (bounded to simple CRUD — see [DR-004](docs/rfc/differences-from-requirements.md#dr-004--gorm-is-bounded-to-simple-crud-raw-sql-elsewhere)) + raw SQL for complex queries, PostgreSQL, Redis, MongoDB, Apache Kafka + Confluent Schema Registry, Temporal, Asynq, MinIO (S3-compatible — [ADR-0019](docs/adr/smartcourse-adr.md#adr-0019--minio-for-learning-asset-object-storage)), OpenTelemetry + Prometheus + Grafana + Jaeger, Docker Compose.
 
-**Currently running, not just specified:** Go, Gin, GORM, PostgreSQL, Redis (cache, rate limiting), Docker Compose, and — as of M2 — Temporal, backing the course publishing workflow only (ADR-0009/0025). MongoDB, Kafka, Schema Registry, and Asynq are Week 3 work: their libraries (`libs/events`, `libs/mongostore`, `libs/asynqx`) and compose services exist and are tested, but the services do not use them yet. The Prometheus/Grafana/Jaeger/Mailpit containers exist in compose profiles; no service exports metrics or traces yet (`libs/telemetry` is unwired). Mailpit is a local SMTP sink, not a mail provider. See `docs/plans/week-3.md` (§10 progress log) and `docs/rfc/smartcourse-rfc.md` §21.0 for exactly what is built versus designed.
+**Running in the compose stack** (checked end to end on 2026-11-25, see `docs/guides/local-stack.md`): Go, Gin, GORM, PostgreSQL (one database, a schema and a role per service), Redis (cache, rate limiting, Asynq), Kafka with Schema Registry and Protobuf events, MongoDB (audit archive and failed events), Temporal (course publishing), Mailpit (a local SMTP sink, not a mail provider) and, under the `observability` profile, Prometheus, Grafana and Jaeger. What is built versus designed is tracked in `docs/plans/week-3.md` (§10 progress log) and `docs/rfc/smartcourse-rfc.md` §21.0, which are not all revised for the split yet.
 
 ## Testing
 
