@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -225,13 +226,15 @@ func (s *Service) verifyLessonAssets(ctx context.Context, courseID uuid.UUID, re
 		return nil
 	}
 	if s.assets == nil {
-		return errAssetStoreOff.Wrap(fmt.Errorf("%d lesson asset(s) cannot be verified: no asset store configured", len(refs)))
+		slog.ErrorContext(ctx, "publish: lesson assets cannot be verified, no asset store configured", slog.Int("assets", len(refs)))
+		return errAssetStoreOff.Wrap(reasonStorageNotSetUp)
 	}
 	// Shape and scope first: cheap, deterministic, and never touches storage
 	// for a key that could not have been issued for this course.
 	for key, lesson := range refs {
 		if err := validateAssetKeyForCourse(key, courseID); err != nil {
-			return errAssetInvalid.Wrap(fmt.Errorf("lesson %q: asset key is not valid for this course", lesson))
+			slog.WarnContext(ctx, "publish: asset key is not valid for this course", slog.String("lesson", lesson))
+			return errAssetInvalid.Wrap(reasonAssetKeyInvalid)
 		}
 	}
 	g, gctx := errgroup.WithContext(ctx)
@@ -247,21 +250,30 @@ func (s *Service) verifyAsset(ctx context.Context, key, lesson string) error {
 	wantType, at, _ := assetTypeByExt(ext)
 	info, err := s.assets.Stat(ctx, key)
 	if errors.Is(err, ErrAssetNotFound) {
-		return errAssetInvalid.Wrap(fmt.Errorf("lesson %q: the referenced asset was never uploaded", lesson))
+		slog.WarnContext(ctx, "publish: the referenced asset was never uploaded", slog.String("lesson", lesson), slog.String("asset_key", key))
+		return errAssetInvalid.Wrap(reasonAssetNotFound)
 	}
 	if err != nil {
 		// Storage trouble is not the instructor's fault: surface it as a
-		// transient error so Temporal retries the activity.
-		return apperrors.ErrUnavailable.Wrap(fmt.Errorf("stat asset for lesson %q: %w", lesson, err))
+		// transient error so Temporal retries the activity. The SDK error
+		// (host, port, bucket path) is logged here and never carried in the
+		// returned error: its text becomes the instructor-visible publish
+		// reason (S-08).
+		slog.ErrorContext(ctx, "publish: asset storage stat failed",
+			slog.String("lesson", lesson), slog.String("asset_key", key), slog.Any("error", err))
+		return apperrors.ErrUnavailable.Wrap(reasonStorageUnavailable)
 	}
 	if info.Size <= 0 {
-		return errAssetInvalid.Wrap(fmt.Errorf("lesson %q: the uploaded asset is empty", lesson))
+		slog.WarnContext(ctx, "publish: the uploaded asset is empty", slog.String("lesson", lesson), slog.String("asset_key", key))
+		return errAssetInvalid.Wrap(reasonAssetEmpty)
 	}
 	if info.Size > at.maxSize {
-		return errAssetInvalid.Wrap(fmt.Errorf("lesson %q: the uploaded asset is larger than the %d byte limit for %s", lesson, at.maxSize, wantType))
+		slog.WarnContext(ctx, "publish: the uploaded asset is too large", slog.String("lesson", lesson), slog.String("asset_key", key), slog.Int64("size", info.Size), slog.Int64("max", at.maxSize))
+		return errAssetInvalid.Wrap(reasonAssetTooLarge)
 	}
 	if got := strings.ToLower(strings.TrimSpace(info.ContentType)); got != wantType {
-		return errAssetInvalid.Wrap(fmt.Errorf("lesson %q: the uploaded asset has content type %q, expected %q", lesson, info.ContentType, wantType))
+		slog.WarnContext(ctx, "publish: the uploaded asset has the wrong content type", slog.String("lesson", lesson), slog.String("asset_key", key), slog.String("got", info.ContentType), slog.String("want", wantType))
+		return errAssetInvalid.Wrap(reasonAssetWrongType)
 	}
 	return nil
 }

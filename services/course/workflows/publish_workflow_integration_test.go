@@ -184,8 +184,8 @@ func TestPublishCourseWorkflow_RealActivities_ValidateMetadataFailure_WritesPubl
 	if status.Error == nil {
 		t.Fatal("expected publish_error to be set")
 	}
-	const wantMsg = "validation_failed: at least one module is required to publish"
+	const wantMsg = "validation_failed: at least one module is required"
 	if *status.Error != wantMsg {
-		t.Fatalf("expected publish_error to be ValidateMetadata's own message %q, got %q (Temporal's wrapped diagnostic text leaking through would look like this)", wantMsg, *status.Error)
+		t.Fatalf("expected publish_error to be ValidateMetadata's fixed category %q, got %q (Temporal's wrapped diagnostic text leaking through would look like this)", wantMsg, *status.Error)
 	}
 }

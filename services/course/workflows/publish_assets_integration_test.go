@@ -88,8 +88,8 @@ func TestPublishWorkflow_MissingAsset_FailsCleanly_LiveVersionUntouched(t *testi
 	var state string
 	var perr *string
 	env.DB.Raw(`SELECT state::text, publish_error FROM course_versions WHERE id = ?`, v2).Row().Scan(&state, &perr)
-	if state != "publish_failed" || perr == nil || !strings.Contains(*perr, "never uploaded") {
-		t.Fatalf("v2 state=%q publish_error=%v, want publish_failed mentioning the missing upload", state, perr)
+	if state != "publish_failed" || perr == nil || !strings.Contains(*perr, "asset not found") {
+		t.Fatalf("v2 state=%q publish_error=%v, want publish_failed with the generic asset-not-found reason", state, perr)
 	}
 	var published *uuid.UUID
 	env.DB.Raw(`SELECT published_version_id FROM courses WHERE id = ?`, courseID).Row().Scan(&published)

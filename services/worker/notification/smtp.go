@@ -209,7 +209,9 @@ func (a plainAuth) Next(_ []byte, more bool) ([]byte, error) {
 // then encoded, so no input can add a header or end the header block.
 // Header injection is the classic bug here; message_test.go pins it.
 func (p *SMTPProvider) build(m Message) ([]byte, error) {
-	to := mail.Address{Name: cleanLine(m.ToName), Address: m.To}
+	// The display name is user-controlled and shows in the recipient's To line:
+	// the same allowlist as the body (S-10).
+	to := mail.Address{Name: DisplayName(m.ToName), Address: m.To}
 	var b strings.Builder
 	h := func(k, v string) { b.WriteString(k + ": " + v + "\r\n") }
 	h("From", p.cfg.From)

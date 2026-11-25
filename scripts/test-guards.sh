@@ -9,6 +9,8 @@
 #   scripts/check-link-graph.sh         what each binary actually links
 #   scripts/check-dockerfile-modules.sh Dockerfile COPY list vs replace closure
 #   scripts/check-pending-e2e.sh        no E1 to E14 spec skipped as pending past its phase
+#   scripts/check-dev-defaults.sh       dev defaults and credentials (checks A, B, C, D, G via tools/guardcheck);
+#                                       every known bypass form of S-12 is a case below
 #   GOWORK=off go build ./...           a module must build on its own
 #
 # Needs the Go module cache to already hold the repo's dependencies (the
@@ -45,6 +47,14 @@ expect_fail() {
   else ok "$label"; fi
 }
 
+# expect_output <label> <expected-regex> <dir> <command...>: the output must match (the exit status is not checked)
+expect_output() {
+  local label=$1 re=$2 dir=$3; shift 3
+  local out
+  out=$(cd "$dir" && "$@" 2>&1)
+  if grep -Eq "$re" <<<"$out"; then ok "$label"; else bad "$label: output lacks /$re/"; echo "$out" | tail -8 | sed 's/^/        /'; fi
+}
+
 expect_pass() {
   local label=$1 dir=$2; shift 2
   local out rc
@@ -65,6 +75,7 @@ echo "== clean tree: every guard must pass =="
 expect_pass "check-module-graph on the clean tree"      "$work/base" scripts/check-module-graph.sh
 expect_pass "check-link-graph on the clean tree"        "$work/base" scripts/check-link-graph.sh
 expect_pass "check-dockerfile-modules on the clean tree" "$work/base" scripts/check-dockerfile-modules.sh
+expect_pass "check-dev-defaults on the clean tree (S-12f: it used to exit 1 here)" "$work/base" scripts/check-dev-defaults.sh
 for m in services/identity services/course services/analytics services/worker; do
   expect_pass "standalone build of $m (GOWORK=off)" "$work/base/$m" env GOWORK=off go build ./...
 done
@@ -182,6 +193,41 @@ expect_fail "pending-e2e guard fails when an allowlisted spec is implemented but
 d=$(fresh c16)
 perl -0pi -e 's/func TestE2E_E05_KafkaDownThenUp/func notASpec_E05_KafkaDownThenUp/' "$d/test/e2e/scenarios_resilience_e2e_test.go"
 expect_fail "pending-e2e guard fails when a spec is deleted" "FAIL E05: found 0 spec functions" "$d" scripts/check-pending-e2e.sh
+
+echo
+echo "== check-dev-defaults (S-12): every bypass form of the guard must still be caught =="
+DD=scripts/check-dev-defaults.sh
+# A: a service with a signing key must pin APP_ENV: development, in every form compose accepts
+d=$(fresh dd1); perl -0pi -e 's/APP_ENV: development/APP_ENV: production/g' "$d/docker-compose.yml"
+expect_fail "dev-defaults A: map-form APP_ENV: production" "FAIL \[A\]" "$d" $DD
+d=$(fresh dd2); perl -0pi -e 's/\nvolumes:\n/\n  zz-list:\n    image: alpine:3.20\n    environment:\n      - APP_ENV=production\n      - JWT_SIGNING_KEY=local-dev-only-signing-key-do-not-use-elsewhere-32b\n\nvolumes:\n/' "$d/docker-compose.yml"
+expect_fail "dev-defaults A: list-form environment with APP_ENV=production (S-12e)" "FAIL \[A\]" "$d" $DD
+d=$(fresh dd3); perl -0pi -e 's/APP_ENV: development/APP_ENV: \$\{APP_ENV:-production\}/' "$d/docker-compose.yml"
+expect_fail "dev-defaults A: APP_ENV from a substitution that defaults to production" "FAIL \[A\]" "$d" $DD
+# B: a comment (or an unused list) is not a rejection of the published keys
+d=$(fresh dd4); perl -0pi -e 's/var knownPlaceholderKeyMarkers = \[\]string\{.*?\n\}/var knownPlaceholderKeyMarkers = []string{} \/\/ production placeholder weak keys: replace-with local-dev-only/s' "$d/libs/config/config.go"
+expect_fail "dev-defaults B: markers list emptied, a comment still says production and placeholder (S-12a)" "FAIL \[B\]" "$d" $DD
+d=$(fresh dd5); perl -0pi -e 's/if reason := weakSigningKey\(cfg\.JWT\.SigningKey\); reason != ""/if reason := ""; reason != ""/' "$d/libs/config/config.go"
+expect_fail "dev-defaults B: the check is no longer called" "FAIL \[B\]" "$d" $DD
+# C: credential literals in every string form
+d=$(fresh dd6); printf 'package inject\n\nconst dbPassword = `hunter2hunter2hunter2`\n' >"$d/libs/errors/zz_inject.go"
+expect_fail "dev-defaults C: raw (backtick) string credential (S-12d)" "FAIL \[C\]" "$d" $DD
+d=$(fresh dd7); printf 'package inject\n\nvar apiKey = "sk_live_" + `0123456789abcdef`\n' >"$d/libs/errors/zz_inject.go"
+expect_fail "dev-defaults C: concatenated credential" "FAIL \[C\]" "$d" $DD
+d=$(fresh dd8); printf 'package inject\n\nvar secretKey = []byte(`hunter2hunter2hunter2`)\n' >"$d/libs/errors/zz_inject.go"
+expect_fail "dev-defaults C: []byte conversion of a credential" "FAIL \[C\]" "$d" $DD
+d=$(fresh dd9); printf 'package inject\n\nvar cfg = struct{ Password string }{Password: "hunter2hunter2"}\n' >"$d/libs/errors/zz_inject.go"
+expect_fail "dev-defaults C: struct field credential" "FAIL \[C\]" "$d" $DD
+# D: a comment mentioning APP_ENV is not a refusal to seed in production
+d=$(fresh dd10); perl -0pi -e 's/if cfg\.Env != "development" \{/if false \/* APP_ENV cfg.Env production *\/ {/' "$d/tools/seed/main.go"
+expect_fail "dev-defaults D: the environment check disabled, comments still mention APP_ENV (S-12b)" "FAIL \[D\]" "$d" $DD
+# G: ports published beyond loopback, inline and list form
+d=$(fresh dd11); perl -0pi -e 's/\["127\.0\.0\.1:5433:5432"\]/["5433:5432"]/' "$d/docker-compose.yml"
+expect_fail "dev-defaults G: inline ports on all interfaces next to default credentials (S-12c)" "FAIL \[G\]" "$d" $DD
+d=$(fresh dd12); perl -0pi -e 's/- "127\.0\.0\.1:9002:9000"/- "9002:9000"/' "$d/docker-compose.yml"
+expect_fail "dev-defaults G: list-form port on all interfaces" "FAIL \[G\]" "$d" $DD
+d=$(fresh dd13); perl -0pi -e 's/\["127\.0\.0\.1:27017:27017"\]/["27017:27017"]/' "$d/docker-compose.yml"
+expect_output "dev-defaults G: a port without credentials in its service is a WARN" "WARN \[G\]" "$d" $DD
 
 echo
 echo "== known weakness probe (informational, not counted as pass/fail) =="

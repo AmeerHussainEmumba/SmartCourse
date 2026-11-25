@@ -1,9 +1,8 @@
-//go:build bugrepro
-
 // Adversarial security tests for notification templates and the SMTP provider
-// (security tester, Week 3). Run:
+// (security tester, Week 3). The S-10 reproducer became an ordinary regression
+// test when the fix landed. Run:
 //
-//	cd services/worker && go test -tags=bugrepro -run 'Bugrepro|Adversarial' ./notification/
+//	cd services/worker && go test -run 'Welcome|Adversarial' ./notification/
 package notification
 
 import (
@@ -12,14 +11,14 @@ import (
 	"testing"
 )
 
-// S-10: the Welcome mail is sent to any address that registers (open
+// S-10 (fixed): the Welcome mail is sent to any address that registers (open
 // registration, the address is never verified first) and greets the recipient
 // with the attacker's free-text full_name, up to 200 characters, inside a
 // message from the platform's own sender and domain. An unauthenticated caller
 // can therefore make SmartCourse send "Hi <anything, incl. a phishing line and
 // URL>" to any third-party mailbox, at the register limit (5/min/IP). The test
 // asserts the rendered mail carries no URL from the name field.
-func TestBugrepro_WelcomeMail_CarriesAttackerControlledURLToThirdParty(t *testing.T) {
+func TestWelcomeMail_NeverCarriesAUserControlledURL(t *testing.T) {
 	_, text, html, err := Render(KindWelcome, TemplateData{Name: "Your account is locked, sign in at https://evil.example/login within 24h"})
 	if err != nil {
 		t.Fatal(err)

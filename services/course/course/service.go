@@ -581,21 +581,21 @@ func (s *Service) ValidateMetadata(ctx context.Context, versionID uuid.UUID) err
 		return apperrors.ErrInternal.Wrap(err)
 	}
 	if v.Title == "" {
-		return apperrors.ErrValidation.Wrap(fmt.Errorf("title is required to publish"))
+		return apperrors.ErrValidation.Wrap(reasonTitleRequired)
 	}
 	mods, err := s.repo.ListModules(ctx, v.ID)
 	if err != nil {
 		return apperrors.ErrInternal.Wrap(err)
 	}
 	if len(mods) == 0 {
-		return apperrors.ErrValidation.Wrap(fmt.Errorf("at least one module is required to publish"))
+		return apperrors.ErrValidation.Wrap(reasonNoModules)
 	}
 	lessons, err := s.repo.CountLessons(ctx, v.ID)
 	if err != nil {
 		return apperrors.ErrInternal.Wrap(err)
 	}
 	if lessons == 0 {
-		return apperrors.ErrValidation.Wrap(fmt.Errorf("at least one lesson is required to publish"))
+		return apperrors.ErrValidation.Wrap(reasonNoLessons)
 	}
 	return nil
 }
@@ -630,7 +630,7 @@ func (s *Service) VerifyAssets(ctx context.Context, versionID uuid.UUID) error {
 		}
 		for _, l := range lessons {
 			if len(l.Content) >= maxLessonContentBytes {
-				return errContentTooLarge
+				return errContentTooLarge.Wrap(reasonContentTooLarge)
 			}
 			if l.AssetKey != nil && *l.AssetKey != "" {
 				if _, seen := refs[*l.AssetKey]; !seen {

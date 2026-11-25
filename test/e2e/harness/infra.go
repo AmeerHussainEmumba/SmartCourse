@@ -23,7 +23,7 @@ import (
 const (
 	schemaRegistryImage = "confluentinc/cp-schema-registry:7.6.0"
 	registryKafkaImage  = "apache/kafka:3.7.0"
-	temporalImage       = "temporalio/auto-setup:latest"
+	temporalImage       = "temporalio/auto-setup:1.29.3"
 	temporalDBImage     = "postgres:16-alpine"
 )
 

@@ -26,5 +26,6 @@ use (
 	./services/identity
 	./services/worker
 	./test/e2e
+	./tools/guardcheck
 	./tools/seed
 )

@@ -31,8 +31,10 @@ func TestRender_HTMLPartEscapesUserControlledValues(t *testing.T) {
 			t.Fatalf("unescaped %q in HTML: %s", bad, html)
 		}
 	}
-	if !strings.Contains(html, "&lt;script&gt;") {
-		t.Fatalf("expected escaped markup: %s", html)
+	// The allowlist strips the markup characters before html/template ever
+	// sees them, so neither the raw nor the escaped form is present.
+	if strings.Contains(html, "&lt;") || strings.Contains(html, "&gt;") {
+		t.Fatalf("markup characters survived the allowlist: %s", html)
 	}
 }
 
@@ -65,7 +67,7 @@ func TestRender_FallbacksAndLengthCap(t *testing.T) {
 	}
 }
 
-func TestRender_PublishFailed_ReasonIsEscapedClippedAndNeverInTheSubject(t *testing.T) {
+func TestRender_PublishFailed_ReasonIsSanitisedClippedAndNeverInTheSubject(t *testing.T) {
 	subject, text, html, err := Render(KindPublishFailed, TemplateData{
 		Name: "Grace", CourseTitle: "Go", FailedActivity: "VerifyAssets",
 		Reason: "<script>x</script>\r\nBcc: victim@evil.test " + strings.Repeat("y", 2000),
@@ -76,8 +78,11 @@ func TestRender_PublishFailed_ReasonIsEscapedClippedAndNeverInTheSubject(t *test
 	if strings.Contains(subject, "script") || strings.ContainsAny(subject, "\r\n") {
 		t.Fatalf("subject carries the reason or a line break: %q", subject)
 	}
-	if strings.Contains(html, "<script>") || !strings.Contains(html, "&lt;script&gt;") {
-		t.Fatalf("reason not escaped: %s", html)
+	if strings.Contains(html, "<script") || strings.Contains(html, "&lt;") {
+		t.Fatalf("reason carries markup: %s", html)
+	}
+	if strings.Contains(text, "@") {
+		t.Fatalf("reason carries an address: %q", text)
 	}
 	if strings.Contains(text, "\nBcc:") || len(text) > 1500 {
 		t.Fatalf("reason kept a line break or was not clipped (%d bytes): %q", len(text), text)

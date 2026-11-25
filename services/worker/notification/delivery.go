@@ -119,7 +119,7 @@ func (d *deliverer) handle(ctx context.Context, payload []byte) error {
 	}
 
 	sendErr := d.provider.Send(ctx, Message{
-		ID: row.ID.String(), To: *rcpt.Email, ToName: rcpt.Name, Subject: subject, Text: text, HTML: html,
+		ID: row.ID.String(), To: *rcpt.Email, ToName: DisplayName(rcpt.Name), Subject: subject, Text: text, HTML: html,
 	})
 	if sendErr != nil {
 		if errors.Is(sendErr, ErrPermanent) {

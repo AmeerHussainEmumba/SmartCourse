@@ -13,10 +13,14 @@
 package workflows
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/mock"
+	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
@@ -60,11 +64,11 @@ func TestPublishCourseWorkflow_ValidateMetadataFails_StopsBeforePromote(t *testi
 	env := suite.NewTestWorkflowEnvironment()
 
 	in := course.PublishWorkflowInput{CourseID: uuid.New(), VersionID: uuid.New(), Title: "Empty Course"}
-	cause := apperr("title is required to publish")
+	cause := publishFailure("validation_failed: title is required")
 
 	var a *Activities
 	env.OnActivity(a.ValidateMetadata, mock.Anything, in.VersionID).Return(cause).Once()
-	env.OnActivity(a.MarkPublishFailed, mock.Anything, in.VersionID, cause.Error(), "ValidateMetadata").Return(nil).Once()
+	env.OnActivity(a.MarkPublishFailed, mock.Anything, in.VersionID, cause.Message(), "ValidateMetadata").Return(nil).Once()
 
 	env.ExecuteWorkflow(PublishCourseWorkflow, in)
 
@@ -89,7 +93,7 @@ func TestPublishCourseWorkflow_VerifyAssetsFails_StillWaitsOnComputeMetadata(t *
 	env := suite.NewTestWorkflowEnvironment()
 
 	in := course.PublishWorkflowInput{CourseID: uuid.New(), VersionID: uuid.New(), Title: "Bad Content"}
-	cause := apperr("lesson content too large")
+	cause := publishFailure("content_too_large: lesson content too large")
 
 	var a *Activities
 	env.OnActivity(a.ValidateMetadata, mock.Anything, in.VersionID).Return(nil).Once()
@@ -99,7 +103,7 @@ func TestPublishCourseWorkflow_VerifyAssetsFails_StillWaitsOnComputeMetadata(t *
 	// attempts, not just the first.
 	env.OnActivity(a.VerifyAssets, mock.Anything, in.VersionID).Return(cause).Times(3)
 	env.OnActivity(a.ComputeMetadata, mock.Anything, in.VersionID).Return(nil).Once()
-	env.OnActivity(a.MarkPublishFailed, mock.Anything, in.VersionID, cause.Error(), "VerifyAssets").Return(nil).Once()
+	env.OnActivity(a.MarkPublishFailed, mock.Anything, in.VersionID, cause.Message(), "VerifyAssets").Return(nil).Once()
 
 	env.ExecuteWorkflow(PublishCourseWorkflow, in)
 
@@ -110,6 +114,48 @@ func TestPublishCourseWorkflow_VerifyAssetsFails_StillWaitsOnComputeMetadata(t *
 	env.AssertExpectations(t) // fails if ComputeMetadata was never actually called
 }
 
-type apperr string
+// publishFailure is what the real activities return (Activities.failure): an
+// ApplicationError of course.PublishFailureType carrying a fixed category.
+func publishFailure(msg string) *temporal.ApplicationError {
+	return temporal.NewApplicationError(msg, course.PublishFailureType).(*temporal.ApplicationError)
+}
 
-func (e apperr) Error() string { return string(e) }
+// S-08: an activity error that is not a publish failure (a panic, an error from
+// an older worker, a driver or storage error that escaped the activity's own
+// mapping) must never reach publish_error, the event or the email as text.
+func TestPublishCourseWorkflow_UnmappedActivityErrorTextNeverBecomesTheReason(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+
+	in := course.PublishWorkflowInput{CourseID: uuid.New(), VersionID: uuid.New(), Title: "T"}
+	raw := errors.New(`stat asset: Head "http://minio.internal.svc:9000/b/k": dial tcp 10.42.7.19:9000: connect: connection refused`)
+
+	var a *Activities
+	env.OnActivity(a.ValidateMetadata, mock.Anything, in.VersionID).Return(raw).Times(1)
+	env.OnActivity(a.MarkPublishFailed, mock.Anything, in.VersionID, "internal_error", "ValidateMetadata").Return(nil).Once()
+
+	env.ExecuteWorkflow(PublishCourseWorkflow, in)
+
+	if err := env.GetWorkflowError(); err == nil {
+		t.Fatal("expected the workflow to fail")
+	}
+	env.AssertExpectations(t) // MarkPublishFailed got exactly "internal_error"
+}
+
+func TestSafeReason(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cause error
+		want  string
+	}{
+		{"categorised", temporal.NewApplicationError("asset_invalid: asset not found", course.PublishFailureType), "asset_invalid: asset not found"},
+		{"oversized trusted message", temporal.NewApplicationError(strings.Repeat("x", 500), course.PublishFailureType), "internal_error"},
+		{"other application error", temporal.NewApplicationError("dial tcp 10.0.0.1:9000", "errorString"), "internal_error"},
+		{"plain error", errors.New("Head http://minio:9000"), "internal_error"},
+		{"timeout", temporal.NewTimeoutError(enumspb.TIMEOUT_TYPE_START_TO_CLOSE, nil), "timeout: the step took too long"},
+	} {
+		if got := safeReason(tc.cause); got != tc.want {
+			t.Errorf("%s: safeReason = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

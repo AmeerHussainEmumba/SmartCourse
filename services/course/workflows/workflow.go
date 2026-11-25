@@ -97,19 +97,20 @@ func PublishCourseWorkflow(ctx workflow.Context, in course.PublishWorkflowInput)
 
 // failPublish records the failure (best-effort — a failure to even write
 // the failure doesn't change what caused the publish to fail) and returns
-// the original error as the workflow's result. The reason stored is the
-// activity's own message, not cause.Error()'s full text: Temporal wraps
-// every activity failure in an ActivityError/ApplicationError pair whose
-// Error() string embeds diagnostic noise (scheduledEventID, retryable
-// flag, Go type name) — exactly the kind of thing that shouldn't end up
-// in course_versions.publish_error for an instructor to read.
+// the original error as the workflow's result.
+//
+// The reason stored and emitted is a bounded, fixed-vocabulary string and
+// never raw error text (S-08): it ends up in course_versions.publish_error,
+// in course.publish_failed (kept by analytics) and in the instructor's email.
+// The activities (Activities.failure) report their failures as an
+// ApplicationError of type course.PublishFailureType whose message is a
+// course.PublishFailureText; that message is trusted, and only that one. Any
+// other cause (a timeout, a panic, an error from an older worker version,
+// whose text may embed a driver or storage error, Temporal's scheduledEventID
+// noise or a Go type name) maps to a fixed string by kind.
 func failPublish(ctx workflow.Context, versionID uuid.UUID, cause error) error {
 	var a *Activities
-	reason := cause.Error()
-	var appErr *temporal.ApplicationError
-	if errors.As(cause, &appErr) {
-		reason = appErr.Message()
-	}
+	reason := safeReason(cause)
 	// The name of the activity whose final failure ended the publish, for
 	// course.publish_failed. Empty when the cause is not an activity failure.
 	var failedActivity string
@@ -120,4 +121,27 @@ func failPublish(ctx workflow.Context, versionID uuid.UUID, cause error) error {
 	failCtx := workflow.WithActivityOptions(ctx, withRetry(retry5x))
 	_ = workflow.ExecuteActivity(failCtx, a.MarkPublishFailed, versionID, reason, failedActivity).Get(ctx, nil)
 	return cause
+}
+
+// maxReasonLength bounds a trusted activity message; the vocabulary is far
+// shorter, so this only guards against a future category that is not.
+const maxReasonLength = 120
+
+// safeReason is the publish-failure reason for cause, free of raw error text.
+func safeReason(cause error) string {
+	var appErr *temporal.ApplicationError
+	if errors.As(cause, &appErr) && appErr.Type() == course.PublishFailureType {
+		if m := appErr.Message(); m != "" && len(m) <= maxReasonLength {
+			return m
+		}
+		return "internal_error"
+	}
+	var timeout *temporal.TimeoutError
+	if errors.As(cause, &timeout) {
+		return "timeout: the step took too long"
+	}
+	if temporal.IsCanceledError(cause) {
+		return "canceled"
+	}
+	return "internal_error"
 }

@@ -11,12 +11,10 @@ package course_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -25,39 +23,6 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
 )
-
-// S-08: VerifyAssets' storage failure carries the raw SDK/driver error text
-// (internal host, port, bucket path) in the error's Error() string. The
-// publish workflow's failPublish stores appErr.Message() (= that text) as
-// course_versions.publish_error and in course.publish_failed's reason, which
-// the worker emails to the instructor and the analytics issues table keeps. An
-// instructor (a low-trust user) can therefore read internal infrastructure
-// detail by publishing a lesson whose asset exists while storage is degraded,
-// or by any activity error that wraps a driver error.
-type failingStat struct{ err error }
-
-func (f failingStat) PresignUpload(context.Context, string, string, int64, time.Duration) (course.PresignedUpload, error) {
-	return course.PresignedUpload{}, f.err
-}
-func (f failingStat) Stat(context.Context, string) (course.AssetInfo, error) {
-	return course.AssetInfo{}, f.err
-}
-
-func TestBugrepro_VerifyAssets_StorageErrorTextLeaksIntoPublishReason(t *testing.T) {
-	w := newAssetWorld(t)
-	key := "courses/" + w.courseID.String() + "/assets/" + uuid.NewString() + ".pdf"
-	w.lesson(t, 1, &key)
-	internal := errors.New(`operation error S3: HeadObject, https response error StatusCode: 0, request send failed, Head "http://minio.internal.svc:9000/smartcourse-assets/` + key + `": dial tcp 10.42.7.19:9000: connect: connection refused`)
-	svc := w.svc.WithAssetStore(failingStat{internal})
-	err := svc.VerifyAssets(context.Background(), w.draftID)
-	if err == nil {
-		t.Fatal("want an error")
-	}
-	// This string is what Temporal's ApplicationError.Message() carries to failPublish.
-	if s := err.Error(); strings.Contains(s, "10.42.7.19") || strings.Contains(s, "minio.internal") {
-		t.Fatalf("the activity error text that becomes the instructor-visible publish reason leaks internals: %q", s)
-	}
-}
 
 // S-09 (the F-03 class on the instructor surface): the course routes use
 // RequireFreshPrivilege(rdb) without a durable source, so after a Redis

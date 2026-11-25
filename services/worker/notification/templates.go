@@ -23,8 +23,9 @@ const (
 	maxPublishReasonLength = 500
 )
 
-// TemplateData is everything a template may interpolate. Both fields are
-// untrusted (a user chose the name, an instructor chose the title).
+// TemplateData is everything a template may interpolate. Every field is
+// untrusted (a user chose the name, an instructor chose the title); Render
+// sanitises each one (DisplayName, SafeCourseTitle) before it is interpolated.
 type TemplateData struct {
 	Name        string
 	CourseTitle string
@@ -93,16 +94,19 @@ func Render(kind string, d TemplateData) (subject, text, html string, err error)
 	if !ok {
 		return "", "", "", fmt.Errorf("%w: no template for kind %q", ErrPermanent, kind)
 	}
-	d.Name = clip(cleanLine(d.Name), maxTemplateFieldLength)
+	// Every user-controlled value is reduced to a conservative allowlist
+	// first (sanitize.go, S-10): no URL, address, markup or control character
+	// reaches a template, whatever the producer sent.
+	d.Name = DisplayName(d.Name)
 	if d.Name == "" {
 		d.Name = fallbackRecipientName
 	}
-	d.CourseTitle = clip(cleanLine(d.CourseTitle), maxTemplateFieldLength)
+	d.CourseTitle = SafeCourseTitle(d.CourseTitle)
 	if d.CourseTitle == "" {
 		d.CourseTitle = fallbackCourseTitle
 	}
-	d.FailedActivity = clip(cleanLine(d.FailedActivity), maxTemplateFieldLength)
-	d.Reason = clip(cleanLine(d.Reason), maxPublishReasonLength)
+	d.FailedActivity = safeActivity(d.FailedActivity)
+	d.Reason = safeReason(d.Reason)
 	var tb, hb bytes.Buffer
 	if err := t.text.Execute(&tb, d); err != nil {
 		return "", "", "", fmt.Errorf("%w: render text: %v", ErrPermanent, err)
@@ -111,12 +115,4 @@ func Render(kind string, d TemplateData) (subject, text, html string, err error)
 		return "", "", "", fmt.Errorf("%w: render html: %v", ErrPermanent, err)
 	}
 	return strings.ReplaceAll(t.subject, "{{SUBJECT_COURSE}}", d.CourseTitle), tb.String(), hb.String(), nil
-}
-
-func clip(s string, max int) string {
-	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
-	return string(r[:max])
 }

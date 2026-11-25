@@ -108,7 +108,7 @@ func TestVerifyAssets_MissingAssetFails(t *testing.T) {
 	key := "courses/" + w.courseID.String() + "/assets/" + uuid.NewString() + ".pdf"
 	w.lesson(t, 1, &key)
 	err := w.svc.VerifyAssets(context.Background(), w.draftID)
-	if !isAppErr(err, 400, "asset_invalid") || !strings.Contains(err.Error(), "never uploaded") {
+	if !isAppErr(err, 400, "asset_invalid") || !strings.Contains(err.Error(), "asset not found") {
 		t.Fatalf("err = %v, want asset_invalid (never uploaded)", err)
 	}
 }
@@ -118,7 +118,7 @@ func TestVerifyAssets_EmptyObjectFails(t *testing.T) {
 	key := "courses/" + w.courseID.String() + "/assets/" + uuid.NewString() + ".pdf"
 	w.minio.Put(t, key, "application/pdf", nil)
 	w.lesson(t, 1, &key)
-	if err := w.svc.VerifyAssets(context.Background(), w.draftID); !isAppErr(err, 400, "asset_invalid") || !strings.Contains(err.Error(), "empty") {
+	if err := w.svc.VerifyAssets(context.Background(), w.draftID); !isAppErr(err, 400, "asset_invalid") || !strings.Contains(err.Error(), "asset is empty") {
 		t.Fatalf("err = %v, want asset_invalid (empty)", err)
 	}
 }
@@ -129,7 +129,7 @@ func TestVerifyAssets_OversizeObjectFails(t *testing.T) {
 	key := "courses/" + w.courseID.String() + "/assets/" + uuid.NewString() + ".png"
 	w.minio.Put(t, key, "image/png", make([]byte, 10*1024*1024+1))
 	w.lesson(t, 1, &key)
-	if err := w.svc.VerifyAssets(context.Background(), w.draftID); !isAppErr(err, 400, "asset_invalid") || !strings.Contains(err.Error(), "larger than") {
+	if err := w.svc.VerifyAssets(context.Background(), w.draftID); !isAppErr(err, 400, "asset_invalid") || !strings.Contains(err.Error(), "asset too large") {
 		t.Fatalf("err = %v, want asset_invalid (too large)", err)
 	}
 }
@@ -139,7 +139,7 @@ func TestVerifyAssets_WrongContentTypeFails(t *testing.T) {
 	key := "courses/" + w.courseID.String() + "/assets/" + uuid.NewString() + ".pdf"
 	w.minio.Put(t, key, "text/html", []byte("<script>alert(1)</script>"))
 	w.lesson(t, 1, &key)
-	if err := w.svc.VerifyAssets(context.Background(), w.draftID); !isAppErr(err, 400, "asset_invalid") || !strings.Contains(err.Error(), "content type") {
+	if err := w.svc.VerifyAssets(context.Background(), w.draftID); !isAppErr(err, 400, "asset_invalid") || !strings.Contains(err.Error(), "asset has the wrong content type") {
 		t.Fatalf("err = %v, want asset_invalid (content type)", err)
 	}
 }
