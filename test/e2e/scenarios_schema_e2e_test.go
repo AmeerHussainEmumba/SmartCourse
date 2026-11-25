@@ -1,4 +1,4 @@
-//go:build e2e_legacy
+//go:build e2e
 
 package e2e_test
 
@@ -54,11 +54,12 @@ import (
 //     frames committed under libs/events/testdata (written by an earlier
 //     version) and a payload written before enrolled_at existed (fields 1 to 3
 //     only) decode with the real codec and the generated message.
-//  6. The worker refuses to start in kafka mode when a subject is missing: a
-//     second worker process is pointed at the real registry through a proxy
-//     that answers 404 (subject not found, error_code 40401) for the
-//     StudentEnrolled subject only; it exits non-zero and says which subject
-//     is missing. (A proxy, not a deletion, so the shared registry is not
+//  6. A worker does not consume when a subject is missing: a second
+//     analytics-worker process (it consumes StudentEnrolled) is pointed at
+//     the real registry through a proxy that answers 404 (subject not found,
+//     error_code 40401) for the StudentEnrolled subject only; it stays up
+//     but starts no consumer and logs which subject is missing (the old
+//     binary exited; the split workers degrade readiness instead). (A proxy, not a deletion, so the shared registry is not
 //     changed for the scenarios that follow.)
 func TestE2E_E11_SchemaIncompatibility(t *testing.T) {
 	regURL := harness.Shared(t).RegistryURL
@@ -260,7 +261,7 @@ func TestE2E_E11_SchemaIncompatibility(t *testing.T) {
 		}
 	})
 
-	t.Run("the worker refuses to start when a subject is missing", func(t *testing.T) {
+	t.Run("a worker does not consume when a subject is missing", func(t *testing.T) {
 		proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && r.URL.Path == "/subjects/"+subject+"/versions/latest" {
 				w.Header().Set("Content-Type", "application/vnd.schemaregistry.v1+json")
@@ -291,20 +292,29 @@ func TestE2E_E11_SchemaIncompatibility(t *testing.T) {
 		defer proxy.Close()
 
 		s := harness.Start(t, harness.Options{})
-		p := s.NewWorkerProc(t, map[string]string{"SCHEMA_REGISTRY_URL": proxy.URL})
+		p := s.NewProc(t, harness.AnalyticsWorker, map[string]string{"SCHEMA_REGISTRY_URL": proxy.URL})
 		if err := p.Start(); err != nil {
 			t.Fatal(err)
 		}
-		if !p.Exited(90 * time.Second) {
-			t.Fatalf("a worker with a missing subject is still running after 90 s; it must refuse to start. Output:\n%s", p.Logs())
-		}
-		logs := p.Logs()
-		if !strings.Contains(logs, subject) || !strings.Contains(logs, "missing") {
-			t.Errorf("the worker's exit does not say which subject is missing:\n%s", tail(logs, 2000))
-		}
-		if p.LogContains("kafka consumer started") || p.LogContains("publish worker started") {
-			t.Errorf("the worker started consumers before it refused to start")
-		}
+		// The binaries of the split do not exit on a missing subject: a broker
+		// or registry problem at start degrades readiness instead of
+		// crash-looping the pod (runConsumers, services/*/cmd/*-worker/wire.go),
+		// so the contract is: no consumer starts, and the log names the subject.
+		harness.Eventually(t, 90*time.Second, "the worker to report the missing subject", func() error {
+			if !p.Running() {
+				return harness.Errf("the worker exited; output:\n%s", tail(p.Logs(), 2000))
+			}
+			if !strings.Contains(p.Logs(), subject) || !strings.Contains(p.Logs(), "missing") {
+				return harness.Errf("no log line says that %s is missing", subject)
+			}
+			return nil
+		})
+		harness.Never(t, 5*time.Second, "a worker with a missing subject staying idle", func() error {
+			if p.LogContains("kafka consumers starting") || p.LogContains("kafka consumer started") {
+				return harness.Errf("the worker started its consumers although a subject is missing")
+			}
+			return nil
+		})
 	})
 }
 
