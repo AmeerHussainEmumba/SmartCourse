@@ -6,9 +6,10 @@
 # module a PR touches.
 #
 # Suggested grouping when ownership splits (see docs/guides/versioning.md):
-#   services/identity, services/course, services/analytics -> one owner each
-#   services/worker                                        -> owns the coupling to
-#                                                              course and analytics
+#   services/identity, services/course, services/analytics,
+#   services/notification, services/publishing, services/audit -> one owner each
+#                                                              (no service imports another:
+#                                                              ADR-0033)
 #   libs/*                                                 -> a platform owner;
 #                                                              several libs can share one
 
@@ -17,7 +18,9 @@
 /services/identity/       @AmeerHussainEmumba
 /services/course/         @AmeerHussainEmumba
 /services/analytics/      @AmeerHussainEmumba
-/services/worker/         @AmeerHussainEmumba
+/services/notification/   @AmeerHussainEmumba
+/services/publishing/     @AmeerHussainEmumba
+/services/audit/          @AmeerHussainEmumba
 /tools/seed/              @AmeerHussainEmumba
 /test/e2e/                @AmeerHussainEmumba
 /libs/                    @AmeerHussainEmumba
