@@ -36,17 +36,28 @@ rules=(
   "services/analytics analytics-api services/identity,services/course,services/worker,libs/temporal,libs/asynqx,libs/kafka   yes 650"
   "services/course    course-api    services/identity,services/analytics,services/worker                no  760"
   "services/worker    worker        services/identity                                                   no  855"
+  "services/publishing publishing-worker services/identity,services/course,services/analytics,services/worker,libs/asynqx,libs/kafka,libs/eventbus,libs/events,libs/mongostore,libs/relay,libs/idempotency,libs/ratelimit no 680 github.com/(segmentio|twmb|confluentinc|IBM/sarama|hibiken/asynq|golang-migrate)/|go.mongodb.org/mongo-driver/v2/mongo$"
 )
+# publishing-worker (Wave B5): no Kafka, Mongo, Asynq or migration code and no other
+# service; Temporal is its whole job. The last column is an extra regex for
+# third-party packages. The Postgres driver (pgx, gorm) is NOT forbidden: it is
+# linked through libs/runtime -> libs/infra even under runtime.WithoutDependencies,
+# so the binary links but never opens a connection. Splitting infra out of runtime
+# would let that move into the forbidden list. 648 packages when measured (budget
+# is that plus about 5%).
 slack=${LINK_BUDGET_SLACK:-0}
 
 fail=0
 for rule in "${rules[@]}"; do
-  read -r dir bin forbidden no_temporal budget <<<"$rule"
+  read -r dir bin forbidden no_temporal budget extra <<<"$rule"
   deps=$(cd "$dir" && GOWORK=off go list -deps "./cmd/$bin")
 
   pattern="^${mod}/(${forbidden//,/|})(/|\$)"
   if [ "$no_temporal" = "yes" ]; then
     pattern="${pattern}|^go\\.temporal\\.io/"
+  fi
+  if [ -n "${extra:-}" ]; then
+    pattern="${pattern}|^(${extra})"
   fi
 
   if hits=$(grep -E "$pattern" <<<"$deps"); then
