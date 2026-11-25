@@ -2,15 +2,78 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/mongostore"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/router"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/analytics/analytics"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/analytics/failedevents"
 )
+
+// shutdownTimeout bounds the HTTP server's drain.
+const shutdownTimeout = 15 * time.Second
+
+// buildRouter builds the public engine: health and the analytics routes. It
+// deliberately does not mount /metrics: that is served only on the internal
+// listener (METRICS_HTTP_ADDR) that libs/runtime starts (design §6).
+func buildRouter(p *runtime.Process) (*gin.Engine, func(context.Context), error) {
+	cfg := p.Config
+	r, err := router.NewWithOptions(router.Options{
+		Env:            cfg.Env,
+		AllowedOrigins: cfg.CORSAllowedOrigins,
+		TrustedProxies: cfg.TrustedProxies,
+		MaxBodyBytes:   cfg.MaxBodyBytes,
+		HSTS:           cfg.EnableHSTS,
+		Observe:        p.Obs.Middleware(),
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid router configuration: %w", err)
+	}
+	router.RegisterHealth(r, p.Deps.HealthCheckers())
+	closeRoutes := registerRoutes(r, p.Deps, cfg)
+	return r, closeRoutes, nil
+}
+
+// wire registers the HTTP server as the one critical component.
+func wire(p *runtime.Process) error {
+	r, closeRoutes, err := buildRouter(p)
+	if err != nil {
+		return err
+	}
+	cfg := p.Config
+	srv := router.NewServer(fmt.Sprintf(":%d", cfg.HTTPPort), r, router.ServerOptions{
+		ReadTimeout:  cfg.HTTPReadTimeout,
+		WriteTimeout: cfg.HTTPWriteTimeout,
+		IdleTimeout:  cfg.HTTPIdleTimeout,
+	})
+	p.OnShutdown("routes", func(ctx context.Context) error { closeRoutes(ctx); return nil })
+	p.Go("http", func(ctx context.Context) error {
+		errc := make(chan error, 1)
+		go func() { errc <- srv.ListenAndServe() }()
+		p.Logger.Info("analytics-api listening", slog.Int("port", cfg.HTTPPort))
+		select {
+		case err := <-errc:
+			if errors.Is(err, http.ErrServerClosed) {
+				return nil
+			}
+			return err
+		case <-ctx.Done():
+			sctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+			defer cancel()
+			return srv.Shutdown(sctx)
+		}
+	}, runtime.Critical())
+	return nil
+}
 
 // registerRoutes wires services/analytics/analytics's HTTP routes onto r. Read-only
 // and already decoupled — analytics learns about the rest of the system
