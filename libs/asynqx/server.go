@@ -54,6 +54,9 @@ type ServerConfig struct {
 	// pool (RFC §10.2), run a second Server with a single-entry Queues map.
 	Concurrency int
 
+	// Namespace prefixes every queue (see Namespace): Queues keys stay logical.
+	Namespace Namespace
+
 	// Queues maps queue name to weight. Nil means DefaultQueueWeights (6:3:1).
 	Queues map[string]int
 
@@ -117,7 +120,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	if len(cfg.Queues) == 0 {
 		return nil, errors.New("asynqx: empty Queues")
 	}
+	if err := ValidateNamespace(cfg.Namespace); err != nil {
+		return nil, err
+	}
+	queues := make(map[string]int, len(cfg.Queues))
 	for q, w := range cfg.Queues {
+		queues[QueueName(cfg.Namespace, q)] = w
 		if !validQueue(q) {
 			return nil, fmt.Errorf("asynqx: unknown queue %q", q)
 		}
@@ -152,7 +160,7 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	s := &Server{cfg: cfg, mux: asynq.NewServeMux(), log: log}
 	s.srv = asynq.NewServer(cfg.Redis, asynq.Config{
 		Concurrency:              cfg.Concurrency,
-		Queues:                   cfg.Queues,
+		Queues:                   queues,
 		StrictPriority:           false, // weighted, not strict: low must not starve
 		ShutdownTimeout:          cfg.ShutdownTimeout,
 		RetryDelayFunc:           cfg.RetryDelay,

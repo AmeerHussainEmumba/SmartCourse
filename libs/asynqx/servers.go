@@ -25,6 +25,11 @@ var ErrUnknownQueue = errors.New("asynqx: no pool configured for queue")
 type ServersConfig struct {
 	Redis RedisOpt
 
+	// Namespace prefixes every queue the servers consume (see Namespace). Set
+	// it once, to the owning service's name; empty means no prefix. Pools and
+	// Register keep using the logical queue names.
+	Namespace Namespace
+
 	// Pools maps queue name to the size of that queue's own pool (the number of
 	// handlers that may run at once for it). Nil means DefaultPoolSizes. Only
 	// the queues listed here are served; a queue left out is never consumed.
@@ -53,6 +58,7 @@ type ServersConfig struct {
 // Packages register handlers by task type with Register, which takes a plain
 // func over the payload, so they need not import Asynq.
 type Servers struct {
+	ns      Namespace
 	byQueue map[string]*Server
 
 	mu      sync.Mutex
@@ -65,6 +71,9 @@ type Servers struct {
 func NewServers(cfg ServersConfig) (*Servers, error) {
 	if cfg.Redis == nil {
 		return nil, errors.New("asynqx: ServersConfig.Redis is required")
+	}
+	if err := ValidateNamespace(cfg.Namespace); err != nil {
+		return nil, err
 	}
 	pools := cfg.Pools
 	if pools == nil {
@@ -89,7 +98,7 @@ func NewServers(cfg ServersConfig) (*Servers, error) {
 		log = slog.Default()
 	}
 
-	ss := &Servers{byQueue: map[string]*Server{}, types: map[string]string{}}
+	ss := &Servers{ns: cfg.Namespace, byQueue: map[string]*Server{}, types: map[string]string{}}
 	for _, q := range queueOrder {
 		n, ok := pools[q]
 		if !ok {
@@ -97,6 +106,7 @@ func NewServers(cfg ServersConfig) (*Servers, error) {
 		}
 		srv, err := NewServer(ServerConfig{
 			Redis:                    cfg.Redis,
+			Namespace:                cfg.Namespace,
 			Concurrency:              n,
 			Queues:                   map[string]int{q: 1},
 			ShutdownTimeout:          cfg.ShutdownTimeout,
@@ -104,7 +114,7 @@ func NewServers(cfg ServersConfig) (*Servers, error) {
 			RetryDelay:               cfg.RetryDelay,
 			OnExhausted:              cfg.OnExhausted,
 			DelayedTaskCheckInterval: cfg.DelayedTaskCheckInterval,
-			Logger:                   log.With("queue", q),
+			Logger:                   log.With("queue", QueueName(cfg.Namespace, q)),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("queue %s: %w", q, err)
@@ -114,7 +124,8 @@ func NewServers(cfg ServersConfig) (*Servers, error) {
 	return ss, nil
 }
 
-// Register routes tasks of taskType, pulled from queue, to fn. fn receives the
+// Register routes tasks of taskType, pulled from the logical queue (QueueLow,
+// not a prefixed name), to fn. fn receives the
 // task payload; returning an error retries the task (SkipRetry archives it),
 // and a panic is recovered as in Server.Handle. A task type belongs to one
 // queue: registering it twice is an error. Register before Start.
@@ -139,8 +150,20 @@ func (ss *Servers) Register(taskType, queue string, fn func(ctx context.Context,
 	return nil
 }
 
-// Queues lists the queues that have a pool, in critical, default, low order.
+// Namespace is the queue prefix the servers were built with ("" for none).
+func (ss *Servers) Namespace() Namespace { return ss.ns }
+
+// Queues lists the Redis names of the queues that have a pool (namespace
+// included), in critical, default, low order.
 func (ss *Servers) Queues() []string {
+	var out []string
+	for _, q := range ss.logicalQueues() {
+		out = append(out, QueueName(ss.ns, q))
+	}
+	return out
+}
+
+func (ss *Servers) logicalQueues() []string {
 	var out []string
 	for _, q := range queueOrder {
 		if _, ok := ss.byQueue[q]; ok {
@@ -160,7 +183,7 @@ func (ss *Servers) Start() error {
 		return errors.New("asynqx: servers already started")
 	}
 	var begun []*Server
-	for _, q := range ss.Queues() {
+	for _, q := range ss.logicalQueues() {
 		srv := ss.byQueue[q]
 		if err := srv.Start(); err != nil {
 			shutdownAll(begun)
@@ -183,7 +206,7 @@ func (ss *Servers) Shutdown() {
 		return
 	}
 	all := make([]*Server, 0, len(ss.byQueue))
-	for _, q := range ss.Queues() {
+	for _, q := range ss.logicalQueues() {
 		all = append(all, ss.byQueue[q])
 	}
 	shutdownAll(all)

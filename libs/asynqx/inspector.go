@@ -32,13 +32,21 @@ func (q QueueStats) Depth() int { return q.Pending + q.Active + q.Scheduled + q.
 
 // Inspector reads queue state. Safe for concurrent use.
 type Inspector struct {
-	i *asynq.Inspector
+	i     *asynq.Inspector
+	ns    Namespace
+	nsErr error
 }
 
-// NewInspector connects to Redis. Close releases the connection.
-func NewInspector(redis RedisOpt) *Inspector {
-	return &Inspector{i: asynq.NewInspector(redis)}
+// NewInspector connects to Redis. Close releases the connection. With
+// WithNamespace, queue arguments are logical names and QueueStats.Queue is the
+// prefixed name.
+func NewInspector(redis RedisOpt, opts ...Option) *Inspector {
+	o := applyOptions(opts)
+	return &Inspector{i: asynq.NewInspector(redis), ns: o.ns, nsErr: ValidateNamespace(o.ns)}
 }
+
+// Namespace is the queue prefix the inspector reads ("" for none).
+func (i *Inspector) Namespace() Namespace { return i.ns }
 
 // Close closes the underlying Redis connection.
 func (i *Inspector) Close() error { return i.i.Close() }
@@ -47,11 +55,18 @@ func (i *Inspector) Close() error { return i.i.Close() }
 // none are named. A queue that has never held a task reports zeros rather than
 // an error, so a gauge exists from the first scrape.
 func (i *Inspector) Stats(queues ...string) ([]QueueStats, error) {
+	if i.nsErr != nil {
+		return nil, i.nsErr
+	}
 	if len(queues) == 0 {
 		queues = []string{QueueCritical, QueueDefault, QueueLow}
 	}
 	out := make([]QueueStats, 0, len(queues))
-	for _, q := range queues {
+	for _, logical := range queues {
+		if !validQueue(logical) {
+			return nil, fmt.Errorf("asynqx: unknown queue %q", logical)
+		}
+		q := QueueName(i.ns, logical)
 		info, err := i.i.GetQueueInfo(q)
 		if err != nil {
 			if queueNotFound(err) {
@@ -73,7 +88,13 @@ func (i *Inspector) Stats(queues ...string) ([]QueueStats, error) {
 // "scheduled", "retry", "archived", "completed", "aggregating") and whether
 // the task exists.
 func (i *Inspector) TaskState(queue, id string) (state string, found bool, err error) {
-	info, err := i.i.GetTaskInfo(queue, id)
+	if i.nsErr != nil {
+		return "", false, i.nsErr
+	}
+	if !validQueue(queue) {
+		return "", false, fmt.Errorf("asynqx: unknown queue %q", queue)
+	}
+	info, err := i.i.GetTaskInfo(QueueName(i.ns, queue), id)
 	switch {
 	case errors.Is(err, asynq.ErrTaskNotFound), errors.Is(err, asynq.ErrQueueNotFound):
 		return "", false, nil
