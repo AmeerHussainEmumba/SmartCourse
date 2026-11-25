@@ -41,7 +41,7 @@ import (
 // bug class (ADR-0025).
 func newTestRouter(t *testing.T) (*gin.Engine, *identity.Service, config.JWTConfig, *testenv.Env) {
 	t.Helper()
-	env := testenv.Setup(t)
+	env := setupIdentity(t)
 	jwtCfg := config.JWTConfig{SigningKey: "integration-test-signing-key-32-bytes!!", AccessTokenTTL: 15 * time.Minute, RefreshTokenTTL: 7 * 24 * time.Hour, Issuer: "smartcourse-test"}
 	argonCfg := config.Argon2Config{MemoryKiB: 8 * 1024, Iterations: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32}
 	repo := identity.NewRepository(env.DB)

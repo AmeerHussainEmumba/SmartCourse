@@ -30,7 +30,7 @@ func newTestService(t *testing.T) (*identity.Service, *testenv.Env) {
 
 func newTestServiceWithEmail(t *testing.T, sender identity.EmailSender) (*identity.Service, *testenv.Env) {
 	t.Helper()
-	env := testenv.Setup(t)
+	env := setupIdentity(t)
 	repo := identity.NewRepository(env.DB)
 	jwtCfg := config.JWTConfig{SigningKey: "integration-test-signing-key-32-bytes!!", AccessTokenTTL: 15 * time.Minute, RefreshTokenTTL: 7 * 24 * time.Hour, Issuer: "smartcourse-test"}
 	argonCfg := config.Argon2Config{MemoryKiB: 8 * 1024, Iterations: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32}

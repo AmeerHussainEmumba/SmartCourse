@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 func floodIP(i int) string { return fmt.Sprintf("198.18.%d.%d", i/250, i%250+1) }
@@ -42,7 +41,7 @@ func TestSecurity_ArgonGate_200ConcurrentLogins_BoundedHeap_CorrectCredentialsSu
 		memKiB  = 16 * 1024
 	)
 	cfg := config.Argon2Config{MemoryKiB: memKiB, Iterations: 1, Parallelism: 1, SaltLength: 16, KeyLength: 32, MaxConcurrent: slots, QueueTimeout: time.Minute}
-	h := newHarnessWith(t, testenv.Setup(t), cfg)
+	h := newHarnessWith(t, setupIdentity(t), cfg)
 
 	const users = 10
 	emails := make([]string, users)
@@ -124,7 +123,7 @@ func TestSecurity_ArgonGate_200ConcurrentLogins_BoundedHeap_CorrectCredentialsSu
 func TestSecurity_ArgonGate_SaturationAnswers503_AndRecovers(t *testing.T) {
 	// Heavy enough that 24 callers cannot drain through one slot in 10ms.
 	cfg := config.Argon2Config{MemoryKiB: 32 * 1024, Iterations: 3, Parallelism: 1, SaltLength: 16, KeyLength: 32, MaxConcurrent: 1, QueueTimeout: 10 * time.Millisecond}
-	h := newHarnessWith(t, testenv.Setup(t), cfg)
+	h := newHarnessWith(t, setupIdentity(t), cfg)
 	email := uniq("sat")
 	h.mustRegister(email, "CorrectPass123!")
 

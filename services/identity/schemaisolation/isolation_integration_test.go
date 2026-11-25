@@ -33,16 +33,16 @@ func (s *tokenSender) SendEmailVerification(_ context.Context, _, tok string) er
 	return nil
 }
 
-// identity-api runs with POSTGRES_SEARCH_PATH=identity,platform,public. Every
+// identity-api connects as svc_identity (search_path identity,public). Every
 // flow of the service must work with nothing else resolvable.
 func TestSchemaIsolation_IdentityServiceMainFlows(t *testing.T) {
 	env := testenv.Setup(t)
-	conn := env.OpenWithSearchPath(t, "identity,platform,public")
+	conn := env.ServiceDB(t, "identity")
 	ctx := context.Background()
 
 	for _, q := range []string{`SELECT 1 FROM courses`, `SELECT 1 FROM enrollments`, `SELECT 1 FROM course_stats`} {
 		if err := conn.Exec(q).Error; err == nil {
-			t.Fatalf("%q succeeded on an identity-only search_path; isolation harness is broken", q)
+			t.Fatalf("%q succeeded as svc_identity; isolation is broken", q)
 		}
 	}
 
@@ -99,7 +99,7 @@ func TestSchemaIsolation_IdentityServiceMainFlows(t *testing.T) {
 		t.Fatalf("Logout: %v", err)
 	}
 
-	// Events were written through platform.outbox via the restricted connection.
+	// Events were written through identity.outbox via the service role.
 	var n int64
 	if err := conn.Raw(`SELECT count(*) FROM outbox WHERE event_type IN ('identity.user_registered','identity.user_profile_updated','identity.user_role_changed')`).Row().Scan(&n); err != nil || n != 3 {
 		t.Fatalf("expected 3 identity events in the outbox, got %d (%v)", n, err)

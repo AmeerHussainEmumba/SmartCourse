@@ -23,7 +23,6 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/identity/identity"
 )
 
@@ -308,7 +307,7 @@ func TestSecurity_Enumeration_ResetAndResend_Indistinguishable(t *testing.T) {
 // dummy-hash path was removed. With any OTHER configured parameters the dummy
 // hash no longer matches: see TestBug_DummyHashIgnoresConfiguredArgon2.
 func TestSecurity_Enumeration_LoginTiming_UnknownVsKnown_SameOrderOfMagnitude(t *testing.T) {
-	h := newHarnessWith(t, testenv.Setup(t), config.Argon2Config{MemoryKiB: 64 * 1024, Iterations: 3, Parallelism: 2, SaltLength: 16, KeyLength: 32})
+	h := newHarnessWith(t, setupIdentity(t), config.Argon2Config{MemoryKiB: 64 * 1024, Iterations: 3, Parallelism: 2, SaltLength: 16, KeyLength: 32})
 	measure := func(f func(i int) string) time.Duration {
 		var total time.Duration
 		const n = 6
