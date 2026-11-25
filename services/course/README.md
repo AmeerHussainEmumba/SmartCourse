@@ -40,7 +40,7 @@ Each consumer name is its own Kafka consumer group and also reads `retry.<consum
 | outbox pruning (published rows only) | `JOBS_OUTBOX_PRUNE_INTERVAL` (1 h), `OUTBOX_RETENTION` (7 d) |
 | `processed_events` pruning | the outbox interval; `PROCESSED_EVENTS_RETENTION` (default 336h = 14 d) |
 
-`PROCESSED_EVENTS_RETENTION` is read by `cmd/course-worker` itself (`libs/config` has no field for it). Keep it longer than the Kafka topic retention and than the longest wait before a parked event is replayed, or a late duplicate is applied twice.
+`PROCESSED_EVENTS_RETENTION` comes from `libs/config` (`cfg.Jobs.ProcessedEventsRetention`; zero, negative or unparsable stops startup). Keep it longer than the Kafka topic retention and than the longest wait before a parked event is replayed, or a late duplicate is applied twice.
 
 ## Packages
 

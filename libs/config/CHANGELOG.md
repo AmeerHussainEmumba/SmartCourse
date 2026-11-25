@@ -4,6 +4,10 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- **Breaking.** Kafka is the only event transport. Removed `EVENT_TRANSPORT`, `KafkaConfig.Transport`, `KafkaConfig.KafkaEnabled()`, `TransportInProcess` and `TransportKafka`; a stale `EVENT_TRANSPORT` is ignored. Removed `Config.Admin`, `AdminConfig` and `ADMIN_HTTP_ADDR` (the admin surface is audit-api now).
+- Added `Requirements.Kafka` (`KAFKA_BROKERS` and `SCHEMA_REGISTRY_URL` required and validated for a binary that asks; unrequested, they are not read) and `Requirements.Mongo` (`MONGO_URI` required; its shape is validated whenever it is set). `AllRequirements()` and `Load()` stay as they were: they request neither. The Kafka tuning keeps its defaults and is validated in every binary.
+- Added `Config.Jobs.ProcessedEventsRetention` (`PROCESSED_EVENTS_RETENTION`, default `336h`; zero, negative or unparsable is a startup error) and `DefaultProcessedEventsRetention`, replacing the `os.Getenv` reads in course-worker, analytics-worker and notification-worker.
+
 - Added `LoadWith(Requirements)` and `AllRequirements()`: a binary declares which required groups it needs (`Postgres`, `Redis`, `MinIO`, `JWT`, `Argon`). A group that is not requested is neither required nor validated. `Load()` is `LoadWith(AllRequirements())` and behaves exactly as before. The publishing worker uses `LoadWith(config.Requirements{})`. Additive.
 
 - `TemporalConfig.ActivityQueue` (`TEMPORAL_ACTIVITY_QUEUE`, default `course-activities`); `TEMPORAL_TASK_QUEUE` is now the WORKFLOW queue and its default changed from `course-publish` to `publish-workflows` (`libs/contracts/publishing`). A deployment that sets `TEMPORAL_TASK_QUEUE` keeps its value for the workflow, and the activities move to the activity queue: the worker serves both.

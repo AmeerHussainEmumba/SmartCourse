@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -29,14 +27,6 @@ const (
 	// TypeReconcile is the reconciler's task type and scheduler entry name: the
 	// same string on every replica (it was jobs.TypeAnalyticsReconcile).
 	TypeReconcile = "maintenance:analytics-reconcile"
-
-	// ProcessedRetentionEnv is read here with os.Getenv: libs/config has no
-	// field for it yet.
-	ProcessedRetentionEnv = "PROCESSED_EVENTS_RETENTION"
-	// DefaultProcessedRetention is the duplicate-absorption window. It must
-	// exceed the Kafka topic retention and the longest park-to-replay delay
-	// (eventbus.PruneProcessed).
-	DefaultProcessedRetention = 14 * 24 * time.Hour
 
 	// lagGaugeInterval is how often kafka_consumer_lag asks the brokers.
 	lagGaugeInterval = 15 * time.Second
@@ -174,20 +164,6 @@ func runConsumers(ctx context.Context, logger *slog.Logger, k config.KafkaConfig
 	return nil
 }
 
-// processedRetention reads PROCESSED_EVENTS_RETENTION (a Go duration such as
-// 336h; default 14 days).
-func processedRetention(getenv func(string) string) (time.Duration, error) {
-	v := strings.TrimSpace(getenv(ProcessedRetentionEnv))
-	if v == "" {
-		return DefaultProcessedRetention, nil
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil || d <= 0 {
-		return 0, fmt.Errorf("%s must be a positive duration such as 336h, got %q", ProcessedRetentionEnv, v)
-	}
-	return d, nil
-}
-
 // buildJobs assembles the scheduled jobs: the analytics reconciler (RFC §9.1,
 // every JOBS_ANALYTICS_RECONCILE_INTERVAL, default 1 minute) and the pruning of
 // analytics.processed_events.
@@ -200,11 +176,7 @@ func buildJobs(db *gorm.DB, rdb *redis.Client, cfg *config.Config) ([]jobs.Job, 
 	if err != nil {
 		return nil, fmt.Errorf("prune interval: %w", err)
 	}
-	retention, err := processedRetention(os.Getenv)
-	if err != nil {
-		return nil, err
-	}
-	prune, err := jobs.PruneProcessedEvents(db, retention, pruneSpec)
+	prune, err := jobs.PruneProcessedEvents(db, cfg.Jobs.ProcessedEventsRetention, pruneSpec)
 	if err != nil {
 		return nil, err
 	}

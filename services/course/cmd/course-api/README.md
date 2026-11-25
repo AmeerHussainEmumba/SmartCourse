@@ -30,3 +30,11 @@ This service's database connection is the `svc_course` role with search path `co
 ## Observability
 
 `runtime.Main` calls `deps.Observe` (tracing, RED metrics, outbox gauges via `WithOutbox`); `wire.go` calls `temporal.Observe` (the client interceptor, so `POST /courses/{id}/publish` continues into the workflow run). `/metrics` is served only on the internal listener, unauthenticated by design, so bind it privately. Tracing is a no-op without `OTEL_EXPORTER_OTLP_ENDPOINT` and never delays start-up when the collector is down. `wire_telemetry_test.go` proves a real archive request writes an outbox row with the request's trace id, span id and actor.
+
+## Configuration
+
+**Required:** `POSTGRES_DSN` (`svc_course`), `POSTGRES_SEARCH_PATH=course,public`, `REDIS_ADDR`, `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY_ID`, `MINIO_SECRET_ACCESS_KEY`, `JWT_SIGNING_KEY` (groups Postgres, Redis, MinIO, JWT).
+
+**Optional:** `HTTP_PORT`, `MINIO_USE_SSL`, `MINIO_BUCKET_ASSETS`, `MINIO_PUBLIC_ENDPOINT`, `TEMPORAL_*` (dialled lazily), `JWT_ISSUER` and TTLs, `CORS_ALLOWED_ORIGINS`, the HTTP hardening settings, `METRICS_HTTP_ADDR`, `OTEL_*`.
+
+**Not read:** Kafka (the outbox is relayed by course-worker), Argon (it hashes no password), MongoDB. Declared in `main.go` as `requirements` and loaded with `config.LoadWith` through `runtime.WithConfig`; `config_test.go` proves the binary loads with only these variables and names a missing one. Per-variable reference: `env.example` and `libs/config/README.md`.

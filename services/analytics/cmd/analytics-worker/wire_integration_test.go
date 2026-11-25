@@ -68,7 +68,7 @@ func start(t *testing.T, mongoURI string) *stack {
 		"POSTGRES_DSN": env.ServiceDSN(t, "analytics"), "POSTGRES_SEARCH_PATH": "analytics,public",
 		"REDIS_ADDR": env.RDB.Options().Addr, "JWT_SIGNING_KEY": "test-signing-key-0123456789-abcdefghij",
 		"MINIO_ENDPOINT": "127.0.0.1:1", "MINIO_ACCESS_KEY_ID": "x", "MINIO_SECRET_ACCESS_KEY": "y",
-		"EVENT_TRANSPORT": "kafka", "KAFKA_BROKERS": strings.Join(kb.Brokers, ","), "SCHEMA_REGISTRY_URL": reg.URL,
+		"KAFKA_BROKERS": strings.Join(kb.Brokers, ","), "SCHEMA_REGISTRY_URL": reg.URL,
 		"METRICS_HTTP_ADDR": s.internal, "MONGO_URI": mongoURI,
 		"KAFKA_CONSUMER_BACKOFF_BASE": "20ms", "KAFKA_CONSUMER_BACKOFF_MAX": "100ms",
 	} {
@@ -77,7 +77,7 @@ func start(t *testing.T, mongoURI string) *stack {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- runtime.Run(ctx, "analytics-worker", wire, runtime.WithLogger(quiet))
+		done <- runtime.Run(ctx, "analytics-worker", wire, runtime.WithConfig(loadConfig), runtime.WithLogger(quiet))
 	}()
 	var once sync.Once
 	var runErr error

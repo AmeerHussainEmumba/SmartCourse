@@ -42,8 +42,17 @@ func main() {
 
 // connect builds the identity service on the configured Postgres and Redis and
 // returns the function that closes them.
+// requirements are the configuration groups the CLI needs: Postgres and Redis
+// (the service writes the user and the token-version key) and Argon (it hashes
+// the password). It signs no token, so JWT_SIGNING_KEY is not required, and it
+// neither reads nor writes Kafka or the object store.
+var requirements = config.Requirements{Postgres: true, Redis: true, Argon: true}
+
+// loadConfig is the CLI's configuration loader.
+func loadConfig() (*config.Config, error) { return config.LoadWith(requirements) }
+
 func connect(_ context.Context) (bootstrapper, func(), error) {
-	cfg, err := config.Load()
+	cfg, err := loadConfig()
 	if err != nil {
 		return nil, nil, fmt.Errorf("configuration error: %w", err)
 	}

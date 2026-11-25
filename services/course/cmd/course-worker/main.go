@@ -16,10 +16,25 @@
 // idempotency_keys here is the course schema's own.
 package main
 
-import "github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
+import (
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
+)
 
 // The workflow_* counters (runtime.WithWorkflows) belong to the process that
 // runs the workflow worker, which is publishing-worker, not this one.
 func main() {
-	runtime.Main("course-worker", wire, runtime.WithOutbox())
+	runtime.Main("course-worker", wire, options()...)
+}
+
+// requirements are the configuration groups this binary needs; it starts without
+// the variables of any other group. It relays course.outbox, consumes Kafka and runs the Temporal activities that write to the object store; MONGO_URI stays optional (dead-letter parking).
+var requirements = config.Requirements{Postgres: true, Redis: true, MinIO: true, Kafka: true}
+
+// loadConfig is the runtime's configuration loader for this binary.
+func loadConfig() (*config.Config, error) { return config.LoadWith(requirements) }
+
+// options is the runtime configuration of this binary.
+func options() []runtime.Option {
+	return []runtime.Option{runtime.WithConfig(loadConfig), runtime.WithOutbox()}
 }

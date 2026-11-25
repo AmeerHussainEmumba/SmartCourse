@@ -63,7 +63,7 @@ func startAPI(t *testing.T, env *testenv.Env) (public, internal string) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- runtime.Run(ctx, "identity-api", wire, runtime.WithOutbox()) }()
+	go func() { done <- runtime.Run(ctx, "identity-api", wire, options()...) }()
 	t.Cleanup(func() {
 		cancel()
 		select {

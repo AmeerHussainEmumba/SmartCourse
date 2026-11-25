@@ -29,7 +29,6 @@ type Config struct {
 	Asynq    AsynqConfig
 	Jobs     JobsConfig
 	Mongo    MongoConfig
-	Admin    AdminConfig
 	Kafka    KafkaConfig
 
 	Telemetry TelemetryConfig
@@ -170,8 +169,9 @@ func Load() (*Config, error) { return LoadWith(AllRequirements()) }
 // Requirements declares which required-variable groups a binary needs. A group
 // that is not requested is neither required nor validated: its fields keep
 // their zero value (or documented default) and a bad value in it cannot stop
-// the binary. Optional groups (Temporal, Telemetry, Kafka, SMTP, Asynq, Mongo,
-// Admin, HTTP limits) are always read and shape-validated, as in Load.
+// the binary. Optional settings (Temporal, Telemetry, SMTP, Asynq, Jobs, the
+// Kafka and Mongo tuning, HTTP limits) are always read and shape-validated, as
+// in Load; Kafka and Mongo only add the "required" rule when requested.
 type Requirements struct {
 	// Postgres requires POSTGRES_DSN and POSTGRES_SEARCH_PATH and checks the
 	// pool sizes (including the relay pool rule).
@@ -184,9 +184,17 @@ type Requirements struct {
 	JWT bool
 	// Argon validates the ARGON2_* settings.
 	Argon bool
+	// Kafka requires KAFKA_BROKERS (host:port seeds) and SCHEMA_REGISTRY_URL
+	// (http(s) URL) and validates them. The consumer/producer tuning is not part
+	// of the group: it always keeps its defaults.
+	Kafka bool
+	// Mongo requires MONGO_URI. Its shape and the timeouts are validated whenever set.
+	Mongo bool
 }
 
-// AllRequirements is what Load asks for: every group.
+// AllRequirements is what Load asks for: Postgres, Redis, MinIO, JWT and Argon.
+// Kafka and Mongo stay optional there, as before (a binary that needs them asks
+// through LoadWith).
 func AllRequirements() Requirements {
 	return Requirements{Postgres: true, Redis: true, MinIO: true, JWT: true, Argon: true}
 }
@@ -340,15 +348,13 @@ func LoadWith(need Requirements) (*Config, error) {
 	cfg.SMTP, smtpErrs = loadSMTP()
 	errs = append(errs, smtpErrs...)
 	cfg.Asynq, cfg.Jobs = loadAsynq(optInt, optDuration, &errs)
-	var mongoErrs, adminErrs []string
-	cfg.Mongo, mongoErrs = loadMongo(os.Getenv, optDuration)
-	cfg.Admin, adminErrs = loadAdmin(os.Getenv)
+	var mongoErrs []string
+	cfg.Mongo, mongoErrs = loadMongo(need.Mongo, os.Getenv, optDuration)
 	var telemetryErrs []string
 	cfg.Telemetry, telemetryErrs = loadTelemetry(os.Getenv, optBool)
 	errs = append(errs, telemetryErrs...)
 	errs = append(errs, mongoErrs...)
-	errs = append(errs, adminErrs...)
-	cfg.Kafka = loadKafka(os.Getenv, optInt, optDuration, &errs)
+	cfg.Kafka = loadKafka(need.Kafka, os.Getenv, optInt, optDuration, &errs)
 
 	if need.JWT {
 		if len(cfg.JWT.SigningKey) < 32 {

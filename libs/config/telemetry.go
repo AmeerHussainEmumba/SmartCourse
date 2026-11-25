@@ -120,3 +120,17 @@ func listenAddrError(key, addr string) string {
 	}
 	return ""
 }
+
+func validHostname(h string) bool {
+	if len(h) > 253 {
+		return false
+	}
+	for _, r := range h {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}

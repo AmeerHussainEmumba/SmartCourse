@@ -24,7 +24,7 @@ import (
 
 func kafkaCfg() config.KafkaConfig {
 	return config.KafkaConfig{
-		Transport: config.TransportKafka, Brokers: []string{"127.0.0.1:1"}, ConsumerMaxInFlight: 2, ConsumerMaxAttempts: 3,
+		Brokers: []string{"127.0.0.1:1"}, ConsumerMaxInFlight: 2, ConsumerMaxAttempts: 3,
 		ConsumerBackoffBase: time.Millisecond, ConsumerBackoffMax: time.Millisecond, ConsumerShutdownTimeout: time.Second,
 	}
 }
@@ -77,13 +77,12 @@ func TestBuildConsumers_NeedsBrokers(t *testing.T) {
 }
 
 func jobsCfg() *config.Config {
-	return &config.Config{Jobs: config.JobsConfig{AnalyticsReconcileInterval: time.Minute}}
+	return &config.Config{Jobs: config.JobsConfig{AnalyticsReconcileInterval: time.Minute, ProcessedEventsRetention: 14 * 24 * time.Hour}}
 }
 
 // The reconciler runs every minute and processed_events is pruned; nothing
 // else (analytics owns no outbox or idempotency keys).
 func TestBuildJobs_ReconcilerEveryMinuteAndProcessedPrune(t *testing.T) {
-	t.Setenv(ProcessedRetentionEnv, "")
 	js, err := buildJobs(&gorm.DB{}, nil, jobsCfg())
 	if err != nil {
 		t.Fatal(err)
@@ -115,22 +114,12 @@ func TestBuildJobs_ReconcileIntervalComesFromConfig(t *testing.T) {
 	}
 }
 
-func TestProcessedRetention(t *testing.T) {
-	env := func(v string) func(string) string { return func(string) string { return v } }
-	if d, err := processedRetention(env("")); err != nil || d != 14*24*time.Hour {
-		t.Fatalf("default = %v %v, want 14 days", d, err)
-	}
-	if d, err := processedRetention(env("48h")); err != nil || d != 48*time.Hour {
-		t.Fatalf("48h = %v %v", d, err)
-	}
-	for _, bad := range []string{"0", "-1h", "soon", "14d"} {
-		if _, err := processedRetention(env(bad)); err == nil {
-			t.Errorf("%q must be rejected", bad)
-		}
-	}
-	t.Setenv(ProcessedRetentionEnv, "nonsense")
-	if _, err := buildJobs(&gorm.DB{}, nil, jobsCfg()); err == nil {
-		t.Error("buildJobs accepted an invalid retention")
+// The prune retention comes from configuration; a non-positive one is refused.
+func TestBuildJobs_ProcessedRetentionFromConfig(t *testing.T) {
+	cfg := jobsCfg()
+	cfg.Jobs.ProcessedEventsRetention = 0
+	if _, err := buildJobs(&gorm.DB{}, nil, cfg); err == nil {
+		t.Error("buildJobs accepted a zero retention")
 	}
 }
 

@@ -74,26 +74,12 @@ func (r *recorder) RegisterActivityWithOptions(a any, o activity.RegisterOptions
 	r.fns = append(r.fns, a)
 }
 
-func TestProcessedEventsRetention(t *testing.T) {
-	env := func(v string) func(string) string { return func(string) string { return v } }
-	if d, err := processedEventsRetention(env("")); err != nil || d != 14*24*time.Hour {
-		t.Errorf("default = %v, %v; want 14 days", d, err)
-	}
-	if d, err := processedEventsRetention(env("72h")); err != nil || d != 72*time.Hour {
-		t.Errorf("72h = %v, %v", d, err)
-	}
-	for _, bad := range []string{"soon", "0s", "-1h"} {
-		if _, err := processedEventsRetention(env(bad)); err == nil {
-			t.Errorf("%q accepted", bad)
-		}
-	}
-}
-
 func jobsConfig() *config.Config {
 	return &config.Config{
 		Jobs: config.JobsConfig{
 			ReconcilePublishesInterval: time.Minute, EnrollmentCountInterval: time.Hour,
 			IdempotencyPruneInterval: time.Hour, OutboxPruneInterval: time.Hour, OutboxRetention: 168 * time.Hour,
+			ProcessedEventsRetention: 14 * 24 * time.Hour,
 		},
 		Asynq: config.AsynqConfig{
 			LowConcurrency: 3, MaxRetry: 5, BackoffBase: time.Second, BackoffMax: 10 * time.Second, ShutdownTimeout: time.Second,
@@ -105,7 +91,7 @@ func jobsConfig() *config.Config {
 // Every job the course worker owns is scheduled, the stale-publish check every
 // minute, and a bad retention is a start-up error.
 func TestBuildJobs_SchedulesTheFiveCourseJobs(t *testing.T) {
-	js, err := buildJobs(&gorm.DB{}, jobsConfig(), nil, 14*24*time.Hour)
+	js, err := buildJobs(&gorm.DB{}, jobsConfig(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,14 +112,16 @@ func TestBuildJobs_SchedulesTheFiveCourseJobs(t *testing.T) {
 	if spec[TypeReconcileStalePublishes] != "* * * * *" {
 		t.Errorf("stale-publish spec = %q, want every minute", spec[TypeReconcileStalePublishes])
 	}
-	if _, err := buildJobs(&gorm.DB{}, jobsConfig(), nil, 0); err == nil || !strings.Contains(err.Error(), "processed_events") {
+	zero := jobsConfig()
+	zero.Jobs.ProcessedEventsRetention = 0
+	if _, err := buildJobs(&gorm.DB{}, zero, nil); err == nil || !strings.Contains(err.Error(), "processed_events") {
 		t.Errorf("zero processed_events retention accepted: %v", err)
 	}
 }
 
 // The jobs register on the scheduler and the low-queue pool without Redis.
 func TestBuildAsynq_RegistersEveryJobOnTheLowQueue(t *testing.T) {
-	js, err := buildJobs(&gorm.DB{}, jobsConfig(), nil, time.Hour)
+	js, err := buildJobs(&gorm.DB{}, jobsConfig(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

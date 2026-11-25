@@ -54,26 +54,23 @@ func TestLoad_Mongo_URIWithPasswordIsNeverEchoed(t *testing.T) {
 	}
 }
 
-func TestLoad_Admin_AddrDefaultAndValidation(t *testing.T) {
+func TestLoadWith_Mongo_RequiredOnlyWhenRequested(t *testing.T) {
 	setValidEnv(t)
-	t.Setenv("ADMIN_HTTP_ADDR", "")
-	cfg, err := Load()
-	if err != nil || cfg.Admin.Addr != ":8093" {
-		t.Fatalf("default admin addr = %+v, %v", cfg.Admin, err)
+	t.Setenv("MONGO_URI", "")
+	if _, err := Load(); err != nil {
+		t.Fatalf("MONGO_URI is optional by default: %v", err)
 	}
-	for _, ok := range []string{":9000", "127.0.0.1:8093", "worker:8093", "[::1]:8093"} {
-		setValidEnv(t)
-		t.Setenv("ADMIN_HTTP_ADDR", ok)
-		if _, err := Load(); err != nil {
-			t.Errorf("Load rejected ADMIN_HTTP_ADDR=%s: %v", ok, err)
-		}
+	_, err := LoadWith(Requirements{Mongo: true})
+	if err == nil || !strings.Contains(err.Error(), "MONGO_URI is required") {
+		t.Fatalf("want MONGO_URI is required, got %v", err)
 	}
-	for _, bad := range []string{"8093", ":0", ":65536", ":abc", "host", "bad host:80", "a_b:80"} {
-		setValidEnv(t)
-		t.Setenv("ADMIN_HTTP_ADDR", bad)
-		_, err := Load()
-		if err == nil || !strings.Contains(err.Error(), "ADMIN_HTTP_ADDR") {
-			t.Errorf("Load accepted ADMIN_HTTP_ADDR=%s (err %v)", bad, err)
-		}
+	t.Setenv("MONGO_URI", "mongodb://mongodb:27017")
+	cfg, err := LoadWith(Requirements{Mongo: true})
+	if err != nil || !cfg.Mongo.Configured() {
+		t.Fatalf("LoadWith with MONGO_URI: %+v, %v", cfg, err)
+	}
+	t.Setenv("MONGO_URI", "http://x:1")
+	if _, err := LoadWith(Requirements{Mongo: true}); err == nil {
+		t.Fatal("a bad MONGO_URI must still fail")
 	}
 }

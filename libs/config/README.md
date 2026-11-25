@@ -1,6 +1,6 @@
 # libs/config
 
-Fail-fast environment configuration (RFC §11.8). `Load()` reads every `cmd/*` binary's settings from the environment and validates them before anything else runs.
+Fail-fast environment configuration (RFC §11.8). `Load()` (or `LoadWith` for a binary that needs fewer groups) reads every `cmd/*` binary's settings from the environment and validates them before anything else runs.
 
 ## Why this exists as its own package
 
@@ -25,9 +25,18 @@ Fail-fast environment configuration (RFC §11.8). `Load()` reads every `cmd/*` b
 
 `config_test.go` (no build tag — pure env-var logic, no infra) verifies the fail-fast behavior directly: every required var missing individually and in combination (confirming the aggregation, not just that *an* error comes back), `JWT_SIGNING_KEY`'s length check, and that a malformed optional var (an int/bool/duration that fails to parse) is rejected rather than silently falling back to its default.
 
-## Event transport
+## Kafka
 
-`EVENT_TRANSPORT` selects how outbox events reach their handlers (ADR-0029): `inprocess` (default; the relay runs the handlers) or `kafka` (the relay publishes to Kafka and consumer groups run them). Any other value is a startup error, so a typo cannot silently leave events off the broker. In `kafka` mode `KAFKA_BROKERS` (comma-separated host:port) and `SCHEMA_REGISTRY_URL` are required and checked for shape; in `inprocess` mode they are ignored. The consumer tuning (`KAFKA_CONSUMER_MAX_IN_FLIGHT`, `..._MAX_ATTEMPTS`, `..._BACKOFF_BASE`, `..._BACKOFF_MAX`, `..._SHUTDOWN_TIMEOUT`) and `KAFKA_PRODUCE_TIMEOUT` have defaults and are range-checked in every mode. `KAFKA_PRODUCE_TIMEOUT` is capped at 25s because the relay gives one row 30s to claim, publish and record the result. `KAFKA_CONSUMER_MAX_IN_FLIGHT` is per consumer group and each running handler holds a Postgres connection, so the worst case is groups x that value; the pool queues the excess rather than failing, and `Load` does not check it against `POSTGRES_MAX_OPEN_CONNS`.
+Kafka is the only event transport (ADR-0029, `docs/plans/microservices-split.md`): `EVENT_TRANSPORT` and the in-process mode no longer exist, and a stale `EVENT_TRANSPORT` in the environment is ignored. `KAFKA_BROKERS` (comma-separated host:port) and `SCHEMA_REGISTRY_URL` (http or https) are a **required group** for a binary that asks for it (`Requirements.Kafka`): both must be set and are checked for shape. A binary that does not ask neither requires nor reads them. The consumer tuning (`KAFKA_CONSUMER_MAX_IN_FLIGHT`, `..._MAX_ATTEMPTS`, `..._BACKOFF_BASE`, `..._BACKOFF_MAX`, `..._SHUTDOWN_TIMEOUT`) and `KAFKA_PRODUCE_TIMEOUT` have defaults and are range-checked in every binary. `KAFKA_PRODUCE_TIMEOUT` is capped at 25s because the relay gives one row 30s to claim, publish and record the result. `KAFKA_CONSUMER_MAX_IN_FLIGHT` is per consumer group and each running handler holds a Postgres connection, so the worst case is groups x that value; the pool queues the excess rather than failing, and `Load` does not check it against `POSTGRES_MAX_OPEN_CONNS`.
+
+## MongoDB
+
+`MONGO_URI` is optional unless a binary asks for it (`Requirements.Mongo` makes it required). Whenever it is set, its shape (`mongodb://` or `mongodb+srv://`, a host) and the `MONGO_*` timeouts are validated, and the URI is never echoed in an error.
+
+## Retention
+
+`PROCESSED_EVENTS_RETENTION` (`Config.Jobs.ProcessedEventsRetention`, a Go duration, default `336h` = 14 days) is how long a consumer's `processed_events` marker is kept before the prune job deletes it. A zero, negative or unparsable value stops the binary at startup. Keep it longer than the Kafka topic retention and than the longest wait before a parked event is replayed. `course-worker`, `analytics-worker` and `notification-worker` read it from here.
+
 ## Telemetry (Phase 7)
 
 All optional; validated at `Load`, never dialled (an unreachable collector must not stop a service).
@@ -43,4 +52,16 @@ All optional; validated at `Load`, never dialled (an unreachable collector must 
 
 ## Declaring what a binary needs (`LoadWith`)
 
-`Load()` requires every group. A binary that needs fewer calls `config.LoadWith(config.Requirements{Postgres: true, ...})` (pass it to the runtime with `runtime.WithConfig`). Groups: `Postgres` (DSN, search path, pool sizes), `Redis`, `MinIO`, `JWT` (signing key and TTLs), `Argon`. Unrequested groups are not required and not validated; optional groups (Temporal, Telemetry, Kafka, SMTP, Asynq, Mongo, Admin, HTTP limits) are always read and shape-validated. `LoadWith(config.Requirements{})` is the publishing worker's configuration. Tests: `requirements_test.go`.
+`Load()` is `LoadWith(AllRequirements())`: Postgres, Redis, MinIO, JWT and Argon (Kafka and Mongo are not in it; a binary that needs them asks through `LoadWith`). A binary calls `config.LoadWith(config.Requirements{Postgres: true, ...})` and passes it to the runtime with `runtime.WithConfig`. Groups:
+
+| Group | Required when requested |
+|---|---|
+| `Postgres` | `POSTGRES_DSN`, `POSTGRES_SEARCH_PATH`; pool sizes and the relay pool rule are checked |
+| `Redis` | `REDIS_ADDR` |
+| `MinIO` | `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY_ID`, `MINIO_SECRET_ACCESS_KEY` |
+| `JWT` | `JWT_SIGNING_KEY` (length and strength rules), TTLs checked |
+| `Argon` | `ARGON2_*` validated (they have defaults) |
+| `Kafka` | `KAFKA_BROKERS`, `SCHEMA_REGISTRY_URL`, both validated |
+| `Mongo` | `MONGO_URI` |
+
+Unrequested groups are not required and not validated; their fields keep their zero value or documented default. Optional settings (Temporal, Telemetry, SMTP, Asynq and jobs, the Kafka and Mongo tuning, HTTP limits) are always read and shape-validated. The per-binary choices are in `docs/for-the-devs/GETTING_STARTED.md` and each `cmd/*/README.md`; `LoadWith(config.Requirements{})` is the publishing worker's. Tests: `requirements_test.go`, `kafka_test.go`, `mongo_test.go`, `asynq_test.go`.

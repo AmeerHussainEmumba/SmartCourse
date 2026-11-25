@@ -7,17 +7,17 @@ import (
 	"time"
 )
 
-func TestLoad_EventTransport_DefaultsToInProcess(t *testing.T) {
+func TestLoad_Kafka_TuningDefaultsWithoutBrokers(t *testing.T) {
 	setValidEnv(t)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	k := cfg.Kafka
-	if k.Transport != TransportInProcess || k.KafkaEnabled() {
-		t.Errorf("Transport = %q, want %q", k.Transport, TransportInProcess)
+	// The default Load does not ask for Kafka: brokers are neither required nor read.
+	if len(k.Brokers) != 0 || k.SchemaRegistryURL != "" {
+		t.Errorf("unrequested Kafka group was read: %+v", k)
 	}
-	// Tuning has defaults even in in-process mode, so a flip needs only the brokers.
 	if k.ConsumerMaxInFlight != 4 || k.ConsumerMaxAttempts != 8 ||
 		k.ConsumerBackoffBase != 500*time.Millisecond || k.ConsumerBackoffMax != 30*time.Second ||
 		k.ConsumerShutdownTimeout != 30*time.Second || k.ProduceTimeout != 20*time.Second {
@@ -25,30 +25,31 @@ func TestLoad_EventTransport_DefaultsToInProcess(t *testing.T) {
 	}
 }
 
-func TestLoad_EventTransport_InProcessIgnoresBrokers(t *testing.T) {
+func TestLoad_Kafka_UnrequestedIgnoresBrokers(t *testing.T) {
 	setValidEnv(t)
-	t.Setenv("EVENT_TRANSPORT", "inprocess")
 	t.Setenv("KAFKA_BROKERS", "not an address")
+	t.Setenv("SCHEMA_REGISTRY_URL", "nope")
 	if _, err := Load(); err != nil {
-		t.Fatalf("in-process mode must not validate broker addresses: %v", err)
+		t.Fatalf("an unrequested Kafka group must not be validated: %v", err)
 	}
 }
 
-func TestLoad_EventTransport_KafkaRequiresBrokersAndRegistry(t *testing.T) {
+func TestLoadWith_Kafka_RequiresBrokersAndRegistry(t *testing.T) {
 	setValidEnv(t)
-	t.Setenv("EVENT_TRANSPORT", "kafka")
-	_, err := Load()
+	t.Setenv("KAFKA_BROKERS", "")
+	t.Setenv("SCHEMA_REGISTRY_URL", "")
+	_, err := LoadWith(Requirements{Kafka: true})
 	if err == nil || !strings.Contains(err.Error(), "KAFKA_BROKERS is required") || !strings.Contains(err.Error(), "SCHEMA_REGISTRY_URL is required") {
-		t.Fatalf("want both required errors in kafka mode, got %v", err)
+		t.Fatalf("want both required errors, got %v", err)
 	}
 
 	t.Setenv("KAFKA_BROKERS", "kafka-1:9092, kafka-2:9092")
 	t.Setenv("SCHEMA_REGISTRY_URL", "http://schema-registry:8081/")
-	cfg, err := Load()
+	cfg, err := LoadWith(Requirements{Kafka: true})
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("LoadWith: %v", err)
 	}
-	if !cfg.Kafka.KafkaEnabled() || !reflect.DeepEqual(cfg.Kafka.Brokers, []string{"kafka-1:9092", "kafka-2:9092"}) {
+	if !reflect.DeepEqual(cfg.Kafka.Brokers, []string{"kafka-1:9092", "kafka-2:9092"}) {
 		t.Errorf("Kafka = %+v", cfg.Kafka)
 	}
 	if cfg.Kafka.SchemaRegistryURL != "http://schema-registry:8081" {
@@ -56,16 +57,12 @@ func TestLoad_EventTransport_KafkaRequiresBrokersAndRegistry(t *testing.T) {
 	}
 }
 
-func TestLoad_EventTransport_RejectsInvalid(t *testing.T) {
-	for _, v := range []string{"Kafka", "rabbitmq", "in-process", " "} {
-		t.Run(v, func(t *testing.T) {
-			setValidEnv(t)
-			t.Setenv("EVENT_TRANSPORT", v)
-			_, err := Load()
-			if err == nil || !strings.Contains(err.Error(), "EVENT_TRANSPORT must be") {
-				t.Fatalf("want an EVENT_TRANSPORT error, got %v", err)
-			}
-		})
+func TestLoad_EventTransport_IsGone(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("EVENT_TRANSPORT", "rabbitmq")
+	t.Setenv("ADMIN_HTTP_ADDR", "not an addr")
+	if _, err := Load(); err != nil {
+		t.Fatalf("EVENT_TRANSPORT and ADMIN_HTTP_ADDR are no longer read: %v", err)
 	}
 }
 
@@ -99,10 +96,9 @@ func TestLoad_Kafka_BadBrokerAddress(t *testing.T) {
 	for _, v := range []string{"kafka", "kafka:abc", ":9092", "kafka:0", "http://kafka:9092"} {
 		t.Run(v, func(t *testing.T) {
 			setValidEnv(t)
-			t.Setenv("EVENT_TRANSPORT", "kafka")
 			t.Setenv("SCHEMA_REGISTRY_URL", "http://r:8081")
 			t.Setenv("KAFKA_BROKERS", v)
-			_, err := Load()
+			_, err := LoadWith(Requirements{Kafka: true})
 			if err == nil || !strings.Contains(err.Error(), "KAFKA_BROKERS") {
 				t.Fatalf("want a KAFKA_BROKERS error for %q, got %v", v, err)
 			}
@@ -112,10 +108,9 @@ func TestLoad_Kafka_BadBrokerAddress(t *testing.T) {
 
 func TestLoad_Kafka_BadRegistryURL(t *testing.T) {
 	setValidEnv(t)
-	t.Setenv("EVENT_TRANSPORT", "kafka")
 	t.Setenv("KAFKA_BROKERS", "k:9092")
 	t.Setenv("SCHEMA_REGISTRY_URL", "schema-registry:8081")
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "SCHEMA_REGISTRY_URL") {
+	if _, err := LoadWith(Requirements{Kafka: true}); err == nil || !strings.Contains(err.Error(), "SCHEMA_REGISTRY_URL") {
 		t.Fatalf("want a SCHEMA_REGISTRY_URL error, got %v", err)
 	}
 }

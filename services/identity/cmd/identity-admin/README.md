@@ -9,7 +9,7 @@ IDENTITY_ADMIN_NAME      optional, default "Administrator"
 docker compose run --rm -e IDENTITY_ADMIN_EMAIL -e IDENTITY_ADMIN_PASSWORD identity-api identity-admin
 ```
 
-It also needs the usual service environment (`POSTGRES_DSN` for `svc_identity`, `POSTGRES_SEARCH_PATH`, `REDIS_ADDR`, `JWT_SIGNING_KEY`, `ARGON2_*`), which the identity-api container already has. The binary is built into the identity-api image.
+It also needs `POSTGRES_DSN` (`svc_identity`), `POSTGRES_SEARCH_PATH=identity,public` and `REDIS_ADDR` (groups Postgres, Redis; `ARGON2_*` are validated, they have defaults). It signs no token, so `JWT_SIGNING_KEY` is NOT needed, and it reads no Kafka, MinIO or MongoDB setting (`requirements` in `main.go`, `config_test.go`). The binary is built into the identity-api image.
 
 Behaviour: `Service.BootstrapAdmin` validates with the registration rules, hashes with the configured Argon2 settings and, in one transaction, writes the user, `identity.user_registered`, the role change to admin and `identity.user_role_changed`. An existing account with that email is left untouched (never promoted, password unchanged) and the command exits 0 with "already exists". The password and its hash are never printed. The email is marked verified; no mail is sent. Exit codes: 0 created or exists, 1 failure, 2 missing or invalid input.
 
