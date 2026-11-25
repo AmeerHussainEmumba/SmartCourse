@@ -16,11 +16,6 @@ import "testing"
 // "How to extend the harness"), delete its stub below and its line in the
 // allowlist of scripts/check-pending-e2e.sh, and update its matrix row.
 
-// E10: Redis flush with the new services (legacy/scenarios_redis_e2e_test.go).
-func TestE2E_E10_RedisFlushWithNewServices(t *testing.T) {
-	t.Skip("pending: Wave C3b - port to the ten-binary harness; spec and old body in test/e2e/legacy/scenarios_redis_e2e_test.go")
-}
-
 // E11: schema incompatibility (legacy/scenarios_schema_e2e_test.go).
 func TestE2E_E11_SchemaIncompatibility(t *testing.T) {
 	t.Skip("pending: Wave C3b - port to the ten-binary harness; spec and old body in test/e2e/legacy/scenarios_schema_e2e_test.go")
