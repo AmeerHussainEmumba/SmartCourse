@@ -33,7 +33,8 @@ mod=github.com/AmeerHussainEmumba/SmartCourse
 # so does every other forbidden prefix below; course-api's rule is unchanged.
 rules=(
   "services/identity  identity-api  services/course,services/analytics,services/worker,libs/temporal,libs/mongostore,libs/asynqx,libs/kafka  yes 580"
-  "services/analytics analytics-api services/identity,services/course,services/worker,libs/temporal,libs/asynqx,libs/kafka   yes 650"
+  "services/analytics analytics-api services/identity,services/course,services/worker,libs/temporal,libs/asynqx,libs/kafka,libs/eventbus,libs/jobs   yes 650"
+  "services/analytics analytics-worker services/identity,services/course,services/worker,libs/temporal                             yes 695"
   "services/course    course-api    services/identity,services/analytics,services/worker                no  760"
   "services/worker    worker        services/identity                                                   no  855"
 )

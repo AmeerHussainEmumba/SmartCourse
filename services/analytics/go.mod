@@ -21,9 +21,9 @@ require (
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/cache v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/db v0.0.0 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/events v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/idempotency v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/logging v0.0.0 // indirect
+	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox v0.0.0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -142,12 +142,12 @@ require (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/config v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/errors v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/events v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/httpx v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/infra v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/jobs v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/kafka v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/mongostore v0.0.0
-	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/relay v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/router v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/runtime v0.0.0
