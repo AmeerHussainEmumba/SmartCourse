@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- `TemporalConfig.ActivityQueue` (`TEMPORAL_ACTIVITY_QUEUE`, default `course-activities`); `TEMPORAL_TASK_QUEUE` is now the WORKFLOW queue and its default changed from `course-publish` to `publish-workflows` (`libs/contracts/publishing`). A deployment that sets `TEMPORAL_TASK_QUEUE` keeps its value for the workflow, and the activities move to the activity queue: the worker serves both.
+
 - Kafka consumer retry defaults lengthened to 8 attempts, 500 ms base, 30 s cap (about a minute in all), because a handler that depends on another consumer group's mirror (the certificate issuer needs the student name) must outlast that group lagging or starting; with the old 5 x 200 ms it could exhaust in about 3 seconds and park the event. Found by E2E scenario E01.
 - Added `Config.Telemetry` (`TelemetryConfig`, new file `telemetry.go`): `OTEL_EXPORTER_OTLP_ENDPOINT` (host:port or http(s) URL; empty means tracing off), `OTEL_SDK_DISABLED`, `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER_ARG` (0 to 1, default 1), `METRICS_ENABLED` (default true), `METRICS_HTTP_ADDR` (default `:9100`, the worker). All optional; shape-validated at `Load`, never dialled; a URL's credentials are refused and never echoed.
 

@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- `topics`: one retry topic per known consumer, `retry.<consumer-name>` (`Retry`, `IsRetry`, `Consumers`, `RetryTopics`, `Provisioned`, `ProvisionedNames`); `Ensure` creates them with the event topics, `EnsureNamed` creates named topics (a consumer uses it for its own retry topic). The compose test now compares the whole provisioned set, and a second test checks every consumer name declared in `services/` has a retry topic. `All`/`Names` still list only the four event topics.
+
 - `OnExhausted` now receives an `*ExhaustedError` that reads and unwraps as the last attempt's error and carries every attempt's error (`AttemptErrors(err)`), so a dead-letter store can keep one history entry per attempt. Callers that only read the error are unaffected. Found by E2E scenario E04.
 - Added `LagReader` (`NewLagReader`, `Lag`, `Close`): consumer-group lag per (group, topic), summed over partitions, from the brokers through franz-go's admin client (already a dependency of `topics`). A group the broker does not know yields nothing; an unreachable broker or an uncomputable partition is an error, so a metrics caller keeps its last value instead of a false zero. The worker feeds `kafka_consumer_lag` with it.
 

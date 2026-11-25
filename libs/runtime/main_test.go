@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -33,9 +34,9 @@ func TestMainHelper(t *testing.T) {
 			p.Go("core", func(context.Context) error { return errors.New("gone") }, runtime.Critical())
 		case "serve":
 			p.Go("work", func(ctx context.Context) error {
-				os.Stdout.WriteString("READY\n")
+				fmt.Println("READY")
 				<-ctx.Done()
-				os.Stdout.WriteString("DRAINED\n")
+				fmt.Println("DRAINED")
 				return nil
 			})
 		}

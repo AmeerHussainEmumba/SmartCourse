@@ -50,7 +50,7 @@ func TestStartTelemetry_WorkerServesMetricsOnItsOwnListener(t *testing.T) {
 	cfg.Telemetry = config.TelemetryConfig{SampleRatio: 1, MetricsEnabled: true, MetricsAddr: addr}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	obs, shutdown := startTelemetry(ctx, slog.Default(), &infra.Dependencies{DB: env.DB, RDB: env.RDB}, cfg)
+	obs, shutdown := startTelemetry(ctx, slog.Default(), &infra.Dependencies{DB: env.DB, RDB: env.RDB}, cfg, nil)
 
 	var body string
 	deadline := time.Now().Add(10 * time.Second)
@@ -120,7 +120,7 @@ func TestStartTelemetry_DisabledOpensNoListener(t *testing.T) {
 	cfg.Telemetry = config.TelemetryConfig{MetricsEnabled: false, MetricsAddr: addr}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	_, shutdown := startTelemetry(ctx, slog.Default(), &infra.Dependencies{DB: env.DB, RDB: env.RDB}, cfg)
+	_, shutdown := startTelemetry(ctx, slog.Default(), &infra.Dependencies{DB: env.DB, RDB: env.RDB}, cfg, nil)
 	time.Sleep(300 * time.Millisecond)
 	if code, _ := scrapeMetrics(t, addr); code != 0 {
 		t.Errorf("a listener is up on %s with metrics disabled (status %d)", addr, code)

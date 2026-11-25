@@ -35,16 +35,15 @@ const queueGaugeInterval = 15 * time.Second
 //     /metrics, /health/live and /health/ready on METRICS_HTTP_ADDR (default
 //     :9100), not the authenticated admin port; Prometheus and the probes carry
 //     no credentials. Like before, it is only opened when metrics are enabled.
-func startTelemetry(ctx context.Context, logger *slog.Logger, deps *infra.Dependencies, cfg *config.Config) (o *infra.Observability, shutdown func()) {
-	health := runtime.NewHealth()
-	health.Started() // no extra components to wait for: ready as soon as the checks pass
-	return startTelemetryWithHealth(ctx, logger, deps, cfg, health)
-}
-
-// startTelemetryWithHealth is startTelemetry with the readiness state the
-// caller keeps adding checks to (main adds the non-fatal Kafka check once the
-// transport exists) and marks started.
-func startTelemetryWithHealth(ctx context.Context, logger *slog.Logger, deps *infra.Dependencies, cfg *config.Config, health *runtime.Health) (o *infra.Observability, shutdown func()) {
+//
+// health is the readiness state the caller keeps adding checks to (main adds the
+// non-fatal Kafka check once the transport exists, and marks it started); nil
+// means a state that is ready as soon as the checks pass.
+func startTelemetry(ctx context.Context, logger *slog.Logger, deps *infra.Dependencies, cfg *config.Config, health *runtime.Health) (o *infra.Observability, shutdown func()) {
+	if health == nil {
+		health = runtime.NewHealth()
+		health.Started()
+	}
 	o = deps.Observe(ctx, cfg, infra.ObserveOptions{Service: "worker", Outbox: true, Workflows: true})
 
 	temporal.Observe(temporal.Observability{Tracing: o.TracingEnabled(), Metrics: o.Metrics})

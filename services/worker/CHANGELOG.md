@@ -4,6 +4,10 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- `transport/` moved to `libs/eventbus` (microservices split, Wave A2); the worker builds its consumers with `eventbus.NewConsumers(cfg.Kafka, rl.Handlers(), db, ...)`, which also subscribes each group to its `retry.<consumer>` topic. Behaviour otherwise unchanged.
+- The metrics listener code moved to `libs/runtime`; the listener now also serves `/health/live` and `/health/ready` (Postgres and Redis fatal, Kafka non-fatal). It is still opened only when metrics are enabled.
+- Two Temporal workers: the workflow on `TEMPORAL_TASK_QUEUE` (default `publish-workflows`) and the activities on `TEMPORAL_ACTIVITY_QUEUE` (default `course-activities`), by name from `libs/contracts/publishing`.
+
 - E10: the worker admin API's failed-events routes use `auth.RequireFreshPrivilegeStrict`: a token-version cache miss is 401 `token_stale` (fail closed), not "version 1". After a Redis flush an admin is refused there until identity's re-seeder or a login/refresh rewrites the key. Integration tests that call the routes as an admin must seed `user:tv:<id>`.
 - E13: admin replay appends an `audit_log` entry per consumer outcome (`failed_event_replayed`, actor, event id, consumer, outcome; per attempt). `admin.Deps.Auditor` (wired to the MongoDB store in `cmd/worker/mongo_wire.go`), `admin.AuditFailures()`. An audit write failure never undoes the replay; it is logged and counted.
 - E13: the Kafka runner attaches `relay.Source` (topic, partition, offset, key, frame schema id) to each handler's context (`transport.SourceOf`; `Decode` is unchanged); the archiver stores it, so `schema_id` is the registry id and the document has `topic`, `key`, `partition`, `offset` in Kafka mode. In-process stores 0 with header `schema_id_source: none` and no coordinates.

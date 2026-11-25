@@ -1,6 +1,6 @@
 # libs/kafka
 
-A pure-Go Kafka transport for SmartCourse: ADR-0030 (client choice), ADR-0021 (the relay), RFC §6.2, §6.5, §6.6, §6.9. `services/worker/transport` is its one user (ADR-0029): the relay's producer and the worker's consumer groups are built on `Producer`, `Consumer`, `topics` and `HealthCheck`. `libs/relay` does not import it.
+A pure-Go Kafka transport for SmartCourse: ADR-0030 (client choice), ADR-0021 (the relay), RFC §6.2, §6.5, §6.6, §6.9. `libs/eventbus` (formerly `services/worker/transport`) is its one user (ADR-0029): the relay's producer and the services' consumer groups are built on `Producer`, `Consumer`, `topics` and `HealthCheck`. `libs/relay` does not import it.
 
 Built against franz-go v1.22.3 (`pkg/kgo`) with `pkg/kadm` v1.20.0 for topic administration, both BSD-3-Clause. Pure Go, `CGO_ENABLED=0`. It depends on no other SmartCourse module (`testenv` only in tests), and not on `libs/telemetry` or `libs/mongostore`: callers wire metrics and dead-letter parking through `Stats` and the `OnExhausted` hook.
 
@@ -79,3 +79,7 @@ A broker that is stopped behind Docker's published port, or restarting behind a 
 `go test ./...` runs the unit tests (config validation, backoff, the topic list against docker-compose). `go test -tags=integration ./...` needs Docker and runs the integration suite against a real `apache/kafka:3.7.0` broker (the image docker-compose pins) through `testenv.SetupKafka`: round trip with key and headers, ordering per key across four partitions, a consumer cancelled mid-handler redelivering to the next consumer with nothing lost, a poison record not stalling the healthy record behind it, a graceful drain, bounded in-flight work, a consumer joining mid-stream, `Ping`, topic provisioning, and a broker stopped (gracefully and killed without grace) and restarted while four producers are mid-flight.
 
 Not verified: a multi-broker cluster (replication, leader election, `min.insync.replicas`), TLS or SASL, throughput and lag under load, a Confluent-format consumer reading what the relay will produce (that is `libs/events`' open item), a producer whose ack is lost on a broker crash that also loses the producer-state snapshot (the kill test restarts a single broker with its data intact).
+
+## Retry topics
+
+`topics.Retry(name)` is `retry.<consumer-name>`. Each known consumer (`topics.Consumers()`: certificate-issuer, analytics-aggregator, course-instructor-mirror, enrollment-course-archival, notification-dispatcher, audit-archiver) has one, with the same partition count as the event topics (3). `topics.Ensure` and docker-compose's `kafka-init` create them; `TestAll_MatchesComposeKafkaInit` fails when the two lists differ and `TestRetryTopics_CoverEveryConsumerNameInTheCode` fails when a handler declares a consumer name with no retry topic. A consumer group reads its own retry topic through `libs/eventbus`.

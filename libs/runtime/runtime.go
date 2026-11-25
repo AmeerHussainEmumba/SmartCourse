@@ -72,10 +72,9 @@ type Process struct {
 	// Health is the readiness state; Ready adds to it.
 	Health *Health
 
-	ctx    context.Context
-	comps  []component
-	hooks  []hook
-	failMu sync.Mutex
+	ctx   context.Context
+	comps []component
+	hooks []hook
 }
 
 type component struct {

@@ -51,7 +51,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	health := runtime.NewHealth()
-	obs, shutdownTelemetry := startTelemetryWithHealth(ctx, logger, deps, cfg, health) // tracing, internal listener, Temporal interceptors; see telemetry_wire.go
+	obs, shutdownTelemetry := startTelemetry(ctx, logger, deps, cfg, health) // tracing, internal listener, Temporal interceptors; see telemetry_wire.go
 	defer shutdownTelemetry()
 
 	// MongoDB (archive, dead letters) and the admin surface run beside the
