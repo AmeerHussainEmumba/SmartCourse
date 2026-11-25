@@ -100,11 +100,11 @@ func kafkaPublisher(p *runtime.Process) publisherFactory {
 // outbox table, which the svc_identity connection's search_path resolves to
 // identity.outbox.
 func buildRelay(db *gorm.DB, cfg *config.Config, pub relay.Publisher, tracing bool, extra ...relay.Option) *relay.Relay {
-	opts := []relay.Option{relay.WithWorkerCount(cfg.Relay.Workers), relay.WithPublisher(pub)}
+	opts := []relay.Option{relay.WithWorkerCount(cfg.Relay.Workers)}
 	if tracing {
 		opts = append(opts, relay.WithObserver(eventbus.RelayObserver()))
 	}
-	return relay.New(db, append(opts, extra...)...)
+	return relay.New(db, pub, append(opts, extra...)...)
 }
 
 // runRelay waits for Kafka (retrying with capped backoff: the worker's other

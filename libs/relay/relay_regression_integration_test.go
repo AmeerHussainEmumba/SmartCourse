@@ -1,47 +1,41 @@
 //go:build integration
 
 // Regression tests for defects in libs/relay found by adversarial testing and
-// since fixed (F-04 claim lock held through handling, F-05 handler panics
-// recovered, F-28 last_error persisted). They began as bugrepro reproducers;
-// test names are unchanged.
+// since fixed (F-04 claim lock held through delivery, F-05 panics recovered,
+// F-28 last_error persisted). They began as bugrepro reproducers against the
+// removed in-process path and now run on the publish path; test names are
+// unchanged.
 package relay_test
 
 import (
 	"context"
-	"os"
-	"os/exec"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"gorm.io/gorm"
-
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 )
 
-// ADR-0006 / relay.go poll(): "FOR UPDATE SKIP LOCKED lets multiple relay
-// REPLICAS drain the outbox concurrently without double-processing a row".
-// poll() runs the SELECT ... FOR UPDATE SKIP LOCKED inside a transaction that
-// commits immediately, so the row lock is gone before any handler runs. A
-// second relay replica therefore claims and runs the SAME event while the
-// first is still inside its handler.
+// ADR-0006 / relay.go claimAndProcess(): "FOR UPDATE SKIP LOCKED lets multiple
+// relay REPLICAS drain the outbox concurrently without double-processing a
+// row". The claim transaction must keep the row lock until the row is marked
+// published, or a second replica claims and publishes the SAME event while the
+// first is still inside its Publisher.
 //
-// The handler blocks the first invocation until a concurrent second
-// invocation for the same event shows up (or 2s pass). If SKIP LOCKED worked
-// as documented the second invocation can never happen.
+// The publisher blocks the first invocation until a concurrent second
+// invocation for the same event shows up (or 2s pass). If SKIP LOCKED works as
+// documented the second invocation can never happen.
 func TestBugrepro_TwoRelays_SameEventRunsConcurrently(t *testing.T) {
 	env := setupCourse(t)
 	writeTestEvents(t, env.DB, "t.dup", 1)
 
-	var inHandler atomic.Int32
-	var maxConcurrent atomic.Int32
+	var inPublish, maxConcurrent atomic.Int32
 	secondSeen := make(chan struct{})
 	var once sync.Once
-	h := relay.NewHandler("dup", []string{"t.dup"}, func(ctx context.Context, tx *gorm.DB, evt relay.DecodedEvent) error {
-		n := inHandler.Add(1)
-		defer inHandler.Add(-1)
+	pub := publisherFunc(func(ctx context.Context, evt relay.DecodedEvent) error {
+		n := inPublish.Add(1)
+		defer inPublish.Add(-1)
 		for {
 			m := maxConcurrent.Load()
 			if n <= m || maxConcurrent.CompareAndSwap(m, n) {
@@ -59,9 +53,7 @@ func TestBugrepro_TwoRelays_SameEventRunsConcurrently(t *testing.T) {
 		return nil
 	})
 	mk := func() *relay.Relay {
-		rl := relay.New(env.DB, relay.WithPollInterval(20*time.Millisecond), relay.WithWorkerCount(1))
-		rl.Register(h)
-		return rl
+		return relay.New(env.DB, pub, relay.WithPollInterval(20*time.Millisecond), relay.WithWorkerCount(1))
 	}
 	r1, r2 := mk(), mk()
 	stop1, stop2 := startRelay(r1), startRelay(r2)
@@ -72,66 +64,52 @@ func TestBugrepro_TwoRelays_SameEventRunsConcurrently(t *testing.T) {
 	stop2()
 
 	if maxConcurrent.Load() > 1 {
-		t.Errorf("one outbox row was handled by %d relay replicas at the same time; SKIP LOCKED does not protect processing because the claim transaction commits before the handler runs", maxConcurrent.Load())
+		t.Errorf("one outbox row was published by %d relay replicas at the same time; SKIP LOCKED does not protect delivery because the claim transaction released the row before the publish finished", maxConcurrent.Load())
 	}
 	_, f1, g1 := r1.Stats()
 	_, f2, g2 := r2.Stats()
 	if f1+f2 != 0 || g1+g2 != 0 {
-		t.Errorf("spurious failures from the duplicate delivery (processed_events unique violation): failed=%d givenUp=%d", f1+f2, g1+g2)
+		t.Errorf("spurious failures from the duplicate delivery: failed=%d givenUp=%d", f1+f2, g1+g2)
 	}
 }
 
-// relay.go worker(): there is no recover() around process(). A panicking
-// handler (nil map write, bad type assertion, ...) takes down the whole
-// worker process - and with it every other consumer and the Temporal
-// worker - and, because the row stays unpublished, crash-loops on restart.
-// The test re-executes itself as a child process and requires the child to
-// SURVIVE a panicking handler.
-func TestBugrepro_HandlerPanicCrashesWholeProcess(t *testing.T) {
-	if os.Getenv("RELAY_PANIC_CHILD") == "1" {
-		env := setupCourse(t)
-		writeTestEvents(t, env.DB, "t.panic", 1)
-		rl := relay.New(env.DB, relay.WithPollInterval(10*time.Millisecond), relay.WithMaxAttempts(1))
-		rl.Register(relay.NewHandler("panicky", []string{"t.panic"}, func(context.Context, *gorm.DB, relay.DecodedEvent) error {
-			var m map[string]int
-			m["boom"] = 1 // nil map write
-			return nil
-		}))
-		stop := startRelay(rl)
-		eventually(t, 10*time.Second, "panicking event given up", func() bool {
-			_, _, g := rl.Stats()
-			return g == 1
-		})
-		stop()
-		return
+// A panic inside the Publisher (nil map write, bad type assertion, ...) must not
+// take down the whole worker process: it is recovered and counted as a failed
+// attempt, and the row is given up on like any other poison row, so it cannot
+// crash-loop the process on restart.
+func TestBugrepro_PublisherPanicCrashesWholeProcess(t *testing.T) {
+	env := setupCourse(t)
+	writeTestEvents(t, env.DB, "t.panic", 1)
+	pub := publisherFunc(func(context.Context, relay.DecodedEvent) error {
+		var m map[string]int
+		m["boom"] = 1 // nil map write
+		return nil
+	})
+	rl := relay.New(env.DB, pub, relay.WithPollInterval(10*time.Millisecond), relay.WithMaxAttempts(1))
+	stop := startRelay(rl)
+	defer stop()
+	eventually(t, 10*time.Second, "panicking event given up", func() bool {
+		_, _, g := rl.Stats()
+		return g == 1
+	})
+	stop()
+	var lastError *string
+	if err := env.DB.Raw(`SELECT last_error FROM outbox`).Row().Scan(&lastError); err != nil {
+		t.Fatal(err)
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=^TestBugrepro_HandlerPanicCrashesWholeProcess$", "-test.v", "-test.timeout=120s")
-	cmd.Env = append(os.Environ(), "RELAY_PANIC_CHILD=1")
-	out, err := cmd.CombinedOutput()
-	if err != nil && strings.Contains(string(out), "panic: assignment to entry in nil map") {
-		t.Fatalf("a panic inside a relay handler killed the whole process instead of being recovered and counted as a failed delivery:\n%s", tail(string(out), 1500))
-	}
-	if err != nil {
-		t.Fatalf("child failed for another reason: %v\n%s", err, tail(string(out), 1500))
+	if lastError == nil {
+		t.Error("the panic was recovered but last_error does not record it")
 	}
 }
 
-func tail(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[len(s)-n:]
-}
-
-// outbox.last_error exists "for the relay's concern" but is never written.
-// An event the relay gives up on is marked published with no trace of why in
-// the row (no dead-letter store exists; ADR/relay.go admit that). The data
-// needed to diagnose or manually replay it is only in a log line.
+// outbox.last_error is "for the relay's concern": an event the relay gives up on
+// is marked published, and the row must keep why (the data needed to diagnose or
+// replay it must not live only in a log line).
 func TestBugrepro_GivenUpEventRecordsNoLastError(t *testing.T) {
 	env := setupCourse(t)
 	writeTestEvents(t, env.DB, "t.gaveup", 1)
-	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(10*time.Millisecond), relay.WithMaxAttempts(2))
-	rl.Register(relay.NewHandler("gu", []string{"t.gaveup"}, func(context.Context, *gorm.DB, relay.DecodedEvent) error { return errFlaky }))
+	pub := publisherFunc(func(context.Context, relay.DecodedEvent) error { return errFlaky })
+	rl := relay.New(env.DB, pub, relay.WithWorkerCount(1), relay.WithPollInterval(10*time.Millisecond), relay.WithMaxAttempts(2))
 	stop := startRelay(rl)
 	eventually(t, 10*time.Second, "give up", func() bool { _, _, g := rl.Stats(); return g == 1 })
 	stop()

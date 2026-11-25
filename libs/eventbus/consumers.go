@@ -27,7 +27,7 @@ import (
 
 const (
 	// handleTimeout bounds one handler call (decode, transaction, handler), the
-	// same 30 s the in-process relay gives a row. A handler stuck past it fails
+	// same 30 s the relay gives a row. A handler stuck past it fails
 	// the attempt instead of holding its partition forever.
 	handleTimeout = 30 * time.Second
 	// parkTries is how often OnExhausted tries the sink before it gives up and
@@ -91,7 +91,7 @@ type deliverFunc func(ctx context.Context, h relay.Handler, evt relay.DecodedEve
 // offset commit, so a replay that was already applied is absorbed by
 // processed_events.
 // Each record is decoded to a relay.DecodedEvent and given to
-// relay.Deliver, the code the in-process relay uses, so the handler runs in a
+// relay.Deliver, so the handler runs in a
 // transaction that also writes processed_events, and only when that commits does
 // libs/kafka commit the offset. A handler that fails past MaxAttempts is parked
 // through the sink and the offset advances, so a poison record never stalls its
@@ -280,7 +280,7 @@ func (r *Consumers) runGroup(ctx context.Context, g group) {
 
 // handle is the kafka.Handler for one consumer group: decode, then run every
 // handler of the group that registered for the event type through
-// relay.Deliver (as the in-process relay does; a record whose type no handler of
+// relay.Deliver (a record whose type no handler of
 // the group registered for is skipped, since the topic carries other types). One
 // handler's failure does not stop the others for this record; a retry re-runs
 // them all, and Deliver's processed_events check makes the finished ones no-ops.

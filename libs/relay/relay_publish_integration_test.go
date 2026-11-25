@@ -33,6 +33,25 @@ type sinkFunc func(ctx context.Context, d relay.DeadLetter) error
 
 func (f sinkFunc) Park(ctx context.Context, d relay.DeadLetter) error { return f(ctx, d) }
 
+// createEffectsTable creates a fixture table in the course schema as the OWNER
+// (a service role has no DDL); the default privileges let svc_course use it.
+func createEffectsTable(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	if err := db.Exec(`CREATE TABLE course.test_effects (
+		consumer TEXT NOT NULL, event_id UUID NOT NULL, n SERIAL, PRIMARY KEY (consumer, event_id))`).Error; err != nil {
+		t.Fatalf("create test_effects: %v", err)
+	}
+}
+
+// effectHandler writes one row into test_effects inside Deliver's transaction: a
+// duplicate effect would violate the primary key, so "no double effect" is
+// enforced by the schema, not by a counter the test could get wrong.
+func effectHandler(consumer string, types ...string) relay.Handler {
+	return relay.NewHandler(consumer, types, func(ctx context.Context, tx *gorm.DB, evt relay.DecodedEvent) error {
+		return tx.Exec(`INSERT INTO course.test_effects (consumer, event_id) VALUES (?, ?)`, consumer, evt.EventID).Error
+	})
+}
+
 func writeFor(t *testing.T, db *gorm.DB, agg uuid.UUID, eventType string, i int) {
 	t.Helper()
 	err := db.Transaction(func(tx *gorm.DB) error {
@@ -66,8 +85,7 @@ func TestRelayPublish_MarkedPublishedOnlyAfterPublisherReturnsNil(t *testing.T) 
 		}
 		return nil
 	})
-	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(10*time.Millisecond),
-		relay.WithPublisher(pub), relay.WithMaxAttempts(5))
+	rl := relay.New(env.DB, pub, relay.WithWorkerCount(1), relay.WithPollInterval(10*time.Millisecond), relay.WithMaxAttempts(5))
 	stop := startRelay(rl)
 	defer stop()
 
@@ -123,7 +141,7 @@ func TestRelayPublish_PerAggregateOrderHoldsWithManyWorkers(t *testing.T) {
 		total.Add(1)
 		return nil
 	})
-	rl := relay.New(env.DB, relay.WithWorkerCount(4), relay.WithPollInterval(5*time.Millisecond), relay.WithPublisher(pub))
+	rl := relay.New(env.DB, pub, relay.WithWorkerCount(4), relay.WithPollInterval(5*time.Millisecond))
 	stop := startRelay(rl)
 	defer stop()
 	eventually(t, 30*time.Second, "all rows published", func() bool { return unpublished(t, env.DB) == 0 })
@@ -158,8 +176,7 @@ func TestRelayPublish_TransientFailuresDoNotConsumeTheBudget(t *testing.T) {
 		return nil
 	})
 	sink := sinkFunc(func(context.Context, relay.DeadLetter) error { parked.Add(1); return nil })
-	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(5*time.Millisecond), relay.WithPublishBackoff(10*time.Millisecond),
-		relay.WithPublisher(pub), relay.WithMaxAttempts(2), relay.WithDeadLetterSink(sink))
+	rl := relay.New(env.DB, pub, relay.WithWorkerCount(1), relay.WithPollInterval(5*time.Millisecond), relay.WithPublishBackoff(10*time.Millisecond), relay.WithMaxAttempts(2), relay.WithDeadLetterSink(sink))
 	stop := startRelay(rl)
 	defer stop()
 
@@ -208,8 +225,7 @@ func TestRelayPublish_PoisonRowIsParkedAndDoesNotBlockOthers(t *testing.T) {
 		mu.Unlock()
 		return nil
 	})
-	rl := relay.New(env.DB, relay.WithWorkerCount(2), relay.WithPollInterval(5*time.Millisecond),
-		relay.WithPublisher(pub), relay.WithMaxAttempts(3), relay.WithDeadLetterSink(sink))
+	rl := relay.New(env.DB, pub, relay.WithWorkerCount(2), relay.WithPollInterval(5*time.Millisecond), relay.WithMaxAttempts(3), relay.WithDeadLetterSink(sink))
 	stop := startRelay(rl)
 	defer stop()
 	eventually(t, 15*time.Second, "everything drained", func() bool { return unpublished(t, env.DB) == 0 })
@@ -253,11 +269,9 @@ func TestRelayDeadLetter_ParkedBeforeDrop_RefusedParkKeepsTheRow(t *testing.T) {
 		}
 		return nil
 	})
-	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(5*time.Millisecond), relay.WithPublishBackoff(10*time.Millisecond),
+	pub := publisherFunc(func(context.Context, relay.DecodedEvent) error { return errFlaky })
+	rl := relay.New(env.DB, pub, relay.WithWorkerCount(1), relay.WithPollInterval(5*time.Millisecond), relay.WithPublishBackoff(10*time.Millisecond),
 		relay.WithMaxAttempts(2), relay.WithDeadLetterSink(sink))
-	rl.Register(relay.NewHandler("dl-consumer", []string{"t.dl"}, func(context.Context, *gorm.DB, relay.DecodedEvent) error {
-		return errFlaky
-	}))
 	stop := startRelay(rl)
 	defer stop()
 
@@ -285,8 +299,8 @@ func TestRelayDeadLetter_ParkedBeforeDrop_RefusedParkKeepsTheRow(t *testing.T) {
 func TestRelayDeadLetter_NoSinkStillDropsAfterBudget(t *testing.T) {
 	env := setupCourse(t)
 	writeTestEvents(t, env.DB, "t.nosink", 1)
-	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(5*time.Millisecond), relay.WithMaxAttempts(2))
-	rl.Register(relay.NewHandler("c", []string{"t.nosink"}, func(context.Context, *gorm.DB, relay.DecodedEvent) error { return errFlaky }))
+	pub := publisherFunc(func(context.Context, relay.DecodedEvent) error { return errFlaky })
+	rl := relay.New(env.DB, pub, relay.WithWorkerCount(1), relay.WithPollInterval(5*time.Millisecond), relay.WithMaxAttempts(2))
 	stop := startRelay(rl)
 	defer stop()
 	eventually(t, 10*time.Second, "event given up", func() bool { return unpublished(t, env.DB) == 0 })
@@ -295,8 +309,9 @@ func TestRelayDeadLetter_NoSinkStillDropsAfterBudget(t *testing.T) {
 	}
 }
 
-// In-process mode is untouched by the transport options: handlers run in the
-// relay, one effect per event, nothing is published anywhere.
+// Deliver is what the Kafka consumers call: one effect per event however often
+// it is redelivered, a processed_events marker, a handler panic returned as an
+// error.
 func TestRelayDeliver_IsIdempotentAndWritesProcessedEvents(t *testing.T) {
 	env := setupCourse(t)
 	createEffectsTable(t, env.Owner)

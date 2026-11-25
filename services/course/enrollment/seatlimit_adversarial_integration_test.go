@@ -20,6 +20,7 @@ import (
 	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay/relaytest"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/enrollment"
 )
@@ -268,10 +269,7 @@ func TestAdv_ArchiveRacingWithEnroll_NoSeatsLeftAfterRelay(t *testing.T) {
 	}
 	env.DB.Raw(`SELECT archived_at FROM courses WHERE id = ?`, courseID).Row().Scan(&archivedAt)
 
-	rl := relay.New(env.DB, relay.WithPollInterval(10*time.Millisecond))
-	for _, h := range enrollment.Handlers() {
-		rl.Register(h)
-	}
+	rl := relay.New(env.DB, relaytest.DeliverTo(env.DB, enrollment.Handlers()...), relay.WithPollInterval(10*time.Millisecond))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { rl.Run(ctx); close(done) }()

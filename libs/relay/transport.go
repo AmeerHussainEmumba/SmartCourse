@@ -14,7 +14,7 @@ import (
 // publishing (publish mode), as opposed to a named handler's consumer.
 const RelayConsumer = "relay"
 
-// DeadLetter is an event something gave up on: the in-process relay after its
+// DeadLetter is an event something gave up on: the relay after its publish
 // retry budget, or a Kafka consumer after its own.
 type DeadLetter struct {
 	Event DecodedEvent
@@ -77,17 +77,14 @@ func IsTransient(err error) bool {
 	return errors.As(err, &t)
 }
 
-// The two delivery modes an Observer is told about.
-const (
-	// ModePublish: the relay hands the row to the Publisher (kafka transport).
-	ModePublish = "publish"
-	// ModeProcess: the relay runs the registered handlers itself (in-process).
-	ModeProcess = "process"
-)
+// ModePublish is the delivery mode an Observer is told about: the relay hands
+// the row to the Publisher. It is the only mode; the parameter stays so the
+// span attribute (smartcourse.relay.mode) keeps its name.
+const ModePublish = "publish"
 
 // Observer is the observability seam of the relay: it is called once per
 // delivery attempt of an outbox row, after the row is claimed and before the
-// Publisher or the handlers run, and returns the context they run under plus a
+// Publisher runs, and returns the context they run under plus a
 // finish function called with the attempt's outcome (nil on success). The
 // worker implements it with libs/telemetry (a span continuing the trace stored
 // on the row, which the Publisher then injects into the Kafka record); this
@@ -99,22 +96,15 @@ const (
 // logged and ignored.
 type Observer func(ctx context.Context, evt DecodedEvent, mode string) (context.Context, func(err error))
 
-// HandlerHook is called after each handler the in-process relay runs for a row:
-// duplicate is true when the consumer had already processed the event (the
-// handler did not run), err is the handler's error. The worker counts
-// event_processed_total from it. It is not called in publish mode, where the
-// Kafka consumers run the handlers.
-type HandlerHook func(consumer string, duplicate bool, err error)
-
 // Handles reports whether h is registered for eventType.
 func (h Handler) Handles(eventType string) bool { return h.EventTypes[eventType] }
 
-// Deliver runs h for evt on db: RFC §6.6's idempotency rule, the same code path
-// the in-process relay uses. In one transaction it skips an event the consumer
+// Deliver runs h for evt on db: RFC §6.6's idempotency rule, the code path
+// the Kafka consumers use. In one transaction it skips an event the consumer
 // already processed, otherwise runs the handler and writes the processed_events
 // marker, so a replay cannot apply twice. A handler panic is recovered and
 // returned as an error (the transaction rolls back). The Kafka consumers call
-// this, which is what makes the same handlers run under both transports.
+// this.
 func Deliver(ctx context.Context, db *gorm.DB, h Handler, evt DecodedEvent) error {
 	_, err := DeliverEvent(ctx, db, h, evt)
 	return err

@@ -1,11 +1,10 @@
 //go:build integration
 
-// The relay's observability seams (Observer, HandlerHook) and the event_id on
-// its log lines, against real Postgres: the observer is told each delivery in
-// the right mode and its context reaches the Publisher and the handlers; its
-// finish function sees the outcome; a panicking observer does not stop the
-// delivery; the hook separates processed from duplicate and failed; and the
-// relay's logs carry event_id.
+// The relay's observability seam (Observer) and the event_id on its log lines,
+// against real Postgres: the observer is told each delivery in publish mode and
+// its context reaches the Publisher; its finish function sees the outcome; a
+// panicking observer does not stop the delivery; and the relay's logs carry
+// event_id.
 package relay_test
 
 import (
@@ -15,13 +14,12 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-	"gorm.io/gorm"
-
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
+	"github.com/google/uuid"
 )
 
 type obsKey struct{}
@@ -62,8 +60,8 @@ func TestRelayObserver_PublishModeContextReachesPublisher(t *testing.T) {
 		got <- ctx.Value(obsKey{})
 		return nil
 	})
-	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(10*time.Millisecond),
-		relay.WithPublisher(pub), relay.WithObserver(obs.observe))
+	rl := relay.New(env.DB, pub, relay.WithWorkerCount(1), relay.WithPollInterval(10*time.Millisecond),
+		relay.WithObserver(obs.observe))
 	stop := startRelay(rl)
 	defer stop()
 
@@ -71,39 +69,34 @@ func TestRelayObserver_PublishModeContextReachesPublisher(t *testing.T) {
 	if v := <-got; v != relay.ModePublish {
 		t.Errorf("the Publisher's context carried %v, want the observer's value for mode %q", v, relay.ModePublish)
 	}
+	eventually(t, 5*time.Second, "observer finished", func() bool { _, done := obs.snapshot(); return len(done) == 1 })
 	seen, done := obs.snapshot()
-	if len(seen) != 1 || seen[0].EventType != "t.obs" || len(done) != 1 || done[0].err != nil {
+	if len(seen) != 1 || seen[0].EventType != "t.obs" || done[0].err != nil {
 		t.Errorf("observer saw %v and finished %v; want one delivery of t.obs finishing with no error", seen, done)
 	}
 }
 
-func TestRelayObserver_ProcessModeAndFailureOutcome(t *testing.T) {
+func TestRelayObserver_FailureOutcomeIsReportedPerAttempt(t *testing.T) {
 	env := setupCourse(t)
 	writeFor(t, env.DB, uuid.New(), "t.proc", 0)
 
 	obs := &recObserver{}
-	boom := errors.New("handler boom")
-	ctxModes := make(chan any, 8)
-	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(10*time.Millisecond),
+	boom := errors.New("publish boom")
+	pub := publisherFunc(func(context.Context, relay.DecodedEvent) error { return boom })
+	rl := relay.New(env.DB, pub, relay.WithWorkerCount(1), relay.WithPollInterval(10*time.Millisecond),
 		relay.WithMaxAttempts(2), relay.WithObserver(obs.observe))
-	rl.Register(relay.NewHandler("c", []string{"t.proc"}, func(ctx context.Context, _ *gorm.DB, _ relay.DecodedEvent) error {
-		ctxModes <- ctx.Value(obsKey{})
-		return boom
-	}))
 	stop := startRelay(rl)
 	defer stop()
 
 	eventually(t, 10*time.Second, "row given up", func() bool { _, _, g := rl.Stats(); return g == 1 })
-	if v := <-ctxModes; v != relay.ModeProcess {
-		t.Errorf("the handler's context carried %v, want mode %q", v, relay.ModeProcess)
-	}
+	stop()
 	_, done := obs.snapshot()
 	if len(done) != 2 {
 		t.Fatalf("want one finish per attempt (2), got %d", len(done))
 	}
 	for _, d := range done {
-		if !errors.Is(d.err, boom) || !strings.Contains(d.err.Error(), "c:") {
-			t.Errorf("finish error = %v, want the handler's error naming consumer c", d.err)
+		if !errors.Is(d.err, boom) || !strings.Contains(d.err.Error(), relay.RelayConsumer+":") {
+			t.Errorf("finish error = %v, want the publisher's error attributed to %q", d.err, relay.RelayConsumer)
 		}
 	}
 }
@@ -114,7 +107,10 @@ func TestRelayObserver_PanickingObserverDoesNotStopDelivery(t *testing.T) {
 	writeFor(t, env.DB, uuid.New(), "t.panic", 1)
 
 	n := 0
-	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(10*time.Millisecond),
+	var published sync.WaitGroup
+	published.Add(2)
+	pub := publisherFunc(func(context.Context, relay.DecodedEvent) error { published.Done(); return nil })
+	rl := relay.New(env.DB, pub, relay.WithWorkerCount(1), relay.WithPollInterval(10*time.Millisecond),
 		relay.WithObserver(func(ctx context.Context, _ relay.DecodedEvent, _ string) (context.Context, func(error)) {
 			n++
 			if n == 1 {
@@ -122,66 +118,10 @@ func TestRelayObserver_PanickingObserverDoesNotStopDelivery(t *testing.T) {
 			}
 			return ctx, func(error) { panic("observer finish") }
 		}))
-	var handled sync.WaitGroup
-	handled.Add(2)
-	rl.Register(relay.NewHandler("c", []string{"t.panic"}, func(context.Context, *gorm.DB, relay.DecodedEvent) error {
-		handled.Done()
-		return nil
-	}))
 	stop := startRelay(rl)
 	defer stop()
-	handled.Wait()
+	published.Wait()
 	eventually(t, 10*time.Second, "both rows published", func() bool { return unpublished(t, env.DB) == 0 })
-}
-
-func TestRelayHandlerHook_SeparatesProcessedDuplicateFailed(t *testing.T) {
-	env := setupCourse(t)
-	agg := uuid.New()
-	writeFor(t, env.DB, agg, "t.hook", 0)
-
-	type call struct {
-		consumer  string
-		duplicate bool
-		failed    bool
-	}
-	var mu sync.Mutex
-	var calls []call
-	var failOnce sync.Once
-	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(10*time.Millisecond), relay.WithMaxAttempts(5),
-		relay.WithHandlerHook(func(consumer string, duplicate bool, err error) {
-			mu.Lock()
-			calls = append(calls, call{consumer, duplicate, err != nil})
-			mu.Unlock()
-		}))
-	rl.Register(relay.NewHandler("good", []string{"t.hook"}, func(context.Context, *gorm.DB, relay.DecodedEvent) error { return nil }))
-	rl.Register(relay.NewHandler("flaky", []string{"t.hook"}, func(context.Context, *gorm.DB, relay.DecodedEvent) error {
-		var err error
-		failOnce.Do(func() { err = errors.New("first attempt fails") })
-		return err
-	}))
-	stop := startRelay(rl)
-	defer stop()
-	eventually(t, 10*time.Second, "row published", func() bool { return unpublished(t, env.DB) == 0 })
-
-	mu.Lock()
-	defer mu.Unlock()
-	// Attempt 1: good processed, flaky failed. Attempt 2: good is now a duplicate
-	// (its marker committed), flaky processed.
-	want := map[call]int{
-		{"good", false, false}:  1,
-		{"flaky", false, true}:  1,
-		{"good", true, false}:   1,
-		{"flaky", false, false}: 1,
-	}
-	got := map[call]int{}
-	for _, c := range calls {
-		got[c]++
-	}
-	for c, n := range want {
-		if got[c] != n {
-			t.Errorf("hook calls %+v = %d, want %d (all: %+v)", c, got[c], n, calls)
-		}
-	}
 }
 
 // The relay's own log lines about a row carry event_id (RFC §12.4).
@@ -192,25 +132,26 @@ func TestRelayLogs_CarryEventID(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	agg := uuid.New()
-	writeFor(t, env.DB, agg, "t.log", 0)
-	var eventID string
-	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(10*time.Millisecond), relay.WithMaxAttempts(1))
-	rl.Register(relay.NewHandler("c", []string{"t.log"}, func(_ context.Context, _ *gorm.DB, evt relay.DecodedEvent) error {
-		eventID = evt.EventID.String()
+	writeFor(t, env.DB, uuid.New(), "t.log", 0)
+	var eventID atomic.Value
+	pub := publisherFunc(func(_ context.Context, evt relay.DecodedEvent) error {
+		eventID.Store(evt.EventID.String())
 		return errors.New("always fails")
-	}))
+	})
+	rl := relay.New(env.DB, pub, relay.WithWorkerCount(1), relay.WithPollInterval(10*time.Millisecond), relay.WithMaxAttempts(1))
 	stop := startRelay(rl)
 	defer stop()
 	eventually(t, 10*time.Second, "row given up", func() bool { _, _, g := rl.Stats(); return g == 1 })
+	stop()
 
-	for _, msg := range []string{"relay handler failed", "relay: giving up on event after max attempts"} {
+	id, _ := eventID.Load().(string)
+	for _, msg := range []string{"relay publish failed", "relay: giving up on event after max attempts"} {
 		line := buf.lineWith(msg)
 		if line == "" {
 			t.Fatalf("no log line %q in:\n%s", msg, buf.String())
 		}
-		if !strings.Contains(line, `"event_id":"`+eventID+`"`) {
-			t.Errorf("log line %q lacks event_id %s: %s", msg, eventID, line)
+		if !strings.Contains(line, `"event_id":"`+id+`"`) {
+			t.Errorf("log line %q lacks event_id %s: %s", msg, id, line)
 		}
 	}
 }

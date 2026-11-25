@@ -92,8 +92,8 @@ func (s *stack) publisher(produceTimeout time.Duration) *eventbus.Publisher {
 func (s *stack) startRelay(pub relay.Publisher, workers int, opts ...relay.Option) (*relay.Relay, func()) {
 	s.t.Helper()
 	base := []relay.Option{relay.WithWorkerCount(workers), relay.WithPollInterval(10 * time.Millisecond),
-		relay.WithPublishBackoff(100 * time.Millisecond), relay.WithPublisher(pub)}
-	rl := relay.New(s.env.DB, append(base, opts...)...)
+		relay.WithPublishBackoff(100 * time.Millisecond)}
+	rl := relay.New(s.env.DB, pub, append(base, opts...)...)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { rl.Run(ctx); close(done) }()

@@ -163,10 +163,10 @@ func encodeTo(topic string, schemaID uint32, version int32, evt relay.DecodedEve
 }
 
 // Decode turns a consumed record back into the relay.DecodedEvent the handlers
-// take, so the same handlers run under both transports. The payload becomes JSON
+// take, so the handlers get the event the writer recorded. The payload becomes JSON
 // with the proto field names (snake_case), the keys the outbox payloads use.
 //
-// Differences from the in-process event, all harmless to the handlers in this
+// Differences from the outbox row's event, all harmless to the handlers in this
 // repository but worth knowing: SchemaVersion is the registry version of the
 // payload subject, not the outbox row's schema_version; Attempts is 0; fields
 // the producer left at their zero value are absent from the JSON; timestamps are

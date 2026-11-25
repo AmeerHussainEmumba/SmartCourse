@@ -103,13 +103,7 @@ func TestPublishOnlyRelayFeedsConsumersBuiltFromHandlers(t *testing.T) {
 	for n := 0; n < 5; n++ {
 		s.write(agg, n)
 	}
-	rl, _ := s.startRelay(s.publisher(10*time.Second), 2)
-	if h := rl.Handlers(); len(h) != 0 {
-		t.Fatalf("the publish-only relay has handlers %v", h)
-	}
-	if !rl.Publishing() {
-		t.Fatal("relay is not in publish mode")
-	}
+	s.startRelay(s.publisher(10*time.Second), 2)
 	s.startRunner(runnerCfg{}, effectHandler("publish-only-consumer", nil))
 	s.eventually(60*time.Second, "all events consumed", func() bool {
 		return s.count(`SELECT count(*) FROM public.test_effects`) == 5

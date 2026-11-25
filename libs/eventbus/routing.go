@@ -8,8 +8,8 @@
 //
 // The relay remains the only path from an outbox to Kafka (RFC §6.2): nothing
 // here reads the outbox, and the Publisher is only ever called by the relay. A
-// service wires two independent things: relay.New(db, relay.WithPublisher(p))
-// with no handler registered, and NewConsumers(cfg, handlers, db) for the events
+// service wires two independent things: relay.New(db, p)
+// (it takes no handler), and NewConsumers(cfg, handlers, db) for the events
 // it consumes.
 package eventbus
 
