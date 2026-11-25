@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
 )
 
 func TestFailedSend_IsNotReEnqueuedBySweepBeforeRequeueAfter(t *testing.T) {

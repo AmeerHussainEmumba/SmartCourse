@@ -130,3 +130,21 @@ func TestSMTPBuild_ToDisplayNameIsSanitised(t *testing.T) {
 		t.Errorf("the To header carries the attacker's URL:\n%s", raw)
 	}
 }
+
+// cleanLine is the only thing between a hostile display name or subject and a
+// header line. It used to be tested only through build(), where the MIME Q
+// encoder also neutralised CR and LF, so making cleanLine the identity function
+// left every test green (found by mutation). These cases pin it directly.
+func TestCleanLine_RemovesControlCharactersAndCollapsesWhitespace(t *testing.T) {
+	for in, want := range map[string]string{
+		"Mallory\r\nBcc: victim@evil.test": "Mallory Bcc: victim@evil.test",
+		"a\x00b\x7fc":                      "a b c",
+		"line sep para":                    "line sep para",
+		"  many \t  spaces  ":              "many spaces",
+		"plain":                            "plain",
+	} {
+		if got := cleanLine(in); got != want {
+			t.Errorf("cleanLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
