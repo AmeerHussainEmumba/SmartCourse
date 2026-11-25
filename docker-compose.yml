@@ -408,6 +408,14 @@ services:
     environment:
       <<: [*env-base, *env-redis, *env-minio, *env-kafka, *env-mongo, *env-temporal]
       POSTGRES_DSN: postgres://svc_course:${SVC_COURSE_PASSWORD:-svc_course_dev}@postgres:5432/smartcourse?sslmode=disable
+      # Asynq isolation: every worker runs an Asynq server on the SAME queue names
+      # (critical/default/low), so two workers on one Redis database steal each
+      # other's tasks ("handler not found": a mail delivery or a scheduled job is
+      # retried and then archived, i.e. lost). Until the queue names are made
+      # per service, each worker that uses Asynq gets its own database
+      # (identity-worker stays on 0: it also re-seeds the token versions the APIs
+      # read). See docs/guides/local-stack.md, Known issues.
+      REDIS_DB: "1"
       POSTGRES_SEARCH_PATH: course,public
       RELAY_WORKERS: "4"
       OUTBOX_RETENTION: 168h
@@ -461,6 +469,8 @@ services:
     environment:
       <<: [*env-base, *env-redis, *env-kafka, *env-mongo]
       POSTGRES_DSN: postgres://svc_analytics:${SVC_ANALYTICS_PASSWORD:-svc_analytics_dev}@postgres:5432/smartcourse?sslmode=disable
+      # Own Redis database for Asynq (see course-worker).
+      REDIS_DB: "2"
       POSTGRES_SEARCH_PATH: analytics,public
       PROCESSED_EVENTS_RETENTION: 336h
       JOBS_ANALYTICS_RECONCILE_INTERVAL: 1m
@@ -486,6 +496,8 @@ services:
     environment:
       <<: [*env-base, *env-redis, *env-kafka, *env-mongo]
       POSTGRES_DSN: postgres://svc_notification:${SVC_NOTIFICATION_PASSWORD:-svc_notification_dev}@postgres:5432/smartcourse?sslmode=disable
+      # Own Redis database for Asynq (see course-worker).
+      REDIS_DB: "3"
       POSTGRES_SEARCH_PATH: notification,public
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
@@ -629,3 +641,4 @@ services:
 volumes:
   pgdata:
   miniodata:
+

@@ -27,30 +27,84 @@ DSN ?= $(POSTGRES_DSN)
 MIGRATION_SERVICES := platform identity course analytics notification cutover
 MIGRATION_SERVICES_REVERSED := cutover notification analytics course identity platform
 
-.PHONY: dev-core dev-workflow dev-events dev-observability dev-full dev-down \
+.PHONY: dev-core dev-workflow dev-events dev-observability dev-full dev-down stack-up register-schemas \
         migrate-up migrate-down migrate-down-all migrate-create db-roles \
         build run \
         lint check-link-graph check-module-graph check-dockerfile-modules check-module-hygiene check-dev-defaults check-http-hardening check-pending-e2e test-guards verify-deliverables test test-race test-integration test-e2e seed fmt
 
-## --- Local environment (ADR-0018) ---------------------------------------
+## --- Local environment (ADR-0018, docs/guides/local-stack.md) -----------
+#
+# Profiles are cumulative:
+#   dev-core           Postgres, Redis, MinIO, Mailpit, Kafka, Schema Registry,
+#                      MongoDB, Swagger UI and nine of the ten binaries (every
+#                      service except publishing-worker, so course PUBLISHING
+#                      does not work on `core`).
+#   dev-workflow       core + Temporal, Temporal UI and publishing-worker.
+#   dev-observability  workflow + Prometheus, Grafana, Jaeger.
+#   dev-full           everything.
+# `up -d` builds only images that do not exist yet; after a code change run
+# `make dev-core UP_FLAGS=--build` (or `docker compose --profile core build`).
+# Migrations are an explicit step (RFC 5.8): `make migrate-up`, or `make stack-up`
+# for the whole first-run sequence.
+UP_FLAGS ?=
 
 dev-core:
-	docker compose --profile core up -d
+	docker compose --profile core up -d $(UP_FLAGS)
 
 dev-workflow:
-	docker compose --profile workflow up -d
+	docker compose --profile workflow up -d $(UP_FLAGS)
 
-dev-events:
-	docker compose --profile events up -d
+# Deprecated alias, kept so old muscle memory and docs still work: Kafka, the
+# Schema Registry and MongoDB moved into `core` when the services were split
+# (docs/plans/microservices-split.md section 6), so there is no separate
+# `events` profile any more.
+dev-events: dev-core
+	@echo "dev-events is an alias of dev-core: Kafka, Schema Registry and MongoDB are in the core profile now."
 
 dev-observability:
-	docker compose --profile observability up -d
+	docker compose --profile observability up -d $(UP_FLAGS)
 
 dev-full:
-	docker compose --profile full up -d
+	docker compose --profile full up -d $(UP_FLAGS)
 
+# Stops every profile's containers; volumes (data) are kept. `docker compose
+# down -v` would delete them.
 dev-down:
-	docker compose down
+	docker compose --profile full down
+
+# Registers every event subject with the Schema Registry (BACKWARD
+# compatibility, idempotent): the host-side twin of compose's `schema-init`.
+# Needs the registry up (`make dev-core`); SCHEMA_REGISTRY_URL from .env,
+# default http://localhost:8081.
+register-schemas:
+	cd libs/events && go run ./cmd/register-schemas -registry "$(or $(SCHEMA_REGISTRY_URL),http://localhost:8081)"
+
+# Optional first-run convenience on a FRESH stack: starts the infrastructure,
+# applies the migrations and the per-service roles, registers the schemas, starts
+# every service of STACK_PROFILE (default workflow: all ten binaries), then
+# creates the first admin when IDENTITY_ADMIN_EMAIL and IDENTITY_ADMIN_PASSWORD
+# are set (env or .env). It runs against the compose project's published ports
+# with the dev DSN unless .env overrides POSTGRES_DSN. Safe to repeat: migrations,
+# roles, schemas and the admin are all idempotent.
+#   IDENTITY_ADMIN_EMAIL=admin@smartcourse.local IDENTITY_ADMIN_PASSWORD='...' make stack-up
+STACK_PROFILE ?= workflow
+STACK_DSN ?= $(or $(POSTGRES_DSN),postgres://smartcourse:smartcourse@localhost:5433/smartcourse?sslmode=disable)
+
+stack-up:
+	docker compose --profile $(STACK_PROFILE) up -d --wait postgres schema-registry
+	@$(MAKE) --no-print-directory migrate-up DSN='$(STACK_DSN)' \
+		SVC_IDENTITY_PASSWORD='$(or $(SVC_IDENTITY_PASSWORD),svc_identity_dev)' \
+		SVC_COURSE_PASSWORD='$(or $(SVC_COURSE_PASSWORD),svc_course_dev)' \
+		SVC_ANALYTICS_PASSWORD='$(or $(SVC_ANALYTICS_PASSWORD),svc_analytics_dev)' \
+		SVC_NOTIFICATION_PASSWORD='$(or $(SVC_NOTIFICATION_PASSWORD),svc_notification_dev)'
+	@$(MAKE) --no-print-directory register-schemas
+	docker compose --profile $(STACK_PROFILE) up -d --wait $(UP_FLAGS)
+	@if [ -n "$(IDENTITY_ADMIN_EMAIL)" ] && [ -n "$(IDENTITY_ADMIN_PASSWORD)" ]; then \
+		docker compose --profile $(STACK_PROFILE) run --rm --no-deps --entrypoint identity-admin \
+			-e IDENTITY_ADMIN_EMAIL -e IDENTITY_ADMIN_PASSWORD -e IDENTITY_ADMIN_NAME identity-api; \
+	else \
+		echo "stack-up: IDENTITY_ADMIN_EMAIL / IDENTITY_ADMIN_PASSWORD not set: no admin created (see env.example, First admin)"; \
+	fi
 
 ## --- Migrations (migrations/README.md) -----------------------------------
 
