@@ -37,6 +37,8 @@ rules=(
   "services/course    course-api    services/identity,services/analytics,services/worker                no  760"
   "services/worker    worker        services/identity                                                   no  855"
   "services/publishing publishing-worker services/identity,services/course,services/analytics,services/worker,libs/asynqx,libs/kafka,libs/eventbus,libs/events,libs/mongostore,libs/relay,libs/idempotency,libs/ratelimit no 680 github.com/(segmentio|twmb|confluentinc|IBM/sarama|hibiken/asynq|golang-migrate)/|go.mongodb.org/mongo-driver/v2/mongo$"
+  "services/audit     audit-api     services/identity,services/course,services/analytics,services/worker,libs/temporal,libs/asynqx   yes 680"
+  "services/audit     audit-worker  services/identity,services/course,services/analytics,services/worker,libs/temporal,libs/asynqx   yes 680"
 )
 # publishing-worker (Wave B5): no Kafka, Mongo, Asynq or migration code and no other
 # service; Temporal is its whole job. The last column is an extra regex for

@@ -26,6 +26,7 @@ use (
 	./libs/temporal
 	./libs/testenv
 	./services/analytics
+	./services/audit
 	./services/course
 	./services/identity
 	./services/publishing
