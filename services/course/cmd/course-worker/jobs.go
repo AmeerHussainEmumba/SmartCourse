@@ -23,35 +23,12 @@ const (
 	TypeEnrollmentCounts        = "maintenance:enrollment-counts"
 )
 
-// DefaultProcessedEventsRetention is how long a processed_events marker is
-// kept. The marker is the duplicate window: it must exceed the Kafka topic
-// retention and the longest wait before a parked event is replayed
-// (eventbus.PruneProcessed).
-const DefaultProcessedEventsRetention = 14 * 24 * time.Hour
-
 // queueGaugeInterval is how often the Asynq queue gauges read Redis.
 const queueGaugeInterval = 15 * time.Second
 
 // publishReconciler is course.Service's stale-publish reconciliation.
 type publishReconciler interface {
 	ReconcileStalePublishes(ctx context.Context) (course.ReconcileResult, error)
-}
-
-// processedEventsRetention reads PROCESSED_EVENTS_RETENTION (a Go duration,
-// default 14 days). libs/config has no such field yet, so it is read here.
-func processedEventsRetention(getenv func(string) string) (time.Duration, error) {
-	v := getenv("PROCESSED_EVENTS_RETENTION")
-	if v == "" {
-		return DefaultProcessedEventsRetention, nil
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return 0, fmt.Errorf("PROCESSED_EVENTS_RETENTION %q: %w", v, err)
-	}
-	if d <= 0 {
-		return 0, fmt.Errorf("PROCESSED_EVENTS_RETENTION must be positive, got %s", v)
-	}
-	return d, nil
 }
 
 // reconcileStalePublishes releases `publishing` versions whose workflow is gone
@@ -91,7 +68,7 @@ func reconcileEnrollmentCounts(db *gorm.DB, spec string) jobs.Job {
 //     processedRetention.
 //
 // db must be the svc_course connection: every prune acts on the course schema.
-func buildJobs(db *gorm.DB, cfg *config.Config, publishes publishReconciler, processedRetention time.Duration) ([]jobs.Job, error) {
+func buildJobs(db *gorm.DB, cfg *config.Config, publishes publishReconciler) ([]jobs.Job, error) {
 	j := cfg.Jobs
 	specs := map[string]string{}
 	for name, interval := range map[string]time.Duration{
@@ -108,7 +85,7 @@ func buildJobs(db *gorm.DB, cfg *config.Config, publishes publishReconciler, pro
 	if err != nil {
 		return nil, err
 	}
-	pruneProcessed, err := jobs.PruneProcessedEvents(db, processedRetention, specs["outbox"])
+	pruneProcessed, err := jobs.PruneProcessedEvents(db, j.ProcessedEventsRetention, specs["outbox"])
 	if err != nil {
 		return nil, err
 	}

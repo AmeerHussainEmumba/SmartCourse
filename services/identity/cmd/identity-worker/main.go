@@ -14,8 +14,23 @@
 // non-fatal (the outbox buffers an outage).
 package main
 
-import "github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
+import (
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
+)
 
 func main() {
-	runtime.Main("identity-worker", wire, runtime.WithOutbox())
+	runtime.Main("identity-worker", wire, options()...)
+}
+
+// requirements are the configuration groups this binary needs; it starts without
+// the variables of any other group. It publishes identity.outbox to Kafka and runs the token-version re-seeder and jobs; it signs no token and hashes no password.
+var requirements = config.Requirements{Postgres: true, Redis: true, Kafka: true}
+
+// loadConfig is the runtime's configuration loader for this binary.
+func loadConfig() (*config.Config, error) { return config.LoadWith(requirements) }
+
+// options is the runtime configuration of this binary.
+func options() []runtime.Option {
+	return []runtime.Option{runtime.WithConfig(loadConfig), runtime.WithOutbox()}
 }

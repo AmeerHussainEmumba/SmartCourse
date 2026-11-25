@@ -7,8 +7,23 @@
 // wiring is in wire.go.
 package main
 
-import "github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
+import (
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
+)
 
 func main() {
-	runtime.Main("analytics-worker", wire)
+	runtime.Main("analytics-worker", wire, options()...)
+}
+
+// requirements are the configuration groups this binary needs; it starts without
+// the variables of any other group. It consumes Kafka and runs the Asynq reconciler; MONGO_URI stays optional (dead-letter parking).
+var requirements = config.Requirements{Postgres: true, Redis: true, Kafka: true}
+
+// loadConfig is the runtime's configuration loader for this binary.
+func loadConfig() (*config.Config, error) { return config.LoadWith(requirements) }
+
+// options is the runtime configuration of this binary.
+func options() []runtime.Option {
+	return []runtime.Option{runtime.WithConfig(loadConfig)}
 }

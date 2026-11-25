@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
@@ -72,16 +71,12 @@ func wire(p *runtime.Process) error {
 	// (c) the jobs. The stale-publish reconciliation asks Temporal about
 	// workflows, so the jobs get their own lazy client: a Temporal outage
 	// fails that job's tick, never the process.
-	retention, err := processedEventsRetention(os.Getenv)
-	if err != nil {
-		return err
-	}
 	tc, err := libtemporal.Connect(cfg)
 	if err != nil {
 		return fmt.Errorf("build temporal client for the reconciliation job: %w", err)
 	}
 	p.OnShutdown("temporal-jobs-client", func(context.Context) error { tc.Close(); return nil })
-	js, err := buildJobs(deps.DB, cfg, newCourseService(deps, cfg, tc), retention)
+	js, err := buildJobs(deps.DB, cfg, newCourseService(deps, cfg, tc))
 	if err != nil {
 		return fmt.Errorf("jobs: %w", err)
 	}

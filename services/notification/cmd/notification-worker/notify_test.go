@@ -83,33 +83,17 @@ func TestNewProvider_NilWithoutSMTPHost(t *testing.T) {
 	}
 }
 
-func TestProcessedRetention(t *testing.T) {
-	t.Setenv("PROCESSED_EVENTS_RETENTION", "")
-	if d, err := processedRetention(); err != nil || d != 14*24*time.Hour {
-		t.Fatalf("default = %v, %v; want 336h", d, err)
-	}
-	t.Setenv("PROCESSED_EVENTS_RETENTION", "48h")
-	if d, err := processedRetention(); err != nil || d != 48*time.Hour {
-		t.Fatalf("48h = %v, %v", d, err)
-	}
-	for _, bad := range []string{"soon", "0s", "-1h"} {
-		t.Setenv("PROCESSED_EVENTS_RETENTION", bad)
-		if _, err := processedRetention(); err == nil {
-			t.Errorf("%q accepted, want an error", bad)
-		}
-	}
-}
-
 func TestBuildJobs_SchedulesTheProcessedEventsPrune(t *testing.T) {
-	cfg := &config.Config{Jobs: config.JobsConfig{OutboxPruneInterval: time.Hour}}
-	js, err := buildJobs(nil, cfg, time.Hour)
+	cfg := &config.Config{Jobs: config.JobsConfig{OutboxPruneInterval: time.Hour, ProcessedEventsRetention: time.Hour}}
+	js, err := buildJobs(nil, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(js) != 1 || !strings.Contains(js[0].Name, "processed") {
 		t.Fatalf("jobs = %+v, want exactly the processed_events prune", js)
 	}
-	if _, err := buildJobs(nil, cfg, 0); err == nil {
+	cfg.Jobs.ProcessedEventsRetention = 0
+	if _, err := buildJobs(nil, cfg); err == nil {
 		t.Error("a zero retention was accepted")
 	}
 }

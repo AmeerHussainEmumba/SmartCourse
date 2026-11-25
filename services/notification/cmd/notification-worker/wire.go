@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 	"strconv"
 	"time"
 
@@ -25,26 +24,6 @@ import (
 // lagGaugeInterval is how often the consumer lag gauges query the brokers, so
 // the broker load does not depend on how often Prometheus scrapes.
 const lagGaugeInterval = 15 * time.Second
-
-// defaultProcessedRetention is how long processed_events markers are kept
-// (PROCESSED_EVENTS_RETENTION). It must exceed the Kafka topic retention and the
-// longest wait before a parked event is replayed (eventbus.PruneProcessed).
-const defaultProcessedRetention = 14 * 24 * time.Hour
-
-// processedRetention reads PROCESSED_EVENTS_RETENTION (libs/config has no field
-// for it yet). Unset means the default; a malformed or non-positive value is a
-// start-up error rather than a silently wrong duplicate window.
-func processedRetention() (time.Duration, error) {
-	v := os.Getenv("PROCESSED_EVENTS_RETENTION")
-	if v == "" {
-		return defaultProcessedRetention, nil
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil || d <= 0 {
-		return 0, fmt.Errorf("PROCESSED_EVENTS_RETENTION %q must be a positive duration such as 336h", v)
-	}
-	return d, nil
-}
 
 // wire registers the notification worker's components on p: the Kafka
 // consumers (notification-dispatcher plus its retry topic), the Asynq pools and
@@ -89,11 +68,7 @@ func wire(p *runtime.Process) error {
 	p.Ready("kafka", kafka.HealthCheck(k.Brokers), runtime.NonFatal()) // the broker is not on the delivery path
 
 	// Asynq: pools, housekeeping jobs and the delivery task.
-	retention, err := processedRetention()
-	if err != nil {
-		return err
-	}
-	js, err := buildJobs(db, cfg, retention)
+	js, err := buildJobs(db, cfg)
 	if err != nil {
 		return err
 	}
@@ -125,12 +100,12 @@ func wire(p *runtime.Process) error {
 // buildJobs assembles the housekeeping jobs: today the processed_events prune.
 // The notification service has no outbox, no idempotency keys and no
 // reconciliation to run.
-func buildJobs(db *gorm.DB, cfg *config.Config, retention time.Duration) ([]jobs.Job, error) {
+func buildJobs(db *gorm.DB, cfg *config.Config) ([]jobs.Job, error) {
 	spec, err := config.CronSpec(cfg.Jobs.OutboxPruneInterval) // the shared prune cadence (JOBS_OUTBOX_PRUNE_INTERVAL, default 1h)
 	if err != nil {
 		return nil, fmt.Errorf("prune job interval: %w", err)
 	}
-	prune, err := jobs.PruneProcessedEvents(db, retention, spec)
+	prune, err := jobs.PruneProcessedEvents(db, cfg.Jobs.ProcessedEventsRetention, spec)
 	if err != nil {
 		return nil, err
 	}
