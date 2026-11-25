@@ -122,6 +122,16 @@ curl localhost:8091/api/v1/courses
 
 From here, `api/openapi.yaml` documents every endpoint (across all three services — it's one spec, not three, since the route paths and request/response shapes didn't change, only which process answers them), and each module's README (for example `services/course/course/README.md`) explains the design behind it.
 
+### DB roles
+
+Postgres has one database and four service schemas (`identity`, `course`, `analytics`, `notification`), and each schema has its own login role: `svc_identity`, `svc_course`, `svc_analytics`, `svc_notification`. A role can use only its own schema's tables and sequences, plus the `citext` / `pg_trgm` functions in `public`; every other service schema is closed to it (`permission denied`), and it cannot create tables. `smartcourse` (from `POSTGRES_DSN`) is the owner: it runs the migrations and `make seed`.
+
+- **Passwords** come from `SVC_<SERVICE>_PASSWORD` in `.env` (dev values are in `env.example`; nothing is in a committed SQL file). `scripts/db-roles.sh` creates the roles and grants. It runs by itself the first time the compose Postgres volume is created (a script mounted into the container) and at the end of every `make migrate-up`; `make db-roles` runs it alone. It is safe to repeat. **If your Postgres volume already existed**, `make migrate-up` is what creates the roles.
+- **The services do not use their roles yet.** `env.example` lists the per-service DSNs (`IDENTITY_POSTGRES_DSN` and so on) and search paths; the binaries still connect as the owner until they are switched over.
+- **Migration order** is `platform identity course analytics notification cutover`. The `cutover` set moves the old shared `platform` tables' rows into each service's own `outbox`, `processed_events` and `idempotency_keys` and then drops the `platform` schema.
+- **In tests**, `testenv.Setup(t)` returns `env.DB` as the owner (its search path is `public` only, so write `course.outbox`, not `outbox`), and `env.ServiceDB(t, "course")` connects as that service's role with search path `course,public`. Use `ServiceDB` for anything a service would do. See `libs/testenv/README.md`.
+- **Name collisions:** `outbox`, `processed_events` and `idempotency_keys` now exist in more than one schema. A connection whose search path lists several service schemas silently uses the first one. Never build such a search path; qualify the name instead.
+
 ### What is listening where
 
 Everything is published on `127.0.0.1` only.
