@@ -42,9 +42,11 @@ type Store interface {
 }
 
 // SchemaResolver returns the Schema Registry id of the payload schema an event
-// of eventType was written against at schemaVersion, or 0 when unknown. The
-// in-process transport has no registry, so by default every id is 0; the Kafka
-// transport knows the id from the wire format and should supply it.
+// of eventType was written against at schemaVersion, or 0 when unknown. It is a
+// fallback: over Kafka the runner puts the frame's schema id in the context
+// (relay.SourceFrom) and that wins. The in-process transport has no registry, so
+// without a resolver the stored id is 0 and the header schema_id_source says
+// "none".
 type SchemaResolver func(eventType string, schemaVersion int) int32
 
 // Option configures Handlers.
@@ -88,7 +90,7 @@ func (a *archiver) handle(ctx context.Context, _ *gorm.DB, evt relay.DecodedEven
 	if a.store == nil {
 		return ErrNoStore
 	}
-	doc := a.eventDoc(evt)
+	doc := a.eventDoc(ctx, evt)
 	if _, err := a.store.ArchiveEvent(ctx, doc); err != nil {
 		return fmt.Errorf("archive event %s: %w", evt.EventID, err)
 	}
@@ -104,7 +106,13 @@ func (a *archiver) handle(ctx context.Context, _ *gorm.DB, evt relay.DecodedEven
 // (JSON in this codebase today); headers say how to read it: the encoding, and
 // the registry subject so the schema is resolvable by name even where the
 // numeric id is unknown (RFC §6.8).
-func (a *archiver) eventDoc(evt relay.DecodedEvent) mongostore.Event {
+//
+// Over Kafka the context carries the record's relay.Source: its frame's schema
+// id is stored as schema_id (header schema_id_source "registry_frame") and its
+// topic, key, partition and offset as top-level fields. In-process delivery has
+// none of that: schema_id is the resolver's answer or 0, the header says
+// "resolver" or "none", and no Kafka field is stored.
+func (a *archiver) eventDoc(ctx context.Context, evt relay.DecodedEvent) mongostore.Event {
 	h := map[string]string{"payload_encoding": "json"}
 	if t, ok := events.Lookup(evt.EventType); ok {
 		h["schema_subject"] = t.Subject()
@@ -118,10 +126,9 @@ func (a *archiver) eventDoc(evt relay.DecodedEvent) mongostore.Event {
 	if evt.OutboxID != 0 {
 		h["outbox_id"] = fmt.Sprint(evt.OutboxID)
 	}
-	return mongostore.Event{
+	doc := mongostore.Event{
 		ID:            evt.EventID.String(),
 		EventType:     evt.EventType,
-		SchemaID:      a.schemaID(evt.EventType, evt.SchemaVersion),
 		SchemaVersion: int32(evt.SchemaVersion),
 		AggregateType: evt.AggregateType,
 		AggregateID:   evt.AggregateID.String(),
@@ -131,19 +138,43 @@ func (a *archiver) eventDoc(evt relay.DecodedEvent) mongostore.Event {
 		Headers:       h,
 		ArchivedAt:    a.now(),
 	}
+	src, fromBroker := relay.SourceFrom(ctx)
+	if fromBroker && src.SchemaID != 0 {
+		doc.SchemaID = int32(src.SchemaID)
+		h["schema_id_source"] = "registry_frame"
+	} else {
+		doc.SchemaID = a.schemaID(evt.EventType, evt.SchemaVersion)
+		h["schema_id_source"] = "none"
+		if doc.SchemaID != 0 {
+			h["schema_id_source"] = "resolver"
+		}
+	}
+	if fromBroker {
+		partition, offset := src.Partition, src.Offset
+		doc.Topic, doc.Key, doc.Partition, doc.Offset = src.Topic, src.Key, &partition, &offset
+	}
+	return doc
 }
 
-// auditSpec says which event types are audit-relevant (RFC §5.4: "role
-// changes, publish and archive, enrollment overrides, certificate issuance,
-// and administrative deletion") and what they are about. Only types the
-// services emit today are listed; a new sensitive event type must be added here.
+// auditSpec says which event types are audit-relevant and what they are about.
+// It follows the RFC's event table (§4.6, "archive + audit" for CoursePublished,
+// CoursePublishFailed, CourseArchived and CertificateIssued) and the audit_log
+// description in §5.4 ("role changes, publish and archive, enrollment
+// overrides, certificate issuance, and administrative deletion"): role change,
+// publish, publish failure, archive, certificate issuance. Every other
+// catalogue type is "archive" only in the table. "Enrollment overrides" and
+// "administrative deletion" have no event type in the catalogue; when one is
+// added it must be listed here. Admin replays of failed events are audited by
+// the admin API, not through events.
 var auditSpec = map[string]struct {
 	resourceType string
 	idKey        string // payload field naming the resource; the aggregate id otherwise
 }{
-	"identity.user_role_changed": {"user", "user_id"},
-	"course.course_published":    {"course", "course_id"},
-	"course.course_archived":     {"course", "course_id"},
+	"identity.user_role_changed":  {"user", "user_id"},
+	"course.course_published":     {"course", "course_id"},
+	"course.course_archived":      {"course", "course_id"},
+	"course.publish_failed":       {"course", "course_id"},
+	"progress.certificate_issued": {"certificate", "certificate_id"},
 }
 
 // AuditTypes lists the event types that also produce an audit_log record.
