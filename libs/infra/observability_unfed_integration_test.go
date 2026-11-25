@@ -16,7 +16,7 @@ import (
 // (an analytics-api outbox_backlog of 0 would read as "nothing is waiting").
 func TestObserve_MetricsTheBinaryDoesNotFeedAreAbsent(t *testing.T) {
 	env := testenv.Setup(t)
-	deps := depsOf(env)
+	deps := depsOf(t, env)
 	scrapeWith := func(o infra.ObserveOptions) string {
 		obs := deps.Observe(context.Background(), telemetryCfg("", true), o)
 		defer obs.Shutdown(context.Background())

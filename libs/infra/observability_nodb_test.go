@@ -13,7 +13,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 )
 
-// A binary with no database (libs/runtime WithoutDependencies, the publishing
+// A binary with no database (libs/runtime without WithDependencies, the publishing
 // worker) still gets telemetry: Observe on a nil or empty Dependencies must not
 // touch a database, exports the Go runtime and RED series, and no outbox or db_*
 // series even when asked for the outbox gauges.

@@ -15,15 +15,8 @@ require (
 )
 
 require (
-	github.com/AmeerHussainEmumba/SmartCourse/libs/auth v0.0.0 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/cache v0.0.0 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/db v0.0.0 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/errors v0.0.0 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/httpx v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/infra v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/logging v0.0.0 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox v0.0.0 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/router v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry v0.0.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
@@ -45,16 +38,9 @@ require (
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/golang/mock v1.6.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
-	github.com/jackc/pgpassfile v1.0.0 // indirect
-	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.10.0 // indirect
-	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	github.com/jinzhu/inflection v1.0.0 // indirect
-	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
@@ -72,7 +58,6 @@ require (
 	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.1 // indirect
-	github.com/redis/go-redis/v9 v9.22.0 // indirect
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
@@ -87,7 +72,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	go.temporal.io/sdk/contrib/opentelemetry v0.8.1 // indirect
-	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/arch v0.22.0 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/net v0.60.0 // indirect
@@ -99,8 +83,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260630182238-925bb5da69e7 // indirect
 	google.golang.org/grpc v1.83.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	gorm.io/driver/postgres v1.6.3 // indirect
-	gorm.io/gorm v1.31.2 // indirect
 )
 
 replace (

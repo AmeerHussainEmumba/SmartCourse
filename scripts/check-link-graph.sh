@@ -41,18 +41,21 @@ rules=(
   "services/analytics analytics-worker services/identity,services/course,libs/temporal                             yes 695"
   "services/course    course-api    services/identity,services/analytics,libs/kafka,libs/eventbus,libs/asynqx,libs/mongostore,libs/jobs no  765"
   "services/course    course-worker services/identity,services/analytics                no  875"
-  "services/publishing publishing-worker services/identity,services/course,services/analytics,libs/asynqx,libs/kafka,libs/eventbus,libs/events,libs/mongostore,libs/relay,libs/idempotency,libs/ratelimit no 680 github.com/(segmentio|twmb|confluentinc|IBM/sarama|hibiken/asynq|golang-migrate)/|go.mongodb.org/mongo-driver/v2/mongo$"
-  "services/audit     audit-api     services/identity,services/course,services/analytics,libs/temporal,libs/asynqx   yes 680"
-  "services/audit     audit-worker  services/identity,services/course,services/analytics,libs/temporal,libs/asynqx   yes 680"
+  "services/publishing publishing-worker services/identity,services/course,services/analytics,libs/asynqx,libs/kafka,libs/eventbus,libs/events,libs/mongostore,libs/relay,libs/idempotency,libs/ratelimit no 612 github.com/(segmentio|twmb|confluentinc|IBM/sarama|hibiken/asynq|golang-migrate|jackc/pgx|redis/go-redis)/|gorm.io/|go.mongodb.org/mongo-driver/v2/mongo$"
+  "services/audit     audit-api     services/identity,services/course,services/analytics,libs/temporal,libs/asynqx   yes 655"
+  "services/audit     audit-worker  services/identity,services/course,services/analytics,libs/temporal,libs/asynqx   yes 630"
   "services/notification notification-worker services/identity,services/course,services/analytics,libs/temporal  yes 695"
 )
-# publishing-worker (Wave B5): no Kafka, Mongo, Asynq or migration code and no other
-# service; Temporal is its whole job. The last column is an extra regex for
-# third-party packages. The Postgres driver (pgx, gorm) is NOT forbidden: it is
-# linked through libs/runtime -> libs/infra even under runtime.WithoutDependencies,
-# so the binary links but never opens a connection. Splitting infra out of runtime
-# would let that move into the forbidden list. 648 packages when measured (budget
-# is that plus about 5%).
+# publishing-worker (Wave B5, tightened in Wave C5): no Kafka, Mongo, Asynq or
+# migration code and no other service; Temporal is its whole job. The last column
+# is an extra regex for third-party packages. Since libs/runtime stopped importing
+# libs/infra (a binary opts in with runtime.WithDependencies(infra.Connect)) the
+# Postgres driver (pgx, gorm) and go-redis are forbidden too: the binary has no
+# database and links none. It was 648 packages while it linked them through
+# libs/runtime -> libs/infra; 583 when measured in Wave C5 (budget is that plus
+# about 5%). audit-api and audit-worker also dropped (650 -> 624, 651 -> 600) but
+# still link go-redis and gorm through libs/eventbus and libs/relay, so they do not
+# forbid them.
 slack=${LINK_BUDGET_SLACK:-0}
 
 fail=0
