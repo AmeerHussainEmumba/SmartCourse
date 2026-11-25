@@ -31,7 +31,6 @@ dir=${1:-test/e2e}
 # bodies are in test/e2e/legacy/, the skipped stubs in
 # test/e2e/scenarios_pending_e2e_test.go). Remove a line when its spec is ported.
 ALLOWED="
-E08 Wave-C3b
 E09 Wave-C3b
 E10 Wave-C3b
 E11 Wave-C3b

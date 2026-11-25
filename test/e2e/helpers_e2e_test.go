@@ -3,8 +3,12 @@
 package e2e_test
 
 import (
+	"context"
 	"encoding/json"
+	"strings"
 	"testing"
+
+	"github.com/redis/go-redis/v9"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/test/e2e/harness"
 )
@@ -31,4 +35,52 @@ func countEvent(recs []harness.KRecord, eventID string) int {
 		}
 	}
 	return n
+}
+
+func abs(f float64) float64 {
+	if f < 0 {
+		return -f
+	}
+	return f
+}
+
+func redisZ(score float64, member string) redis.Z { return redis.Z{Score: score, Member: member} }
+
+// maintenanceJobs are the scheduler entry names (jobs.Type*).
+var maintenanceJobs = []string{
+	"maintenance:reconcile-stale-publishes", "maintenance:analytics-reconcile",
+	"maintenance:enrollment-counts", "maintenance:idempotency-prune", "maintenance:outbox-prune",
+}
+
+// completedTicks counts, per maintenance job type, the scheduler ticks that
+// Asynq ran to completion and still retains (a finished tick is kept for five
+// minutes so a late replica cannot enqueue it again): the proof that a cron
+// tick enqueued the task and a server ran it. Each service namespaces its
+// queues ("course:low", "analytics:low", ...): entries are in
+// `asynq:{<ns>:low}:completed`, each task's message in the hash
+// `asynq:{<ns>:low}:t:<id>`.
+func completedTicks(t testing.TB, s *harness.Stack) map[string]int {
+	t.Helper()
+	ctx := context.Background()
+	rdb := s.Env.RDB
+	out := map[string]int{}
+	for _, ns := range []string{"identity", "course", "analytics", "notification"} {
+		q := "asynq:{" + ns + ":low}:"
+		ids, err := rdb.ZRange(ctx, q+"completed", 0, -1).Result()
+		if err != nil {
+			t.Fatalf("read the completed set of the %s low queue: %v", ns, err)
+		}
+		for _, id := range ids {
+			msg, err := rdb.HGet(ctx, q+"t:"+id, "msg").Result()
+			if err != nil {
+				continue // pruned between the two reads
+			}
+			for _, job := range maintenanceJobs {
+				if strings.Contains(msg, job) {
+					out[job]++
+				}
+			}
+		}
+	}
+	return out
 }
