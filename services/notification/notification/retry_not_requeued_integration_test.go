@@ -17,11 +17,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 func TestFailedSend_IsNotReEnqueuedBySweepBeforeRequeueAfter(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	student := uuid.New()
 	register(t, env.DB, student, "ada@example.com", "Ada", 1)
 	enq := &memEnqueuer{}

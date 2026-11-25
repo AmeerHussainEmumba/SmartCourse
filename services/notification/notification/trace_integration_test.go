@@ -43,7 +43,7 @@ func storedTraceparent(t *testing.T, env *testenv.Env, id uuid.UUID) *string {
 
 func TestDelivery_StoresTheTraceparentOfTheWritingSpan(t *testing.T) {
 	enableTracing(t)
-	env := testenv.Setup(t)
+	env := setup(t)
 	student := uuid.New()
 	register(t, env.DB, student, "ada@example.com", "Ada", 1) // written with no span in ctx
 
@@ -81,7 +81,7 @@ func TestDelivery_StoresTheTraceparentOfTheWritingSpan(t *testing.T) {
 }
 
 func TestEnqueuePending_EnqueuesUnderTheStoredTrace(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	student := uuid.New()
 	register(t, env.DB, student, "ada@example.com", "Ada", 1)
 	mustApply(t, env.DB, evt("progress.course_completed", 2, map[string]any{"enrollment_id": uuid.New(), "student_id": student}))
@@ -125,7 +125,7 @@ func TestDeliveryPayload_IsUnchanged(t *testing.T) {
 }
 
 func TestMigration000002_DownDropsTheColumnUpRestoresIt(t *testing.T) {
-	env := testenv.Setup(t)
+	env := testenv.Setup(t) // the owner: this test runs DDL
 	read := func(name string) string {
 		t.Helper()
 		b, err := os.ReadFile(filepath.Join("..", "..", "..", "migrations", "notification", name))

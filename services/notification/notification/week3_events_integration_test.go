@@ -44,7 +44,7 @@ func messagesWithSubject(prov *recordingProvider, part string) []Message {
 }
 
 func TestCertificateIssued_MailsTheStudentOnce(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	student := uuid.New()
 	register(t, env.DB, student, "ada@example.com", "Ada", 1)
 	e := evt("progress.certificate_issued", 2, map[string]any{
@@ -87,7 +87,7 @@ func TestCertificateIssued_MailsTheStudentOnce(t *testing.T) {
 }
 
 func TestCertificateIssued_UnknownStudentIsParkedThenDelivered(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	student := uuid.New()
 	mustApply(t, env.DB, evt("progress.certificate_issued", 1, map[string]any{
 		"certificate_id": uuid.New(), "enrollment_id": uuid.New(), "student_id": student,
@@ -105,7 +105,7 @@ func TestCertificateIssued_UnknownStudentIsParkedThenDelivered(t *testing.T) {
 }
 
 func TestCertificateIssued_MalformedPayloadIsAnError(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	if err := apply(env.DB, evt("progress.certificate_issued", 1, map[string]any{"student_id": 7})); err == nil {
 		t.Error("a payload that does not decode must be an error")
 	}
@@ -118,7 +118,7 @@ func TestCertificateIssued_MalformedPayloadIsAnError(t *testing.T) {
 }
 
 func TestPublishFailed_MailsTheInstructorOnce(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	instructor := uuid.New()
 	register(t, env.DB, instructor, "grace@example.com", "Grace", 1)
 	e := evt("course.publish_failed", 2, map[string]any{
@@ -156,7 +156,7 @@ func TestPublishFailed_MailsTheInstructorOnce(t *testing.T) {
 }
 
 func TestPublishFailed_WithoutAnInstructorWritesNoDelivery(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	mustApply(t, env.DB, evt("course.publish_failed", 1, map[string]any{
 		"course_id": uuid.New(), "version_id": uuid.New(), "version_number": 1, "title": "T", "reason": "x",
 	}))

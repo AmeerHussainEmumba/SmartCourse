@@ -25,7 +25,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
@@ -161,7 +160,7 @@ func deliveries(t *testing.T, db *gorm.DB) []deliveryInfo {
 }
 
 func TestHandlers_OneDeliveryPerEvent_UnderRepeatedAndConcurrentDelivery(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	student := uuid.New()
 	register(t, env.DB, student, "ada@example.com", "Ada", 1)
 	base := count(t, env.DB, `SELECT count(*) FROM notification.deliveries`) // the welcome mail
@@ -203,7 +202,7 @@ func TestHandlers_OneDeliveryPerEvent_UnderRepeatedAndConcurrentDelivery(t *test
 }
 
 func TestHandlers_RollbackLeavesNoDeliveryAndNoEnqueue(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	student := uuid.New()
 	register(t, env.DB, student, "ada@example.com", "Ada", 1)
 	before := count(t, env.DB, `SELECT count(*) FROM notification.deliveries`)
@@ -237,7 +236,7 @@ func TestHandlers_RollbackLeavesNoDeliveryAndNoEnqueue(t *testing.T) {
 }
 
 func TestEnqueuePending_RecoversFromCrashBetweenCommitAndEnqueue(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	student := uuid.New()
 	register(t, env.DB, student, "ada@example.com", "Ada", 1)
 	mustApply(t, env.DB, evt("progress.course_completed", 2, map[string]any{"enrollment_id": uuid.New(), "student_id": student}))
@@ -273,7 +272,7 @@ func TestEnqueuePending_RecoversFromCrashBetweenCommitAndEnqueue(t *testing.T) {
 }
 
 func TestDeliveryHandler_ProviderDownThenUp_SingleSend(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	student := uuid.New()
 	register(t, env.DB, student, "ada@example.com", "Ada", 1)
 	enq := &memEnqueuer{}
@@ -337,7 +336,7 @@ func TestDeliveryHandler_ProviderDownThenUp_SingleSend(t *testing.T) {
 }
 
 func TestDeliveryHandler_ConcurrentTasksSendOnce(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	register(t, env.DB, uuid.New(), "ada@example.com", "Ada", 1)
 	id := deliveries(t, env.DB)[0].ID
 
@@ -360,7 +359,7 @@ func TestDeliveryHandler_ConcurrentTasksSendOnce(t *testing.T) {
 }
 
 func TestDeliveryHandler_CrashedClaimIsTakenOverAfterLease(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	register(t, env.DB, uuid.New(), "ada@example.com", "Ada", 1)
 	id := deliveries(t, env.DB)[0].ID
 	// A worker claimed the row and died: 'sending' with an old lease.
@@ -392,7 +391,7 @@ func TestDeliveryHandler_CrashedClaimIsTakenOverAfterLease(t *testing.T) {
 }
 
 func TestDeliveryHandler_PermanentFailureIsNotRetried(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	register(t, env.DB, uuid.New(), "ada@example.com", "Ada", 1)
 	id := deliveries(t, env.DB)[0].ID
 	prov := &recordingProvider{fn: func(int) error { return ErrPermanent }}
@@ -413,7 +412,7 @@ func TestDeliveryHandler_PermanentFailureIsNotRetried(t *testing.T) {
 }
 
 func TestDeliveryHandler_BadPayloadIsPermanent(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	handle := NewDeliveryHandler(env.DB, &recordingProvider{})
 	for _, p := range [][]byte{nil, []byte("not json"), []byte(`{"delivery_id":"nope"}`), []byte(`{}`)} {
 		if err := handle(context.Background(), p); !errors.Is(err, ErrPermanent) {
@@ -426,7 +425,7 @@ func TestDeliveryHandler_BadPayloadIsPermanent(t *testing.T) {
 }
 
 func TestRecipientMirror_OutOfOrderProfileUpdateDoesNotRegress(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	user := uuid.New()
 	name := func() (string, *string) {
 		var r struct {
@@ -461,7 +460,7 @@ func TestRecipientMirror_OutOfOrderProfileUpdateDoesNotRegress(t *testing.T) {
 }
 
 func TestUnknownRecipient_IsParkedThenDeliveredWhenItArrives(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	student := uuid.New() // never registered yet
 	prov := &recordingProvider{}
 	handle := NewDeliveryHandler(env.DB, prov)
@@ -504,7 +503,7 @@ func TestUnknownRecipient_IsParkedThenDeliveredWhenItArrives(t *testing.T) {
 // A parked row inserted just AFTER its recipient's own promotion ran would
 // otherwise stay parked forever; the sweep promotes it.
 func TestSweep_PromotesParkedRowWhoseRecipientAlreadyExists(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	student := uuid.New()
 	mustApply(t, env.DB, evt("enrollment.student_enrolled", 1, map[string]any{
 		"enrollment_id": uuid.New(), "student_id": student, "course_id": uuid.New()}))
@@ -518,7 +517,7 @@ func TestSweep_PromotesParkedRowWhoseRecipientAlreadyExists(t *testing.T) {
 }
 
 func TestSweep_FailsRowsThatExhaustedTheirAttempts(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setup(t)
 	register(t, env.DB, uuid.New(), "ada@example.com", "Ada", 1)
 	if err := env.DB.Exec(`UPDATE notification.deliveries SET attempts = 3`).Error; err != nil {
 		t.Fatal(err)
@@ -532,11 +531,13 @@ func TestSweep_FailsRowsThatExhaustedTheirAttempts(t *testing.T) {
 	}
 }
 
-// End to end: outbox -> real relay -> handlers -> sweep -> delivery task ->
-// real SMTP provider -> fake SMTP server. The recipient's name carries a
-// header-injection attempt.
-func TestEndToEnd_OutboxToSMTP_WithHeaderInjectionInName(t *testing.T) {
-	env := testenv.Setup(t)
+// End to end: events -> consumer path (relay.DeliverEvent: handler and
+// notification.processed_events marker in one transaction, as the Kafka
+// consumers run it) -> sweep -> delivery task -> real SMTP provider -> fake SMTP
+// server. The recipient's name carries a header-injection attempt. The service
+// has no outbox: nothing here writes one.
+func TestEndToEnd_EventsToSMTP_WithHeaderInjectionInName(t *testing.T) {
+	env := setup(t)
 	fake := newFakeSMTP(t)
 	host, port := fake.hostPort()
 	prov, err := NewSMTPProvider(config.SMTPConfig{Host: host, Port: port, From: "no-reply@smartcourse.local",
@@ -544,33 +545,35 @@ func TestEndToEnd_OutboxToSMTP_WithHeaderInjectionInName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(50*time.Millisecond))
-	for _, h := range Handlers() {
-		rl.Register(h)
-	}
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { rl.Run(ctx); close(done) }()
-	t.Cleanup(func() { cancel(); <-done })
+	t.Cleanup(cancel)
 
 	student, instructor, course, enrollment := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	write := func(aggType string, aggID uuid.UUID, eventType string, payload map[string]any) {
+	var seq int64
+	deliver := func(eventType string, payload map[string]any) relay.DecodedEvent {
 		t.Helper()
-		if err := env.DB.Transaction(func(tx *gorm.DB) error {
-			return outbox.Write(context.Background(), tx, outbox.Event{
-				AggregateType: aggType, AggregateID: aggID, EventType: eventType, SchemaVersion: 1, Payload: payload})
-		}); err != nil {
-			t.Fatal(err)
+		seq++
+		e := evt(eventType, seq, payload)
+		if _, err := relay.DeliverEvent(ctx, env.DB, handlerFor(t, eventType), e); err != nil {
+			t.Fatalf("deliver %s: %v", eventType, err)
 		}
+		return e
 	}
 	evil := "Mallory\r\nBcc: victim@evil.test\r\n\r\n<script>x</script>"
-	write("user", instructor, "identity.user_registered", map[string]any{"user_id": instructor, "email": "teacher@example.com", "role": "instructor", "full_name": "Grace"})
-	write("user", student, "identity.user_registered", map[string]any{"user_id": student, "email": "mallory@example.com", "role": "student", "full_name": evil})
-	write("course", course, "course.course_published", map[string]any{"course_id": course, "version_id": uuid.New(), "title": "Go 101", "instructor_id": instructor})
-	write("enrollment", enrollment, "enrollment.student_enrolled", map[string]any{"enrollment_id": enrollment, "student_id": student, "course_id": course})
-	write("enrollment", enrollment, "progress.course_completed", map[string]any{"enrollment_id": enrollment, "student_id": student})
+	deliver("identity.user_registered", map[string]any{"user_id": instructor, "email": "teacher@example.com", "role": "instructor", "full_name": "Grace"})
+	first := deliver("identity.user_registered", map[string]any{"user_id": student, "email": "mallory@example.com", "role": "student", "full_name": evil})
+	deliver("course.course_published", map[string]any{"course_id": course, "version_id": uuid.New(), "title": "Go 101", "instructor_id": instructor})
+	deliver("enrollment.student_enrolled", map[string]any{"enrollment_id": enrollment, "student_id": student, "course_id": course})
+	deliver("progress.course_completed", map[string]any{"enrollment_id": enrollment, "student_id": student})
 	const wantMails = 5 // 2 welcome + published + enrolled + completed
+
+	// The marker is in the service's own table, and a redelivery is absorbed.
+	if n := count(t, env.Owner, `SELECT count(*) FROM notification.processed_events`); n != 5 {
+		t.Fatalf("notification.processed_events has %d markers, want 5", n)
+	}
+	if dup, err := relay.DeliverEvent(ctx, env.DB, handlerFor(t, "identity.user_registered"), first); err != nil || !dup {
+		t.Fatalf("redelivery: duplicate=%v err=%v, want a recognised duplicate", dup, err)
+	}
 
 	// The Enqueuer here is a queue of its own: tasks run on another goroutine
 	// (a task run inline would wait on the row lock the sweep still holds).
@@ -632,7 +635,7 @@ func (f enqueuerFunc) Enqueue(ctx context.Context, taskType string, payload []by
 // The migration's down path drops the schema and the up path rebuilds it
 // (testenv applies every migration first).
 func TestMigration_DownThenUp_RoundTrip(t *testing.T) {
-	env := testenv.Setup(t)
+	env := testenv.Setup(t) // the owner: this test runs DDL
 	read := func(name string) string {
 		t.Helper()
 		b, err := os.ReadFile(filepath.Join("..", "..", "..", "migrations", "notification", name))
