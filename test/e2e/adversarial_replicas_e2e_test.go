@@ -113,7 +113,7 @@ func TestAdversarial_TwoWorkerReplicas_KilledInTurn_KeepEveryInvariant(t *testin
 			if err != nil {
 				return err
 			}
-			defer rows.Close()
+			defer func() { _ = rows.Close() }()
 			missing, doubled := 0, 0
 			for rows.Next() {
 				var id string
