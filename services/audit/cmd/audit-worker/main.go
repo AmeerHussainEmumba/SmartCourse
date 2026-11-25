@@ -8,9 +8,8 @@ package main
 
 import (
 	rt "github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/auditconfig"
 )
 
 func main() {
-	rt.Main("audit-worker", wire, rt.WithoutDependencies(), rt.WithConfig(auditconfig.LoadWorker))
+	rt.Main("audit-worker", wire, rt.WithConfig(loadConfig))
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/asynqx"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/jobs"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
@@ -31,7 +32,7 @@ const lagGaugeInterval = 15 * time.Second
 // dead-letter sink. Postgres and Redis readiness are fatal (libs/runtime); Kafka,
 // MongoDB and SMTP are non-fatal.
 func wire(p *runtime.Process) error {
-	cfg, logger, db := p.Config, p.Logger, p.Deps.DB
+	cfg, logger, db := p.Config, p.Logger, infra.Of(p.Deps).DB
 	ctx := p.Context()
 
 	// Dead-letter sink: only with MONGO_URI. Without it an event that exhausts

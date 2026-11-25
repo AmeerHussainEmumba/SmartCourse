@@ -22,7 +22,11 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
-func depsOf(env *testenv.Env) *infra.Dependencies {
+// depsOf acts as the course service (its outbox, search_path course,public): the
+// owner connection no longer resolves an unqualified outbox.
+func depsOf(t *testing.T, env *testenv.Env) *infra.Dependencies {
+	t.Helper()
+	env.DB = env.ServiceDB(t, "course")
 	return &infra.Dependencies{DB: env.DB, RDB: env.RDB}
 }
 
@@ -41,7 +45,9 @@ func serve(t *testing.T, deps *infra.Dependencies, obs *infra.Observability) *gi
 	if err != nil {
 		t.Fatal(err)
 	}
-	obs.RegisterMetricsRoute(r)
+	if h := obs.MetricsHandler(); h != nil { // stands in for the internal listener libs/runtime serves
+		r.GET("/metrics", gin.WrapH(h))
+	}
 	r.GET("/things/:id", func(c *gin.Context) {
 		ctx := c.Request.Context()
 		var n int
@@ -67,7 +73,7 @@ func get(r http.Handler, path string, hdr ...string) *httptest.ResponseRecorder 
 
 func TestObserve_RequestProducesHTTPDBAndRedisSpansInOneTrace(t *testing.T) {
 	env := testenv.Setup(t)
-	deps := depsOf(env)
+	deps := depsOf(t, env)
 	exp := tracetest.NewInMemoryExporter()
 	obs := deps.Observe(context.Background(), telemetryCfg("jaeger:4318", true), infra.ObserveOptions{Service: "test-api", SpanExporter: exp})
 	t.Cleanup(func() { obs.Shutdown(context.Background()) })
@@ -110,7 +116,7 @@ func TestObserve_RequestProducesHTTPDBAndRedisSpansInOneTrace(t *testing.T) {
 
 func TestObserve_MetricsUseRouteTemplatesAndExposeCatalogue(t *testing.T) {
 	env := testenv.Setup(t)
-	deps := depsOf(env)
+	deps := depsOf(t, env)
 	if err := env.DB.Exec(`INSERT INTO outbox (event_id, aggregate_type, aggregate_id, event_type, schema_version, payload, occurred_at)
 		VALUES (?, 'x', ?, 'x.y', 1, '{}', now() - interval '90 seconds')`, uuid.New(), uuid.New()).Error; err != nil {
 		t.Fatal(err)
@@ -158,7 +164,7 @@ func TestObserve_MetricsUseRouteTemplatesAndExposeCatalogue(t *testing.T) {
 
 func TestObserve_DisabledIsInert(t *testing.T) {
 	env := testenv.Setup(t)
-	deps := depsOf(env)
+	deps := depsOf(t, env)
 	cfg := telemetryCfg("", false) // no endpoint, metrics off
 	obs := deps.Observe(context.Background(), cfg, infra.ObserveOptions{Service: "test-api"})
 	if obs.TracingEnabled() || obs.Metrics != nil || len(obs.Middleware()) != 0 || obs.MetricsHandler() != nil {
@@ -181,7 +187,7 @@ func TestObserve_DisabledIsInert(t *testing.T) {
 // flush at exit is bounded by the caller's deadline.
 func TestObserve_UnreachableCollectorNeverBlocks(t *testing.T) {
 	env := testenv.Setup(t)
-	deps := depsOf(env)
+	deps := depsOf(t, env)
 
 	start := time.Now()
 	obs := deps.Observe(context.Background(), telemetryCfg("127.0.0.1:1", true), infra.ObserveOptions{Service: "test-api"})

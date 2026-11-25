@@ -10,6 +10,7 @@ package main
 
 import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 )
 
@@ -26,5 +27,5 @@ func loadConfig() (*config.Config, error) { return config.LoadWith(requirements)
 
 // options is the runtime configuration of this binary.
 func options() []runtime.Option {
-	return []runtime.Option{runtime.WithConfig(loadConfig), runtime.WithOutbox()}
+	return []runtime.Option{runtime.WithDependencies(infra.Connect), runtime.WithConfig(loadConfig), runtime.WithOutbox()}
 }

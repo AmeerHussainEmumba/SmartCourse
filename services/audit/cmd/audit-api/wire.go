@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/cache"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/router"
@@ -80,4 +81,10 @@ func wire(p *rt.Process) error {
 		}
 	}, rt.Critical())
 	return nil
+}
+
+// loadConfig is audit-api's configuration: Redis (the token-version check), the JWT key, MongoDB and Kafka (the replay producer). It needs no POSTGRES_* or MINIO_*
+// (config.Requirements asks only for what is listed).
+func loadConfig() (*config.Config, error) {
+	return config.LoadWith(config.Requirements{Redis: true, JWT: true, KafkaBrokers: true, Mongo: true})
 }

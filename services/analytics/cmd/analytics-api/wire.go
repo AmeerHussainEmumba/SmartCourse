@@ -44,7 +44,7 @@ func buildRouter(cfg *config.Config, deps *infra.Dependencies, obs *infra.Observ
 
 // wire registers the HTTP server as the one critical component.
 func wire(p *runtime.Process) error {
-	r, closeRoutes, err := buildRouter(p.Config, p.Deps, p.Obs)
+	r, closeRoutes, err := buildRouter(p.Config, infra.Of(p.Deps), p.Obs)
 	if err != nil {
 		return err
 	}

@@ -8,4 +8,4 @@ The audit-archiver: consumer group `audit-archiver` on every event topic and `re
 | `KAFKA_BROKERS`, `KAFKA_CONSUMER_*` | consumer tuning (brokers required) |
 | `METRICS_HTTP_ADDR` | internal listener: `/metrics`, `/health/live`, `/health/ready` |
 
-Readiness: Kafka fatal, MongoDB non-fatal (`degraded`; events wait in Kafka). Postgres and Redis are not used. Metrics: `event_processed_total{consumer}`, `dead_letter_total{consumer}`. Built by `Dockerfile.audit-worker`.
+Readiness: Kafka fatal, MongoDB non-fatal (`degraded`; events wait in Kafka). Postgres and Redis are not used (no `WithDependencies`; the consumer is `eventbus.NewStreamConsumers`, idempotent by event id in MongoDB). Metrics: `event_processed_total{consumer}`, `dead_letter_total{consumer}`. Built by `Dockerfile.audit-worker`.

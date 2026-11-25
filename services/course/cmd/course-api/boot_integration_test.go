@@ -82,7 +82,7 @@ func TestBoot_PublicPortServesTheAPIButNotMetrics_InternalListenerDoes(t *testin
 	done := make(chan error, 1)
 	go func() {
 		done <- runtime.Run(ctx, "course-api", wire,
-			runtime.WithConfig(func() (*config.Config, error) { return cfg, nil }), runtime.WithOutbox(),
+			runtime.WithConfig(func() (*config.Config, error) { return cfg, nil }), runtime.WithDependencies(infra.Connect), runtime.WithOutbox(),
 			runtime.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
 	}()
 	t.Cleanup(cancel)

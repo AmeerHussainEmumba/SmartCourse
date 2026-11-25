@@ -24,7 +24,7 @@ func TestMainHelper(t *testing.T) {
 		t.Skip("helper process only")
 	}
 	addr := os.Getenv("RUNTIME_ADDR")
-	opts := []runtime.Option{runtime.WithConfig(testConfig(addr, true)), runtime.WithoutDependencies(), runtime.WithLogger(quiet),
+	opts := []runtime.Option{runtime.WithConfig(testConfig(addr, true)), runtime.WithLogger(quiet),
 		runtime.WithShutdownTimeout(2 * time.Second)}
 	runtime.Main("helper", func(p *runtime.Process) error {
 		switch mode {

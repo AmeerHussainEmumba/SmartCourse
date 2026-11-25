@@ -53,6 +53,7 @@ const (
 // Load's own parsers so the error wording is uniform.
 func loadKafka(
 	need bool,
+	needRegistry bool,
 	getenv func(string) string,
 	optInt func(string, int) int,
 	optDuration func(string, time.Duration) time.Duration,
@@ -103,6 +104,9 @@ func loadKafka(
 		if err := checkHostPort(b); err != nil {
 			bad("KAFKA_BROKERS entry %q is not a host:port address: %v", b, err)
 		}
+	}
+	if !needRegistry {
+		return k
 	}
 	reg := strings.TrimRight(getenv("SCHEMA_REGISTRY_URL"), "/")
 	if reg == "" {

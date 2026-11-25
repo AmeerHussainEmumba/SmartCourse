@@ -9,7 +9,7 @@ docker build -f Dockerfile.publishing-worker .
 
 ## What's here
 
-- `main.go`: `runtime.Main` with `WithoutDependencies`, `WithWorkflows` and `config.LoadWith(config.Requirements{})`. No database, Redis or Kafka, so no `POSTGRES_DSN`, `REDIS_ADDR` or `JWT_SIGNING_KEY` is needed.
+- `main.go`: `runtime.Main` with `WithWorkflows` and no `WithDependencies` (it links no pgx, GORM or go-redis) and `config.LoadWith(config.Requirements{})`. No database, Redis or Kafka, so no `POSTGRES_DSN`, `REDIS_ADDR` or `JWT_SIGNING_KEY` is needed.
 - `wire.go`: the start/retry loop (a fresh Temporal client and worker each attempt, capped exponential backoff) and the `temporal` readiness check.
 
 ## Configuration

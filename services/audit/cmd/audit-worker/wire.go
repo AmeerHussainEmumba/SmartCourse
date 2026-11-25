@@ -7,13 +7,14 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka/topics"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/mongostore"
 	rt "github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/archive"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/consume"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/deadletter"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/store"
 )
@@ -32,8 +33,8 @@ const topicsTimeout = 30 * time.Second
 //     MongoDB is NON-FATAL ("degraded": the events stay in Kafka and the
 //     archiver catches up when it is back).
 //
-// Postgres is not used (runtime.WithoutDependencies): the archive is
-// idempotent by event id in MongoDB.
+// Postgres is not used (no runtime.WithDependencies): the archive is
+// idempotent by event id in MongoDB, and the consumer is eventbus.NewStreamConsumers.
 func wire(p *rt.Process) error {
 	cfg := p.Config
 	mongo := store.New(cfg.Mongo)
@@ -43,9 +44,11 @@ func wire(p *rt.Process) error {
 
 	sink := deadletter.ForRelay(deadletter.NewSink(countParked(mongo, p.Obs.Metrics)))
 	handlers := archive.Handlers(mongo)
-	runner, err := consume.New(handlers[0], consume.Options{
-		Kafka: cfg.Kafka, Sink: sink, Logger: p.Logger, Tracing: p.Obs.TracingEnabled(), Metrics: p.Obs.Metrics,
-	})
+	// The stream mode: no Postgres transaction and no processed_events marker. The
+	// archiver is idempotent by event id in MongoDB (first write wins), which is
+	// what makes the at-least-once delivery and a replay safe.
+	runner, err := eventbus.NewStreamConsumers(cfg.Kafka, handlers,
+		eventbus.WithSink(sink), eventbus.WithLogger(p.Logger), eventbus.WithTracing(p.Obs.TracingEnabled()), eventbus.WithMetrics(p.Obs.Metrics))
 	if err != nil {
 		return fmt.Errorf("archiver: %w", err)
 	}
@@ -84,4 +87,10 @@ func (c countParkStore) ParkFailedEvent(ctx context.Context, in mongostore.ParkI
 		c.m.DeadLettered(in.Consumer)
 	}
 	return fe, err
+}
+
+// loadConfig is audit-worker's configuration: MongoDB and Kafka only (no Redis, no JWT key). It needs no POSTGRES_* or MINIO_*
+// (config.Requirements asks only for what is listed).
+func loadConfig() (*config.Config, error) {
+	return config.LoadWith(config.Requirements{KafkaBrokers: true, Mongo: true})
 }

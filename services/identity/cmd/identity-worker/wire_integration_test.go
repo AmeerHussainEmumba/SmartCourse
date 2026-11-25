@@ -18,6 +18,7 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/asynqx"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/jobs"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"

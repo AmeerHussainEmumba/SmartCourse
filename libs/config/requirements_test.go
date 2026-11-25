@@ -129,3 +129,30 @@ func TestLoadWith_KafkaAndMongoOnlyWhenRequested(t *testing.T) {
 		t.Fatalf("Load must not require Kafka or Mongo: %v", err)
 	}
 }
+
+// KafkaBrokers asks for the brokers only: a binary that never talks to the
+// Schema Registry (the audit service) must not need a registry URL.
+func TestLoadWith_KafkaBrokersGroupDoesNotNeedTheRegistry(t *testing.T) {
+	clearRequiredEnv(t)
+	_, err := LoadWith(Requirements{KafkaBrokers: true})
+	if err == nil || !strings.Contains(err.Error(), "KAFKA_BROKERS is required") || strings.Contains(err.Error(), "SCHEMA_REGISTRY_URL") {
+		t.Fatalf("brokers group, nothing set: %v", err)
+	}
+	t.Setenv("KAFKA_BROKERS", "kafka:9092")
+	cfg, err := LoadWith(Requirements{KafkaBrokers: true})
+	if err != nil {
+		t.Fatalf("brokers group with only KAFKA_BROKERS set: %v", err)
+	}
+	if len(cfg.Kafka.Brokers) != 1 || cfg.Kafka.SchemaRegistryURL != "" {
+		t.Fatalf("brokers=%v registry=%q", cfg.Kafka.Brokers, cfg.Kafka.SchemaRegistryURL)
+	}
+	t.Setenv("KAFKA_BROKERS", "not-an-address")
+	if _, err := LoadWith(Requirements{KafkaBrokers: true}); err == nil {
+		t.Fatal("a malformed broker address must be refused")
+	}
+	// The full Kafka group still needs the registry.
+	t.Setenv("KAFKA_BROKERS", "kafka:9092")
+	if _, err := LoadWith(Requirements{Kafka: true}); err == nil || !strings.Contains(err.Error(), "SCHEMA_REGISTRY_URL is required") {
+		t.Fatalf("Kafka group without a registry: %v", err)
+	}
+}

@@ -188,6 +188,10 @@ type Requirements struct {
 	// (http(s) URL) and validates them. The consumer/producer tuning is not part
 	// of the group: it always keeps its defaults.
 	Kafka bool
+	// KafkaBrokers requires and validates KAFKA_BROKERS only, for a binary that
+	// reads or produces records but never talks to the Schema Registry (the audit
+	// service). Kafka implies it.
+	KafkaBrokers bool
 	// Mongo requires MONGO_URI. Its shape and the timeouts are validated whenever set.
 	Mongo bool
 }
@@ -354,7 +358,7 @@ func LoadWith(need Requirements) (*Config, error) {
 	cfg.Telemetry, telemetryErrs = loadTelemetry(os.Getenv, optBool)
 	errs = append(errs, telemetryErrs...)
 	errs = append(errs, mongoErrs...)
-	cfg.Kafka = loadKafka(need.Kafka, os.Getenv, optInt, optDuration, &errs)
+	cfg.Kafka = loadKafka(need.Kafka || need.KafkaBrokers, need.Kafka, os.Getenv, optInt, optDuration, &errs)
 
 	if need.JWT {
 		if len(cfg.JWT.SigningKey) < 32 {

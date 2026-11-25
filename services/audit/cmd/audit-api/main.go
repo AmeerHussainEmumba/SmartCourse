@@ -7,9 +7,8 @@ package main
 
 import (
 	rt "github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/auditconfig"
 )
 
 func main() {
-	rt.Main("audit-api", wire, rt.WithoutDependencies(), rt.WithConfig(auditconfig.LoadAPI))
+	rt.Main("audit-api", wire, rt.WithConfig(loadConfig))
 }

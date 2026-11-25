@@ -22,6 +22,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka/topics"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
@@ -31,16 +32,38 @@ import (
 // Schema Registry (see transporttest.Registry).
 type stack struct {
 	t       *testing.T
-	env     *testenv.Env
+	env     *testenv.Env // nil in a stream-only stack
 	kafka   *testenv.KafkaEnv
 	schemas eventbus.Schemas
 }
 
 var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
 
+// newStack is newKafkaStack plus Postgres (outbox, processed_events, an effects
+// table), for the transactional consumers and the relay.
 func newStack(t *testing.T) *stack {
 	t.Helper()
 	env := testenv.Setup(t)
+	s := newKafkaStack(t)
+	s.env = env
+	// The owner creates the effects table; the stack then acts as the course
+	// service (its outbox and processed_events, search_path course,public), the
+	// connection a real consumer has (testenv.Env.ServiceDB).
+	if err := env.DB.Exec(`CREATE TABLE public.test_effects (
+		consumer TEXT NOT NULL, event_id UUID NOT NULL, agg UUID NOT NULL, seq INT NOT NULL, n SERIAL, PRIMARY KEY (consumer, event_id))`).Error; err != nil {
+		t.Fatalf("create test_effects: %v", err)
+	}
+	if err := env.DB.Exec(`GRANT ALL ON public.test_effects, public.test_effects_n_seq TO svc_course`).Error; err != nil {
+		t.Fatalf("grant test_effects: %v", err)
+	}
+	env.DB = env.ServiceDB(t, "course")
+	return s
+}
+
+// newKafkaStack is a stack with no database at all (env is nil): a broker with
+// the topics and the registry stand-in, which is all a stream consumer needs.
+func newKafkaStack(t *testing.T) *stack {
+	t.Helper()
 	kb := testenv.SetupKafka(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -52,11 +75,7 @@ func newStack(t *testing.T) *stack {
 	if err != nil {
 		t.Fatalf("LoadSchemas: %v", err)
 	}
-	if err := env.DB.Exec(`CREATE TABLE public.test_effects (
-		consumer TEXT NOT NULL, event_id UUID NOT NULL, agg UUID NOT NULL, seq INT NOT NULL, n SERIAL, PRIMARY KEY (consumer, event_id))`).Error; err != nil {
-		t.Fatalf("create test_effects: %v", err)
-	}
-	return &stack{t: t, env: env, kafka: kb, schemas: schemas}
+	return &stack{t: t, kafka: kb, schemas: schemas}
 }
 
 func (s *stack) publisher(produceTimeout time.Duration) *eventbus.Publisher {
@@ -90,6 +109,10 @@ type runnerCfg struct {
 	MaxInFlight     int
 	ShutdownTimeout time.Duration
 	Sink            relay.DeadLetterSink
+	// Stream runs eventbus.NewStreamConsumers (no database) instead of NewConsumers.
+	Stream  bool
+	Tracing bool
+	Metrics *telemetry.Metrics
 }
 
 // startRunner runs consumer groups for handlers and returns a stop func that
@@ -108,9 +131,16 @@ func (s *stack) startRunner(cfg runnerCfg, handlers ...relay.Handler) (*eventbus
 	if cfg.Sink != nil {
 		opts = append(opts, eventbus.WithSink(cfg.Sink))
 	}
-	r, err := eventbus.NewConsumers(k, handlers, s.env.DB, opts...)
+	opts = append(opts, eventbus.WithTracing(cfg.Tracing), eventbus.WithMetrics(cfg.Metrics))
+	var r *eventbus.Consumers
+	var err error
+	if cfg.Stream {
+		r, err = eventbus.NewStreamConsumers(k, handlers, opts...)
+	} else {
+		r, err = eventbus.NewConsumers(k, handlers, s.env.DB, opts...)
+	}
 	if err != nil {
-		s.t.Fatalf("NewConsumers: %v", err)
+		s.t.Fatalf("new consumers (stream=%v): %v", cfg.Stream, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -200,16 +230,20 @@ func (s *stack) effectsFor(consumer string, agg uuid.UUID) []int {
 
 // sink is a DeadLetterSink that records what it is given and can be told to refuse.
 type sink struct {
-	mu     sync.Mutex
-	got    []relay.DeadLetter
-	refuse bool
-	calls  int
+	mu      sync.Mutex
+	got     []relay.DeadLetter
+	sources []relay.Source // the relay.Source in each Park call's context
+	refuse  bool
+	calls   int
 }
 
-func (k *sink) Park(_ context.Context, d relay.DeadLetter) error {
+func (k *sink) Park(ctx context.Context, d relay.DeadLetter) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.calls++
+	if src, ok := relay.SourceFrom(ctx); ok {
+		k.sources = append(k.sources, src)
+	}
 	if k.refuse {
 		return fmt.Errorf("sink unavailable")
 	}

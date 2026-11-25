@@ -90,8 +90,8 @@ func newRouter(p *runtime.Process, tc temporalclient.Client) (*gin.Engine, error
 	if err != nil {
 		return nil, fmt.Errorf("invalid router configuration: %w", err)
 	}
-	router.RegisterHealth(r, p.Deps.HealthCheckers())
-	registerRoutes(r, p.Deps, cfg, tc)
+	router.RegisterHealth(r, infra.Of(p.Deps).HealthCheckers())
+	registerRoutes(r, infra.Of(p.Deps), cfg, tc)
 	return r, nil
 }
 

@@ -26,7 +26,7 @@ Workflow and activity names and the JSON field names of `PublishWorkflowInput` a
 
 ## Process
 
-`runtime.Main` with `WithoutDependencies`, `WithWorkflows` and `config.LoadWith(config.Requirements{})`: the binary requires no `POSTGRES_DSN`, `REDIS_ADDR`, MinIO or JWT variable, only the optional `TEMPORAL_*` and telemetry settings. It serves the internal listener (`METRICS_HTTP_ADDR`, default `:9100`): `/metrics`, `/health/live`, `/health/ready`. It retries until Temporal is reachable, building a fresh client every attempt (capped backoff, 1 s to 30 s); an outage never ends the process and shows as `degraded` (200) in `/health/ready` through the non-fatal `temporal` check.
+`runtime.Main` with `WithWorkflows` and no `WithDependencies` (it links no pgx, GORM or go-redis) and `config.LoadWith(config.Requirements{})`: the binary requires no `POSTGRES_DSN`, `REDIS_ADDR`, MinIO or JWT variable, only the optional `TEMPORAL_*` and telemetry settings. It serves the internal listener (`METRICS_HTTP_ADDR`, default `:9100`): `/metrics`, `/health/live`, `/health/ready`. It retries until Temporal is reachable, building a fresh client every attempt (capped backoff, 1 s to 30 s); an outage never ends the process and shows as `degraded` (200) in `/health/ready` through the non-fatal `temporal` check.
 
 ## Tests
 

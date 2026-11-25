@@ -53,13 +53,13 @@ func wireWith(p *runtime.Process, newPublisher publisherFactory) error {
 	// Independent components: one failing is logged and shown degraded in
 	// /health/ready, the others keep running (libs/runtime).
 	p.Go("relay", func(ctx context.Context) error {
-		return runRelay(ctx, p.Logger, p.Deps.DB, cfg, p.Obs.TracingEnabled(), newPublisher)
+		return runRelay(ctx, p.Logger, infra.Of(p.Deps).DB, cfg, p.Obs.TracingEnabled(), newPublisher)
 	})
 	p.Go("token-version-reseeder", func(ctx context.Context) error {
-		newService(p.Deps, cfg).RunTokenVersionReseeder(ctx, reseedInterval)
+		newService(infra.Of(p.Deps), cfg).RunTokenVersionReseeder(ctx, reseedInterval)
 		return nil
 	})
-	p.Go("jobs", func(ctx context.Context) error { return runJobs(ctx, p.Logger, p.Deps, cfg, p.Obs) })
+	p.Go("jobs", func(ctx context.Context) error { return runJobs(ctx, p.Logger, infra.Of(p.Deps), cfg, p.Obs) })
 	return nil
 }
 

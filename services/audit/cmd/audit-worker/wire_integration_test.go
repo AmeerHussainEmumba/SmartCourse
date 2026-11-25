@@ -20,7 +20,6 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	rt "github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/audit/auditconfig"
 )
 
 func freeAddr(t *testing.T) string {
@@ -62,7 +61,7 @@ func start(t *testing.T, mongoURI string, brokers []string) *running {
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &running{internal: internal, done: make(chan error, 1), cancel: cancel}
 	go func() {
-		r.done <- rt.Run(ctx, "audit-worker", wire, rt.WithoutDependencies(), rt.WithConfig(auditconfig.LoadWorker))
+		r.done <- rt.Run(ctx, "audit-worker", wire, rt.WithConfig(loadConfig))
 	}()
 	t.Cleanup(cancel)
 	return r
