@@ -46,6 +46,8 @@ servers:
     description: Local dev — course-api (make run-course-api) — courses, enrollments, progress
   - url: http://localhost:8092/api/v1
     description: Local dev — analytics-api (make run-analytics-api) — analytics dashboard
+  - url: http://localhost:8093/api/v1
+    description: Local dev — audit-api — failed-events admin routes (/admin/failed-events); replay republishes to Kafka
   - url: /api/v1
     description: Relative — correct once this spec is served from the same origin as the API itself (not the case for any local dev tool today)
 
@@ -186,9 +188,10 @@ paths:
     get:
       summary: List failed (dead-lettered) events, newest first (admin only; ADR-0031)
       description: >
-        Served by the worker's admin port (ADMIN_HTTP_ADDR, default 8093, published on
-        127.0.0.1 only in Compose), not by the three HTTP services. Requires an admin token
-        whose token version is current (RequireFreshPrivilege). Keyset-paginated; payloads are
+        Served by audit-api (port 8080 in the container, published on 127.0.0.1:8093 in Compose),
+        not by the identity, course or analytics services. Requires an admin token whose token
+        version is current; this route fails closed (RequireFreshPrivilegeStrict), so a Redis
+        cache miss answers 401 token_stale. Keyset-paginated; payloads are
         omitted from the list (use the detail route). 503 while MongoDB is unreachable.
       security: [{ bearerAuth: [] }]
       parameters:
@@ -217,6 +220,7 @@ paths:
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: event_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: consumer, in: query, schema: { type: string, maxLength: 128 }, description: "Optional: only that consumer's record. 404 when the event has no record for it" }
       responses:
         '200':
           description: OK
@@ -235,13 +239,20 @@ paths:
 
   /admin/failed-events/{event_id}/replay:
     post:
-      summary: Replay a failed event through its consumer's normal idempotent path (admin only)
+      summary: Replay a failed event by republishing it to its consumer's retry topic (admin only)
       description: >
-        Re-runs each consumer's own handler for the parked event in a transaction together with
-        its processed_events marker, then marks the record replayed, exactly once however many
-        callers race. Replaying an already replayed event is a 200 with replayed=false and
-        status already_replayed: nothing is applied again. If a handler fails again the record
-        stays parked with the new error appended and the answer is 422. Takes no request body.
+        Replay is republish, not re-invoke. Each parked record of the event is encoded from its
+        stored payload and schema id and produced to retry.<consumer>; the consuming service's
+        own consumer group applies it through its normal idempotent path (handler plus
+        processed_events), so a duplicate is absorbed. The record is marked replayed only after
+        the broker acknowledged the retry record, exactly once however many callers race.
+        Replaying an already replayed event is a 200 with replayed=false and status
+        already_replayed: nothing is produced. A record that cannot be decoded or encoded for a
+        retry (no schema id, payload that does not match its schema, unknown event type or
+        consumer) is refused with 422 replay_refused and stays parked. A failure of Kafka or
+        MongoDB is a 503 with no detail; the record stays parked and the call may be repeated.
+        Every attempt is written to the audit log (failed_event_replayed, with the admin's user
+        id). Takes no request body.
       security: [{ bearerAuth: [] }]
       parameters:
         - { name: event_id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -262,13 +273,13 @@ paths:
                       properties:
                         consumer: { type: string }
                         status: { type: string, enum: [replayed, already_replayed] }
-                        applied: { type: boolean, description: "True when the handler ran in this call; false when the consumer had already processed the event" }
+                        retry_topic: { type: string, description: "The topic the retry record was produced to; absent when nothing was produced" }
         '400': { description: event_id is not a UUID, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '401': { description: "Missing, invalid or stale token", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '403': { description: Not an admin, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '404': { description: No failed record for that event id, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '422': { description: "replay_failed: a consumer failed again (details.outcomes lists each consumer); the record stays parked", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '503': { description: MongoDB is unreachable, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { description: "replay_refused: a record cannot be decoded or encoded for a retry (details.outcomes lists each consumer with a reason); nothing was produced for it and it stays parked", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: "MongoDB or Kafka is unreachable (no detail is returned); the record stays parked", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /courses:
     get:
