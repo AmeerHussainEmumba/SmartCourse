@@ -31,10 +31,13 @@ mod=github.com/AmeerHussainEmumba/SmartCourse
 # analytics-api MAY link libs/mongostore (ADR-0031 deviation note): the Failed
 # Events metric is served from failed_events. identity-api stays forbidden, and
 # so does every other forbidden prefix below; course-api's rule is unchanged.
+# course-api serves HTTP only and must not link Kafka (libs/kafka, libs/eventbus),
+# Asynq, MongoDB or libs/jobs; those are course-worker's (docs/plans/microservices-split.md §6).
 rules=(
   "services/identity  identity-api  services/course,services/analytics,services/worker,libs/temporal,libs/mongostore,libs/asynqx,libs/kafka  yes 580"
   "services/analytics analytics-api services/identity,services/course,services/worker,libs/temporal,libs/asynqx,libs/kafka   yes 650"
-  "services/course    course-api    services/identity,services/analytics,services/worker                no  760"
+  "services/course    course-api    services/identity,services/analytics,services/worker,libs/kafka,libs/eventbus,libs/asynqx,libs/mongostore,libs/jobs no  765"
+  "services/course    course-worker services/identity,services/analytics,services/worker                no  875"
   "services/worker    worker        services/identity                                                   no  855"
 )
 slack=${LINK_BUDGET_SLACK:-0}
