@@ -4,7 +4,7 @@
 // (docs/plans/week-3-findings-behaviour.md, "What held").
 //
 //	cd services/worker && go test -tags=integration -run TestAdversarial ./transport/
-package transport_test
+package eventbus_test
 
 import (
 	"context"

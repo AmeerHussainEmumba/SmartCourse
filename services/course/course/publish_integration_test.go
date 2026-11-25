@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	temporalclient "go.temporal.io/sdk/client"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing"
 	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
@@ -99,8 +100,8 @@ func TestPublish_CallsExecuteWorkflowAndPersistsState(t *testing.T) {
 	if gotOptions.TaskQueue != "course-publish" {
 		t.Fatalf("expected task queue 'course-publish', got %q", gotOptions.TaskQueue)
 	}
-	if gotWorkflow != course.PublishWorkflowName {
-		t.Fatalf("expected workflow name %q, got %v", course.PublishWorkflowName, gotWorkflow)
+	if gotWorkflow != publishing.WorkflowName {
+		t.Fatalf("expected workflow name %q, got %v", publishing.WorkflowName, gotWorkflow)
 	}
 	if accepted.WorkflowID != wantID || accepted.State != "publishing" {
 		t.Fatalf("unexpected accepted response: %+v", accepted)

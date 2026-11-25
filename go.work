@@ -5,7 +5,9 @@ use (
 	./libs/auth
 	./libs/cache
 	./libs/config
+	./libs/contracts/publishing
 	./libs/db
+	./libs/eventbus
 	./libs/errors
 	./libs/events
 	./libs/httpx
@@ -17,6 +19,7 @@ use (
 	./libs/outbox
 	./libs/ratelimit
 	./libs/relay
+	./libs/runtime
 	./libs/router
 	./libs/telemetry
 	./libs/temporal

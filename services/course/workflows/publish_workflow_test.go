@@ -23,6 +23,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
 )
 
@@ -30,8 +31,8 @@ func TestPublishCourseWorkflow_HappyPath_RunsFullGraphInOrder(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
 
-	in := course.PublishWorkflowInput{CourseID: uuid.New(), VersionID: uuid.New(), Title: "Intro to Go"}
-	outline := course.PublishOutline{CourseID: in.CourseID, VersionID: in.VersionID, VersionNumber: 1}
+	in := publishing.PublishWorkflowInput{CourseID: uuid.New(), VersionID: uuid.New(), Title: "Intro to Go"}
+	outline := publishing.PublishOutline{CourseID: in.CourseID, VersionID: in.VersionID, VersionNumber: 1}
 
 	var a *Activities
 	env.OnActivity(a.ValidateMetadata, mock.Anything, in.VersionID).Return(nil).Once()
@@ -63,7 +64,7 @@ func TestPublishCourseWorkflow_ValidateMetadataFails_StopsBeforePromote(t *testi
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
 
-	in := course.PublishWorkflowInput{CourseID: uuid.New(), VersionID: uuid.New(), Title: "Empty Course"}
+	in := publishing.PublishWorkflowInput{CourseID: uuid.New(), VersionID: uuid.New(), Title: "Empty Course"}
 	cause := publishFailure("validation_failed: title is required")
 
 	var a *Activities
@@ -92,7 +93,7 @@ func TestPublishCourseWorkflow_VerifyAssetsFails_StillWaitsOnComputeMetadata(t *
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
 
-	in := course.PublishWorkflowInput{CourseID: uuid.New(), VersionID: uuid.New(), Title: "Bad Content"}
+	in := publishing.PublishWorkflowInput{CourseID: uuid.New(), VersionID: uuid.New(), Title: "Bad Content"}
 	cause := publishFailure("content_too_large: lesson content too large")
 
 	var a *Activities
@@ -127,7 +128,7 @@ func TestPublishCourseWorkflow_UnmappedActivityErrorTextNeverBecomesTheReason(t 
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
 
-	in := course.PublishWorkflowInput{CourseID: uuid.New(), VersionID: uuid.New(), Title: "T"}
+	in := publishing.PublishWorkflowInput{CourseID: uuid.New(), VersionID: uuid.New(), Title: "T"}
 	raw := errors.New(`stat asset: Head "http://minio.internal.svc:9000/b/k": dial tcp 10.42.7.19:9000: connect: connection refused`)
 
 	var a *Activities

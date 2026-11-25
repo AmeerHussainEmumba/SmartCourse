@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- `Dependencies.Observe` accepts a nil or empty `Dependencies` (a binary with no database): no DB or Redis hook, no `db_*` or outbox series. Used by `libs/runtime` `WithoutDependencies`. `RegisterMetricsRoute` stays until Wave C.
+
 - Added `Dependencies.Observe` / `Observability` (new file `observability.go`): tracing set-up that can never fail or block start-up, the GORM and go-redis hooks only when tracing is on, the metrics registry with RED, `db_connections_*` and (per binary) the outbox and workflow metrics, `Middleware()`, `RegisterMetricsRoute`, `MetricsHandler`, `Shutdown` (bounded flush). A metric a binary never feeds is not exported. The outbox gauges are refreshed by a 15 s poller, not by scrapes.
 - Installs the `libs/auth` identity as the `outbox` actor resolver (`init`, new file `actor.go`).
 

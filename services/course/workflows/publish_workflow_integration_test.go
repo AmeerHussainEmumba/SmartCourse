@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/testsuite"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/workflows"
@@ -71,7 +72,7 @@ func TestPublishCourseWorkflow_RealActivities_PromotesIndexesAndCachesTheCourse(
 	testEnv := suite.NewTestWorkflowEnvironment()
 	testEnv.RegisterActivity(workflows.NewActivities(svc))
 
-	testEnv.ExecuteWorkflow(workflows.PublishCourseWorkflow, course.PublishWorkflowInput{
+	testEnv.ExecuteWorkflow(workflows.PublishCourseWorkflow, publishing.PublishWorkflowInput{
 		CourseID: courseID, VersionID: versionID, Title: "Workflow Course",
 	})
 
@@ -163,7 +164,7 @@ func TestPublishCourseWorkflow_RealActivities_ValidateMetadataFailure_WritesPubl
 	testEnv := suite.NewTestWorkflowEnvironment()
 	testEnv.RegisterActivity(workflows.NewActivities(svc))
 
-	testEnv.ExecuteWorkflow(workflows.PublishCourseWorkflow, course.PublishWorkflowInput{
+	testEnv.ExecuteWorkflow(workflows.PublishCourseWorkflow, publishing.PublishWorkflowInput{
 		CourseID: courseID, VersionID: versionID, Title: "No Modules Course",
 	})
 

@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/events"
 	coursev1 "github.com/AmeerHussainEmumba/SmartCourse/libs/events/gen/smartcourse/course/v1"
 	progressv1 "github.com/AmeerHussainEmumba/SmartCourse/libs/events/gen/smartcourse/progress/v1"
@@ -24,18 +25,17 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/certificate"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/progress"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/transport"
 )
 
-func contractCodec() *transport.Codec {
-	s := transport.Schemas{EnvelopeIDs: map[string]uint32{}, PayloadVersions: map[string]int32{}}
+func contractCodec() *eventbus.Codec {
+	s := eventbus.Schemas{EnvelopeIDs: map[string]uint32{}, PayloadVersions: map[string]int32{}}
 	for i, topic := range events.Topics() {
 		s.EnvelopeIDs[topic] = uint32(i + 1)
 	}
 	for _, ty := range events.Types() {
 		s.PayloadVersions[ty.EventType] = 1
 	}
-	return transport.NewCodec(s)
+	return eventbus.NewCodec(s)
 }
 
 // encodeAndOpen encodes payload as the relay would carry it and returns the

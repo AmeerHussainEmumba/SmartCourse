@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log/slog"
-	"net/http"
 	"sync"
 	"time"
 
@@ -12,6 +10,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/mongostore"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/temporal"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/deadletter"
@@ -32,9 +31,19 @@ const queueGaugeInterval = 15 * time.Second
 //     temporal.Connect to every client built after this call (the publish
 //     worker's and the jobs'), so it must run before they are built.
 //   - Asynq: asynq_queue_depth and asynq_retry_count from the Inspector.
-//   - /metrics: its own listener on METRICS_HTTP_ADDR (default :9100), not the
-//     authenticated admin port; Prometheus scrapes it without credentials.
-func startTelemetry(ctx context.Context, logger *slog.Logger, deps *infra.Dependencies, cfg *config.Config) (o *infra.Observability, shutdown func()) {
+//   - The internal listener (libs/runtime, shared with every service binary):
+//     /metrics, /health/live and /health/ready on METRICS_HTTP_ADDR (default
+//     :9100), not the authenticated admin port; Prometheus and the probes carry
+//     no credentials. Like before, it is only opened when metrics are enabled.
+//
+// health is the readiness state the caller keeps adding checks to (main adds the
+// non-fatal Kafka check once the transport exists, and marks it started); nil
+// means a state that is ready as soon as the checks pass.
+func startTelemetry(ctx context.Context, logger *slog.Logger, deps *infra.Dependencies, cfg *config.Config, health *runtime.Health) (o *infra.Observability, shutdown func()) {
+	if health == nil {
+		health = runtime.NewHealth()
+		health.Started()
+	}
 	o = deps.Observe(ctx, cfg, infra.ObserveOptions{Service: "worker", Outbox: true, Workflows: true})
 
 	temporal.Observe(temporal.Observability{Tracing: o.TracingEnabled(), Metrics: o.Metrics})
@@ -48,53 +57,23 @@ func startTelemetry(ctx context.Context, logger *slog.Logger, deps *infra.Depend
 			stopPoll()
 			_ = inspector.Close()
 		}
-		srv := newMetricsServer(cfg.Telemetry.MetricsAddr, o.MetricsHandler())
+		for name, check := range deps.HealthCheckers() {
+			health.Add(name, runtime.Check(check))
+		}
+		srv := runtime.NewInternalServer(cfg.Telemetry.MetricsAddr, o.MetricsHandler(), health)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			serveMetrics(ctx, logger, srv)
+			runtime.ServeInternal(ctx, logger, srv)
 		}()
 	}
 
 	return o, func() {
-		wg.Wait() // serveMetrics returns once ctx is cancelled
+		wg.Wait() // ServeInternal returns once ctx is cancelled
 		stopGauges()
 		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		o.Shutdown(flushCtx)
-	}
-}
-
-// newMetricsServer serves only /metrics. Timeouts are set so a slow scraper
-// cannot hold connections open.
-func newMetricsServer(addr string, metrics http.Handler) *http.Server {
-	mux := http.NewServeMux()
-	mux.Handle("GET /metrics", metrics)
-	return &http.Server{
-		Addr:              addr,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-}
-
-// serveMetrics runs srv until ctx is cancelled, then shuts it down. A listen
-// failure is logged and ends only this goroutine.
-func serveMetrics(ctx context.Context, logger *slog.Logger, srv *http.Server) {
-	errc := make(chan error, 1)
-	go func() { errc <- srv.ListenAndServe() }()
-	logger.Info("metrics listening", slog.String("addr", srv.Addr))
-	select {
-	case err := <-errc:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("metrics listener failed; the worker runs without /metrics", slog.Any("error", err))
-		}
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
 	}
 }
 

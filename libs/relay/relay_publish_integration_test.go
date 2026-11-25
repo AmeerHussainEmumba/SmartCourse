@@ -6,7 +6,7 @@
 // returned nil; per-aggregate order holds with several workers; an outage does
 // not use up an event's budget; a poison row does not hold other aggregates up
 // and is parked before it is dropped; a sink that refuses keeps the row. The
-// real Kafka versions are in services/worker/transport.
+// real Kafka versions are in libs/eventbus.
 package relay_test
 
 import (

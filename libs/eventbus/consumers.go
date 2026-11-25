@@ -1,4 +1,4 @@
-package transport
+package eventbus
 
 import (
 	"context"
@@ -16,7 +16,9 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"gorm.io/gorm"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka/topics"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/logging"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
@@ -35,9 +37,10 @@ const (
 	restartBackoff = 2 * time.Second
 )
 
-// RunnerConfig configures a Runner. Zero tuning values take libs/kafka's
+// consumerSettings is what a Consumers runs with: the Kafka section of the
+// process configuration plus the options. Zero tuning values take libs/kafka's
 // defaults.
-type RunnerConfig struct {
+type consumerSettings struct {
 	Brokers []string
 	// MaxInFlight, MaxAttempts, Backoff* and ShutdownTimeout map to
 	// kafka.ConsumerConfig and apply to every group.
@@ -46,21 +49,41 @@ type RunnerConfig struct {
 	BackoffBase     time.Duration
 	BackoffMax      time.Duration
 	ShutdownTimeout time.Duration
-	// Sink receives a record whose handler used its budget. Nil keeps the
-	// log-and-skip behaviour, which is the documented gap (relay.DeadLetterSink).
-	Sink   relay.DeadLetterSink
-	Logger *slog.Logger
-	// Tracing makes each record a CONSUMER span continuing the trace in its
-	// traceparent header (or, without one, the envelope's trace ids); the
-	// handler's DB and Redis spans nest under it. Off starts no span.
-	Tracing bool
-	// Metrics, when set, counts event_processed_total per group and outcome
-	// (processed, duplicate, failed, dead_lettered).
-	Metrics *telemetry.Metrics
+	Sink            relay.DeadLetterSink
+	Logger          *slog.Logger
+	Tracing         bool
+	Metrics         *telemetry.Metrics
 }
 
-// Runner runs one Kafka consumer group per consumer name: the group id is the
-// ConsumerName and it subscribes to the topics of its handlers' event types.
+// ConsumerOption tunes NewConsumers.
+type ConsumerOption func(*consumerSettings)
+
+// WithSink sets where a record whose handler used its budget is parked. Without
+// one the record is logged and dropped, which is the documented gap
+// (relay.DeadLetterSink).
+func WithSink(s relay.DeadLetterSink) ConsumerOption { return func(c *consumerSettings) { c.Sink = s } }
+
+// WithLogger sets the logger (default slog.Default()).
+func WithLogger(l *slog.Logger) ConsumerOption { return func(c *consumerSettings) { c.Logger = l } }
+
+// WithTracing makes each record a CONSUMER span continuing the trace in its
+// traceparent header (or, without one, the envelope's trace ids); the handler's
+// DB and Redis spans nest under it. Off starts no span.
+func WithTracing(on bool) ConsumerOption { return func(c *consumerSettings) { c.Tracing = on } }
+
+// WithMetrics counts event_processed_total per group and outcome (processed,
+// duplicate, failed, dead_lettered). A nil m is no metrics.
+func WithMetrics(m *telemetry.Metrics) ConsumerOption {
+	return func(c *consumerSettings) { c.Metrics = m }
+}
+
+// Consumers runs one Kafka consumer group per consumer name: the group id is the
+// ConsumerName and it subscribes to the topics of its handlers' event types and
+// to its own retry topic, retry.<ConsumerName> (docs/plans/microservices-split.md
+// §4.1: the audit service republishes a parked event there). Records from the
+// retry topic take exactly the same path as any other: decode, relay.Deliver,
+// offset commit, so a replay that was already applied is absorbed by
+// processed_events.
 // Each record is decoded to a relay.DecodedEvent and given to
 // relay.Deliver, the code the in-process relay uses, so the handler runs in a
 // transaction that also writes processed_events, and only when that commits does
@@ -71,8 +94,8 @@ type RunnerConfig struct {
 // Per-aggregate order: the producer keys by aggregate id, a partition is handled
 // by one goroutine one record at a time, and a retried record holds its
 // partition. Bounded in-flight: MaxInFlight handlers per group.
-type Runner struct {
-	cfg    RunnerConfig
+type Consumers struct {
+	cfg    consumerSettings
 	db     *gorm.DB
 	groups []group
 	log    *slog.Logger
@@ -94,19 +117,29 @@ type group struct {
 	topics   []string
 }
 
-// NewRunner validates that every handler's event types map to a topic. It
-// starts nothing.
-func NewRunner(cfg RunnerConfig, db *gorm.DB, handlers []relay.Handler) (*Runner, error) {
-	if len(cfg.Brokers) == 0 {
-		return nil, fmt.Errorf("transport: runner needs brokers")
+// NewConsumers builds the consumer groups for a service's own handlers (it
+// needs no *relay.Relay: a service that only consumes, or whose relay only
+// publishes, passes the handlers directly) and validates that every handler's
+// event types map to a topic. cfg supplies the brokers and the tuning
+// (KAFKA_CONSUMER_*). It starts nothing.
+func NewConsumers(cfg config.KafkaConfig, handlers []relay.Handler, db *gorm.DB, opts ...ConsumerOption) (*Consumers, error) {
+	s := consumerSettings{
+		Brokers: cfg.Brokers, MaxInFlight: cfg.ConsumerMaxInFlight, MaxAttempts: cfg.ConsumerMaxAttempts,
+		BackoffBase: cfg.ConsumerBackoffBase, BackoffMax: cfg.ConsumerBackoffMax, ShutdownTimeout: cfg.ConsumerShutdownTimeout,
+	}
+	for _, o := range opts {
+		o(&s)
+	}
+	if len(s.Brokers) == 0 {
+		return nil, fmt.Errorf("eventbus: consumers need brokers")
 	}
 	if db == nil {
-		return nil, fmt.Errorf("transport: runner needs a database")
+		return nil, fmt.Errorf("eventbus: consumers need a database")
 	}
-	r := &Runner{
-		cfg: cfg, db: db,
+	r := &Consumers{
+		cfg: s, db: db,
 		stats: map[string]kafka.Stats{}, live: map[string]*kafka.Consumer{},
-		log: cfg.Logger,
+		log: s.Logger,
 	}
 	if r.log == nil {
 		r.log = slog.Default()
@@ -132,13 +165,17 @@ func NewRunner(cfg RunnerConfig, db *gorm.DB, handlers []relay.Handler) (*Runner
 		}
 		slices.Sort(g.topics)
 	}
+	for i := range r.groups {
+		g := &r.groups[i]
+		g.topics = append(g.topics, topics.Retry(g.name))
+	}
 	return r, nil
 }
 
 // Run starts every group and blocks until ctx is cancelled and each has drained
 // (up to ShutdownTimeout). A group whose Run fails is restarted after a short
 // pause: one consumer's trouble does not stop the others.
-func (r *Runner) Run(ctx context.Context) {
+func (r *Consumers) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, g := range r.groups {
 		wg.Add(1)
@@ -150,7 +187,19 @@ func (r *Runner) Run(ctx context.Context) {
 	wg.Wait()
 }
 
-func (r *Runner) runGroup(ctx context.Context, g group) {
+// ensureTimeout bounds creating a group's retry topic at its start.
+const ensureTimeout = 15 * time.Second
+
+func (r *Consumers) runGroup(ctx context.Context, g group) {
+	// The retry topic is provisioned by topics.Ensure / kafka-init for the known
+	// consumers; creating it here (idempotent) means a new consumer name works
+	// before anyone remembers to add it to the list. A failure is not fatal: the
+	// broker may just be down, and the consumer retries until it is up.
+	ectx, cancel := context.WithTimeout(ctx, ensureTimeout)
+	if err := topics.EnsureNamed(ectx, r.cfg.Brokers, topics.Retry(g.name)); err != nil {
+		r.log.Warn("could not ensure the retry topic", slog.String("consumer", g.name), slog.Any("error", err))
+	}
+	cancel()
 	for ctx.Err() == nil {
 		c, err := kafka.NewConsumer(kafka.ConsumerConfig{
 			Brokers:         r.cfg.Brokers,
@@ -200,7 +249,7 @@ func (r *Runner) runGroup(ctx context.Context, g group) {
 // the group registered for is skipped, since the topic carries other types). One
 // handler's failure does not stop the others for this record; a retry re-runs
 // them all, and Deliver's processed_events check makes the finished ones no-ops.
-func (r *Runner) handle(ctx context.Context, g group, rec kafka.Record) (err error) {
+func (r *Consumers) handle(ctx context.Context, g group, rec kafka.Record) (err error) {
 	evt, schemaID, err := decodeFramed(rec)
 	if err != nil {
 		r.count(g.name, telemetry.OutcomeFailed)
@@ -231,14 +280,25 @@ func (r *Runner) handle(ctx context.Context, g group, rec kafka.Record) (err err
 }
 
 // count records one handler run in event_processed_total, when metrics are on.
-func (r *Runner) count(consumer string, outcome telemetry.Outcome) {
+func (r *Consumers) count(consumer string, outcome telemetry.Outcome) {
 	if r.cfg.Metrics != nil {
 		r.cfg.Metrics.EventProcessed(consumer, outcome)
 	}
 }
 
+// Topics returns the topics group subscribes to: its handlers' source topics
+// and its retry topic. It is nil for a name that is not a group.
+func (r *Consumers) Topics(group string) []string {
+	for _, g := range r.groups {
+		if g.name == group {
+			return slices.Clone(g.topics)
+		}
+	}
+	return nil
+}
+
 // Groups returns the consumer group ids, one per consumer name.
-func (r *Runner) Groups() []string {
+func (r *Consumers) Groups() []string {
 	out := make([]string, len(r.groups))
 	for i, g := range r.groups {
 		out[i] = g.name
@@ -249,11 +309,11 @@ func (r *Runner) Groups() []string {
 // LagGauges feeds kafka_consumer_lag{group,topic} for the runner's groups from
 // the brokers; run it with telemetry.StartPoller, and call the returned func
 // when done. Labels are the group (one per consumer name) and the topic (the
-// four provisioned ones): both fixed by code, so the series count is bounded
+// event topics and each group's retry topic): both fixed by code, so the series count is bounded
 // however many partitions the topics have. The partition is not a label (it
 // would depend on topic configuration and churn with rebalances) and neither
 // is an offset; the value is the total over the topic's partitions.
-func (r *Runner) LagGauges(m *telemetry.Metrics) (telemetry.GaugeCollector, func(), error) {
+func (r *Consumers) LagGauges(m *telemetry.Metrics) (telemetry.GaugeCollector, func(), error) {
 	lr, err := kafka.NewLagReader(r.cfg.Brokers)
 	if err != nil {
 		return nil, nil, err
@@ -277,7 +337,7 @@ func (r *Runner) LagGauges(m *telemetry.Metrics) (telemetry.GaugeCollector, func
 // times and, if the sink stays down, logs the event in full and counts the
 // failure: that is the one remaining way an event leaves the stream unparked,
 // and it is loud.
-func (r *Runner) exhausted(ctx context.Context, g group, rec kafka.Record, cause error) {
+func (r *Consumers) exhausted(ctx context.Context, g group, rec kafka.Record, cause error) {
 	d := relay.DeadLetter{Event: stubEvent(rec), Consumer: g.name, Err: cause, History: kafka.AttemptErrors(cause), Attempts: r.attempts()}
 	if r.cfg.Sink == nil {
 		r.log.Error("kafka consumer gave up on a record; no dead-letter sink is configured, the record is dropped",
@@ -308,7 +368,7 @@ func (r *Runner) exhausted(ctx context.Context, g group, rec kafka.Record, cause
 		slog.Any("handler_error", cause), slog.Any("park_error", err))
 }
 
-func (r *Runner) attempts() int {
+func (r *Consumers) attempts() int {
 	if r.cfg.MaxAttempts > 0 {
 		return r.cfg.MaxAttempts
 	}
@@ -356,10 +416,10 @@ func stubEvent(rec kafka.Record) relay.DecodedEvent {
 }
 
 // ParkFailures counts records the sink refused on every try.
-func (r *Runner) ParkFailures() int64 { return r.parkFailures.Load() }
+func (r *Consumers) ParkFailures() int64 { return r.parkFailures.Load() }
 
 // Stats returns each consumer's counters (the last run's, once it has stopped).
-func (r *Runner) Stats() map[string]kafka.Stats {
+func (r *Consumers) Stats() map[string]kafka.Stats {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make(map[string]kafka.Stats, len(r.stats)+len(r.live))

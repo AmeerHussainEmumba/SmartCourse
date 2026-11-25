@@ -1,4 +1,4 @@
-// Package transporttest holds test doubles for the worker's Kafka transport.
+// Package transporttest holds test doubles for the worker's Kafka eventbus.
 package transporttest
 
 import (

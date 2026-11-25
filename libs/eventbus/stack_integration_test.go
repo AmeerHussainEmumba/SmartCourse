@@ -1,6 +1,6 @@
 //go:build integration
 
-package transport_test
+package eventbus_test
 
 import (
 	"context"
@@ -15,13 +15,14 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus/transporttest"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/events/registry"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka/topics"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/transport"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/transport/transporttest"
 )
 
 // stack is a real Postgres (outbox, processed_events, an effects table), a real
@@ -32,7 +33,7 @@ type stack struct {
 	t       *testing.T
 	env     *testenv.Env
 	kafka   *testenv.KafkaEnv
-	schemas transport.Schemas
+	schemas eventbus.Schemas
 }
 
 var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -47,7 +48,7 @@ func newStack(t *testing.T) *stack {
 		t.Fatalf("topics.Ensure: %v", err)
 	}
 	reg := transporttest.NewRegistry(t)
-	schemas, err := transport.LoadSchemas(ctx, registry.New(reg.URL))
+	schemas, err := eventbus.LoadSchemas(ctx, registry.New(reg.URL))
 	if err != nil {
 		t.Fatalf("LoadSchemas: %v", err)
 	}
@@ -58,9 +59,9 @@ func newStack(t *testing.T) *stack {
 	return &stack{t: t, env: env, kafka: kb, schemas: schemas}
 }
 
-func (s *stack) publisher(produceTimeout time.Duration) *transport.Publisher {
+func (s *stack) publisher(produceTimeout time.Duration) *eventbus.Publisher {
 	s.t.Helper()
-	p, err := transport.NewPublisher(transport.PublisherConfig{Brokers: s.kafka.Brokers, ProduceTimeout: produceTimeout, Schemas: s.schemas})
+	p, err := eventbus.NewPublisher(eventbus.PublisherConfig{Brokers: s.kafka.Brokers, ProduceTimeout: produceTimeout, Schemas: s.schemas})
 	if err != nil {
 		s.t.Fatalf("NewPublisher: %v", err)
 	}
@@ -83,25 +84,33 @@ func (s *stack) startRelay(pub relay.Publisher, workers int, opts ...relay.Optio
 	return rl, stop
 }
 
+// runnerCfg is what a test tunes on the consumers; the rest is filled in by
+// startRunner (brokers, a short retry budget, a quiet logger).
+type runnerCfg struct {
+	MaxInFlight     int
+	ShutdownTimeout time.Duration
+	Sink            relay.DeadLetterSink
+}
+
 // startRunner runs consumer groups for handlers and returns a stop func that
 // waits for them to drain.
-func (s *stack) startRunner(cfg transport.RunnerConfig, handlers ...relay.Handler) (*transport.Runner, func()) {
+func (s *stack) startRunner(cfg runnerCfg, handlers ...relay.Handler) (*eventbus.Consumers, func()) {
 	s.t.Helper()
-	cfg.Brokers = s.kafka.Brokers
-	if cfg.MaxAttempts == 0 {
-		cfg.MaxAttempts = 3
+	k := config.KafkaConfig{
+		Brokers: s.kafka.Brokers, ConsumerMaxInFlight: cfg.MaxInFlight, ConsumerMaxAttempts: 3,
+		ConsumerBackoffBase: 20 * time.Millisecond, ConsumerBackoffMax: 100 * time.Millisecond,
+		ConsumerShutdownTimeout: cfg.ShutdownTimeout,
 	}
-	if cfg.BackoffBase == 0 {
-		cfg.BackoffBase = 20 * time.Millisecond
-		cfg.BackoffMax = 100 * time.Millisecond
+	if k.ConsumerShutdownTimeout == 0 {
+		k.ConsumerShutdownTimeout = 5 * time.Second
 	}
-	if cfg.ShutdownTimeout == 0 {
-		cfg.ShutdownTimeout = 5 * time.Second
+	opts := []eventbus.ConsumerOption{eventbus.WithLogger(quiet)}
+	if cfg.Sink != nil {
+		opts = append(opts, eventbus.WithSink(cfg.Sink))
 	}
-	cfg.Logger = quiet
-	r, err := transport.NewRunner(cfg, s.env.DB, handlers)
+	r, err := eventbus.NewConsumers(k, handlers, s.env.DB, opts...)
 	if err != nil {
-		s.t.Fatalf("NewRunner: %v", err)
+		s.t.Fatalf("NewConsumers: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

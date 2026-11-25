@@ -17,6 +17,7 @@ import (
 	temporalclient "go.temporal.io/sdk/client"
 	"gorm.io/gorm"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing"
 	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/httpx"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
@@ -523,7 +524,7 @@ func (s *Service) Publish(ctx context.Context, courseID, instructorID uuid.UUID)
 	_, err = s.temporal.ExecuteWorkflow(ctx, temporalclient.StartWorkflowOptions{
 		ID:        workflowID,
 		TaskQueue: s.taskQueue,
-	}, PublishWorkflowName, PublishWorkflowInput{
+	}, publishing.WorkflowName, publishing.PublishWorkflowInput{
 		CourseID: courseID, VersionID: draft.ID, OldVersionID: c.PublishedVersionID, Title: draft.Title,
 	})
 	if err != nil {
@@ -656,7 +657,7 @@ func (s *Service) ComputeMetadata(ctx context.Context, versionID uuid.UUID) erro
 // IndexSearch and WarmCache need in one pass (one set of DB reads, not two)
 // and pre-marshals the course detail payload WarmCache writes to Redis
 // verbatim, so a cache hit never re-serializes anything.
-func (s *Service) BuildOutline(ctx context.Context, courseID, versionID uuid.UUID) (*PublishOutline, error) {
+func (s *Service) BuildOutline(ctx context.Context, courseID, versionID uuid.UUID) (*publishing.PublishOutline, error) {
 	c, err := s.repo.GetCourseByID(ctx, courseID)
 	if err != nil {
 		return nil, apperrors.ErrInternal.Wrap(err)
@@ -696,7 +697,7 @@ func (s *Service) BuildOutline(ctx context.Context, courseID, versionID uuid.UUI
 	if err != nil {
 		return nil, apperrors.ErrInternal.Wrap(err)
 	}
-	return &PublishOutline{
+	return &publishing.PublishOutline{
 		CourseID: c.ID, VersionID: v.ID, VersionNumber: v.VersionNumber, Slug: c.Slug,
 		Title: v.Title, Description: v.Description, InstructorName: instructorName,
 		Category: v.Category, Level: v.Level, Tags: []string(v.Tags),
@@ -707,7 +708,7 @@ func (s *Service) BuildOutline(ctx context.Context, courseID, versionID uuid.UUI
 // IndexSearch is the IndexSearch activity (RFC §7.4, pulled forward from
 // M3 per ADR-0025 rather than left as a no-op stand-in — GET
 // /courses/search is live, not just this write side of it).
-func (s *Service) IndexSearch(ctx context.Context, o *PublishOutline) error {
+func (s *Service) IndexSearch(ctx context.Context, o *publishing.PublishOutline) error {
 	if err := s.repo.UpsertSearchIndex(ctx, o); err != nil {
 		return apperrors.ErrInternal.Wrap(err)
 	}
@@ -718,7 +719,7 @@ func (s *Service) IndexSearch(ctx context.Context, o *PublishOutline) error {
 // IndexSearch) — writes the version-scoped Redis key GetPublishedDetail
 // reads through. See cacheTTL's comment for why there's no explicit
 // invalidation step: each version gets its own key.
-func (s *Service) WarmCache(ctx context.Context, o *PublishOutline) error {
+func (s *Service) WarmCache(ctx context.Context, o *publishing.PublishOutline) error {
 	key := cacheKeyForVersion(o.CourseID, o.VersionNumber)
 	if err := s.rdb.Set(ctx, key, o.DetailJSON, cacheTTL).Err(); err != nil {
 		return apperrors.ErrInternal.Wrap(err)

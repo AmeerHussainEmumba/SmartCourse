@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/testsuite"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing"
 	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
@@ -40,14 +41,14 @@ type chaosActivities struct {
 
 var errChaos = errors.New("chaos: injected failure")
 
-func (c *chaosActivities) WarmCache(ctx context.Context, o course.PublishOutline) error {
+func (c *chaosActivities) WarmCache(ctx context.Context, o publishing.PublishOutline) error {
 	if n := c.warmCalls.Add(1); n <= c.warmFailFirst {
 		return errChaos
 	}
 	return c.Activities.WarmCache(ctx, o)
 }
 
-func (c *chaosActivities) IndexSearch(ctx context.Context, o course.PublishOutline) error {
+func (c *chaosActivities) IndexSearch(ctx context.Context, o publishing.PublishOutline) error {
 	c.indexCalls.Add(1)
 	if c.indexAlwaysFails {
 		return errChaos
@@ -133,7 +134,7 @@ func (f *fixture) run(t *testing.T) error {
 	var suite testsuite.WorkflowTestSuite
 	te := suite.NewTestWorkflowEnvironment()
 	te.RegisterActivity(f.chaos)
-	te.ExecuteWorkflow(workflows.PublishCourseWorkflow, course.PublishWorkflowInput{
+	te.ExecuteWorkflow(workflows.PublishCourseWorkflow, publishing.PublishWorkflowInput{
 		CourseID: f.courseID, VersionID: f.draftID, Title: f.title,
 	})
 	if !te.IsWorkflowCompleted() {
@@ -280,7 +281,7 @@ func TestAdvWorkflow_TwoConcurrentRunsForSameVersion_EndStateCoherent(t *testing
 			var suite testsuite.WorkflowTestSuite
 			te := suite.NewTestWorkflowEnvironment()
 			te.RegisterActivity(acts)
-			te.ExecuteWorkflow(workflows.PublishCourseWorkflow, course.PublishWorkflowInput{CourseID: f.courseID, VersionID: f.draftID, Title: f.title})
+			te.ExecuteWorkflow(workflows.PublishCourseWorkflow, publishing.PublishWorkflowInput{CourseID: f.courseID, VersionID: f.draftID, Title: f.title})
 			errs[i] = te.GetWorkflowError()
 		}()
 	}

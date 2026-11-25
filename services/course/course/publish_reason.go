@@ -3,6 +3,7 @@ package course
 import (
 	"errors"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing"
 	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
 )
 
@@ -11,7 +12,7 @@ import (
 // bounded, fixed-vocabulary string that may be stored, emitted in
 // course.publish_failed and emailed to the instructor. failPublish trusts no
 // other message (S-08).
-const PublishFailureType = "PublishFailure"
+const PublishFailureType = publishing.FailureType
 
 // publishReason is the fixed vocabulary of publish failures. A raw error text
 // (a storage SDK message with a host, port and bucket path, a driver error, a

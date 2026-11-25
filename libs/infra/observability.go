@@ -78,6 +78,9 @@ type Observability struct {
 //     and process collectors, the RED metrics, db_connections_in_use/max and,
 //     with ObserveOptions.Outbox, the outbox gauges.
 //
+// A nil or empty Dependencies is allowed (a binary with no database): tracing
+// then installs no DB or Redis hook, and metrics carry no db_* or outbox series.
+//
 // ctx bounds the background poller; call Shutdown before exit to flush spans.
 func (d *Dependencies) Observe(ctx context.Context, cfg *config.Config, o ObserveOptions) *Observability {
 	obs := &Observability{}
@@ -107,10 +110,14 @@ func (d *Dependencies) Observe(ctx context.Context, cfg *config.Config, o Observ
 			slog.Warn("tracing disabled: set-up failed", slog.String("error", err.Error()))
 		} else {
 			obs.provider, obs.tracing = p, true
-			if err := db.EnableTracing(d.DB); err != nil {
-				slog.Warn("database tracing not enabled", slog.String("error", err.Error()))
+			if d != nil && d.DB != nil {
+				if err := db.EnableTracing(d.DB); err != nil {
+					slog.Warn("database tracing not enabled", slog.String("error", err.Error()))
+				}
 			}
-			cache.EnableTracing(d.RDB)
+			if d != nil && d.RDB != nil {
+				cache.EnableTracing(d.RDB)
+			}
 			slog.Info("tracing enabled", slog.String("service", name), slog.Float64("sample_ratio", t.SampleRatio))
 		}
 	}
@@ -130,12 +137,19 @@ func (o *Observability) initMetrics(ctx context.Context, d *Dependencies, opts O
 	if err != nil {
 		return err
 	}
-	sqlDB, err := d.DB.DB()
-	if err != nil {
-		return fmt.Errorf("get sql.DB: %w", err)
-	}
-	if err := telemetry.RegisterDBStats(reg, sqlDB); err != nil {
-		return err
+	// A binary with no database (Observe on a nil or empty Dependencies, the
+	// publishing worker) exports no db_* series and no outbox gauges.
+	var sqlDB *sql.DB
+	if d != nil && d.DB != nil {
+		sqlDB, err = d.DB.DB()
+		if err != nil {
+			return fmt.Errorf("get sql.DB: %w", err)
+		}
+		if err := telemetry.RegisterDBStats(reg, sqlDB); err != nil {
+			return err
+		}
+	} else {
+		opts.Outbox = false
 	}
 	o.reg, o.Metrics = reg, m
 	// A metric this binary never feeds must be absent, not a constant 0: an

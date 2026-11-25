@@ -27,6 +27,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/logging"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/runtime"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/temporal"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/jobs"
 )
@@ -49,7 +50,8 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	obs, shutdownTelemetry := startTelemetry(ctx, logger, deps, cfg) // tracing, /metrics, Temporal interceptors; see telemetry_wire.go
+	health := runtime.NewHealth()
+	obs, shutdownTelemetry := startTelemetry(ctx, logger, deps, cfg, health) // tracing, internal listener, Temporal interceptors; see telemetry_wire.go
 	defer shutdownTelemetry()
 
 	// MongoDB (archive, dead letters) and the admin surface run beside the
@@ -68,6 +70,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer events.Close()
+	if check := events.HealthCheck(); check != nil {
+		health.Add("kafka", runtime.Check(check), runtime.NonFatal()) // the outbox buffers an outage: degraded, not unready (RFC §6.2)
+	}
 	rl := buildRelay(deps, cfg, events.RelayOptions()...)
 	replayable := consumerHandlers()
 	if transportMode(cfg) == config.TransportKafka {
@@ -102,6 +107,7 @@ func main() {
 		startAsynq(ctx, logger, deps, cfg)
 	}()
 
+	health.Started()
 	wg.Wait() // every goroutine returns once ctx is cancelled
 	logger.Info("shutting down worker")
 }
@@ -206,7 +212,7 @@ func startPublishWorker(ctx context.Context, logger *slog.Logger, deps *infra.De
 			}
 			continue
 		}
-		logger.Info("publish worker started", slog.String("task_queue", cfg.Temporal.TaskQueue))
+		logger.Info("publish worker started", slog.String("task_queue", cfg.Temporal.TaskQueue), slog.String("activity_queue", cfg.Temporal.ActivityQueue))
 		<-ctx.Done()
 		pw.Stop()
 		temporalClient.Close()

@@ -10,7 +10,7 @@
 // Not covered: the real Schema Registry (a stand-in serves ids and versions),
 // a Confluent-format consumer reading the bytes, more than one broker, TLS or
 // SASL, throughput.
-package transport_test
+package eventbus_test
 
 import (
 	"context"
@@ -23,10 +23,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka/topics"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
-	"github.com/AmeerHussainEmumba/SmartCourse/services/worker/transport"
 )
 
 func seqs(n int) []int {
@@ -64,7 +64,7 @@ func TestTransport_PerAggregateOrderEndToEnd(t *testing.T) {
 		}
 	}
 	rl, _ := s.startRelay(s.publisher(10*time.Second), 4)
-	s.startRunner(transport.RunnerConfig{MaxInFlight: 4}, effectHandler("order-consumer", nil))
+	s.startRunner(runnerCfg{MaxInFlight: 4}, effectHandler("order-consumer", nil))
 
 	s.eventually(90*time.Second, "all effects applied", func() bool {
 		return s.count(`SELECT count(*) FROM public.test_effects`) == aggs*perAgg
@@ -91,7 +91,7 @@ func TestTransport_DuplicateDeliveryProducesOneEffect(t *testing.T) {
 	agg := uuid.New()
 	s.write(agg, 0)
 	_, stopRelay := s.startRelay(s.publisher(10*time.Second), 1)
-	s.startRunner(transport.RunnerConfig{}, effectHandler("dup-consumer", nil))
+	s.startRunner(runnerCfg{}, effectHandler("dup-consumer", nil))
 	s.eventually(60*time.Second, "first delivery", func() bool { return s.count(`SELECT count(*) FROM public.test_effects`) == 1 })
 	stopRelay()
 
@@ -111,7 +111,7 @@ func TestTransport_DuplicateDeliveryProducesOneEffect(t *testing.T) {
 		t.Fatal(err)
 	}
 	row.Payload = raw
-	msg, err := transport.NewCodec(s.schemas).Encode(row)
+	msg, err := eventbus.NewCodec(s.schemas).Encode(row)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestTransport_ConsumerKilledMidHandleResumesWithoutLoss(t *testing.T) {
 		}
 		return nil
 	})
-	_, stop1 := s.startRunner(transport.RunnerConfig{ShutdownTimeout: time.Second}, blocking)
+	_, stop1 := s.startRunner(runnerCfg{ShutdownTimeout: time.Second}, blocking)
 	select {
 	case <-inHandler:
 	case <-time.After(90 * time.Second):
@@ -177,7 +177,7 @@ func TestTransport_ConsumerKilledMidHandleResumesWithoutLoss(t *testing.T) {
 	if n := s.count(`SELECT count(*) FROM public.test_effects WHERE seq = 5`); n != 0 {
 		t.Fatal("the killed handler's effect was committed")
 	}
-	s.startRunner(transport.RunnerConfig{}, effectHandler("kill-consumer", nil))
+	s.startRunner(runnerCfg{}, effectHandler("kill-consumer", nil))
 	s.eventually(90*time.Second, "the second consumer finishes the stream", func() bool {
 		return s.count(`SELECT count(*) FROM public.test_effects`) == total
 	})
@@ -207,7 +207,7 @@ func TestTransport_BrokerStoppedThenStarted_BacklogDrains(t *testing.T) {
 	write(0, 8)
 	parked := &sink{}
 	rl, _ := s.startRelay(s.publisher(3*time.Second), 3, relay.WithDeadLetterSink(parked), relay.WithMaxAttempts(3))
-	s.startRunner(transport.RunnerConfig{Sink: parked}, effectHandler("outage-consumer", nil))
+	s.startRunner(runnerCfg{Sink: parked}, effectHandler("outage-consumer", nil))
 	s.eventually(90*time.Second, "some events delivered before the outage", func() bool {
 		return s.count(`SELECT count(*) FROM public.test_effects`) >= 8
 	})
@@ -274,7 +274,7 @@ func TestTransport_PoisonMessagesDoNotStallThePartition(t *testing.T) {
 			}
 			return nil
 		})
-		runner, _ := s.startRunner(transport.RunnerConfig{Sink: parked}, h)
+		runner, _ := s.startRunner(runnerCfg{Sink: parked}, h)
 
 		s.eventually(90*time.Second, "the healthy records behind the poison ones", func() bool {
 			got := s.effectsFor("poison-consumer", agg)
@@ -322,7 +322,7 @@ func TestTransport_PoisonMessagesDoNotStallThePartition(t *testing.T) {
 			}
 			return nil
 		})
-		runner, _ := s.startRunner(transport.RunnerConfig{Sink: parked}, h)
+		runner, _ := s.startRunner(runnerCfg{Sink: parked}, h)
 		s.eventually(90*time.Second, "the record behind the unparkable one", func() bool {
 			return equalInts(s.effectsFor("refused-consumer", agg), []int{2})
 		})
@@ -342,7 +342,7 @@ func TestTransport_PoisonMessagesDoNotStallThePartition(t *testing.T) {
 			s.write(goodAgg, n)
 		}
 		rl, _ := s.startRelay(s.publisher(10*time.Second), 2, relay.WithDeadLetterSink(parked), relay.WithMaxAttempts(3))
-		s.startRunner(transport.RunnerConfig{}, effectHandler("relay-poison-consumer", nil))
+		s.startRunner(runnerCfg{}, effectHandler("relay-poison-consumer", nil))
 
 		s.eventually(90*time.Second, "everything but the bad row delivered", func() bool {
 			return s.count(`SELECT count(*) FROM public.test_effects`) == 6
@@ -352,7 +352,7 @@ func TestTransport_PoisonMessagesDoNotStallThePartition(t *testing.T) {
 		})
 		d := parked.parked()[0]
 		if d.Consumer != relay.RelayConsumer || d.Event.EventType != "course.course_created" || d.Attempts != 3 ||
-			!errors.Is(d.Err, transport.ErrUnencodable) {
+			!errors.Is(d.Err, eventbus.ErrUnencodable) {
 			t.Fatalf("dead letter = %+v", d)
 		}
 		if _, _, g := rl.Stats(); g != 1 {

@@ -3,6 +3,7 @@ module github.com/AmeerHussainEmumba/SmartCourse/test/e2e
 go 1.26.5
 
 require (
+	github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/events v0.0.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-redis/redis_rate/v10 v10.0.1 // indirect
@@ -165,3 +166,5 @@ replace (
 	github.com/AmeerHussainEmumba/SmartCourse/services/course => ../../services/course
 	github.com/AmeerHussainEmumba/SmartCourse/services/identity => ../../services/identity
 )
+
+replace github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing => ../../libs/contracts/publishing

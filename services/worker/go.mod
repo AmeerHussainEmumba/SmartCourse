@@ -3,6 +3,9 @@ module github.com/AmeerHussainEmumba/SmartCourse/services/worker
 go 1.26.5
 
 require (
+	github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus v0.0.0
+	github.com/AmeerHussainEmumba/SmartCourse/libs/runtime v0.0.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
@@ -204,3 +207,9 @@ replace (
 )
 
 replace github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry => ../../libs/telemetry
+
+replace github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing => ../../libs/contracts/publishing
+
+replace github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus => ../../libs/eventbus
+
+replace github.com/AmeerHussainEmumba/SmartCourse/libs/runtime => ../../libs/runtime
