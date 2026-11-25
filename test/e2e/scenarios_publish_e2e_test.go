@@ -1,4 +1,4 @@
-//go:build e2e_legacy
+//go:build e2e
 
 package e2e_test
 
@@ -18,8 +18,11 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/test/e2e/harness"
 )
 
-// Operational scenarios: E12 to E14, on the full stack of test/e2e/harness.
-// See the header of scenarios_pipeline_e2e_test.go.
+// Operational scenarios on the ten-binary harness. A publish is run by two
+// binaries: course-api claims it and starts the workflow, publishing-worker
+// runs the workflow, course-worker serves its activities and runs the
+// stale-publish reconciler. "The worker" of the old spec is both of the last
+// two.
 
 // liveCourse is what the public GET /courses/{slug} serves.
 type liveCourse struct {
@@ -81,7 +84,7 @@ func parseLive(code int, raw []byte, err error) (liveCourse, error) {
 //     given modules but no lessons, so the ValidateMetadata activity (no retry)
 //     fails. POST /courses/{id}/publish (202); wait for publish-status.
 //  4. Fault B, a killed worker: the draft is repaired through the API (a
-//     lesson is added), the worker is kill -9'd, publish is requested (202,
+//     lesson is added), the publishing and course workers are kill -9'd, publish is requested (202,
 //     the workflow starts on Temporal with nobody to run it), an immediate
 //     second publish is refused (409 publish_in_progress), and the workflow is
 //     terminated in Temporal as a dead process leaves it. A new worker starts.
@@ -125,7 +128,11 @@ func TestE2E_E12_PublishUnderFault(t *testing.T) {
 		t.Fatal(err)
 	}
 	publishedEvents := func() int64 {
-		return s.MustCount(t, `SELECT count(*) FROM platform.outbox WHERE event_type = 'course.course_published'
+		return s.MustCount(t, `SELECT count(*) FROM course.outbox WHERE event_type = 'course.course_published'
+			AND convert_from(payload, 'UTF8')::jsonb ->> 'course_id' = ?`, course.ID.String())
+	}
+	publishFailedEvents := func() int64 {
+		return s.MustCount(t, `SELECT count(*) FROM course.outbox WHERE event_type = 'course.publish_failed'
 			AND convert_from(payload, 'UTF8')::jsonb ->> 'course_id' = ?`, course.ID.String())
 	}
 	if n := publishedEvents(); n != 1 {
@@ -217,6 +224,22 @@ func TestE2E_E12_PublishUnderFault(t *testing.T) {
 	if n := publishedEvents(); n != 1 {
 		t.Errorf("course.course_published events after Fault A: %d, want 1 (none for version 2)", n)
 	}
+	// The failure is an event too (RFC 6.5 CoursePublishFailed), written with
+	// the state change, and it reaches the archive and the audit log.
+	var failedEventID string
+	harness.Eventually(t, time.Minute, "one course.publish_failed event for the course", func() error {
+		return s.DB().Raw(`SELECT event_id::text FROM course.outbox WHERE event_type = 'course.publish_failed'
+			AND convert_from(payload, 'UTF8')::jsonb ->> 'course_id' = ?`, course.ID.String()).Row().Scan(&failedEventID)
+	})
+	if n := publishFailedEvents(); n != 1 {
+		t.Errorf("course.publish_failed events after Fault A: %d, want 1", n)
+	}
+	harness.Eventually(t, time.Minute, "the publish_failed event to be archived", func() error {
+		if n, err := s.Mongo.ArchivedEvents(failedEventID); err != nil || n != 1 {
+			return harness.Errf("archived %d times (err %v), want 1", n, err)
+		}
+		return nil
+	})
 
 	// Step 4: Fault B. Repair the draft through the API, then lose the worker.
 	harness.Eventually(t, 10*time.Second, "a lesson to be added to the version 2 draft through the API", func() error {
@@ -232,7 +255,7 @@ func TestE2E_E12_PublishUnderFault(t *testing.T) {
 	v2Lessons = 1
 	mu.Unlock()
 
-	s.KillWorker()
+	killPublishWorkers(s)
 	workflowID := publishRaw(t, s, inst, course)
 	if st := s.PublishState(t, inst, course); st != "publishing" {
 		t.Fatalf("publish-status %q right after the claim with the worker dead, want publishing", st)
@@ -248,7 +271,7 @@ func TestE2E_E12_PublishUnderFault(t *testing.T) {
 	if err := tc.TerminateWorkflow(context.Background(), workflowID, "", "e2e: the worker died mid-publish"); err != nil {
 		t.Fatalf("terminate workflow %s: %v", workflowID, err)
 	}
-	s.StartWorker(t)
+	startPublishWorkers(t, s)
 	claimed := time.Now()
 	harness.Eventually(t, 4*time.Minute, "the reconciler to release the stale claim (publish_failed)", func() error {
 		if st := s.PublishState(t, inst, course); st != "publish_failed" {
@@ -257,6 +280,9 @@ func TestE2E_E12_PublishUnderFault(t *testing.T) {
 		return nil
 	})
 	t.Logf("the stale claim was released %s after it was taken (the lease is 15 minutes)", time.Since(claimed).Round(time.Second))
+	if n := publishFailedEvents(); n != 2 {
+		t.Errorf("course.publish_failed events after the reconciler's release: %d, want 2 (Fault A and the release)", n)
+	}
 	if n := s.MustCount(t, `SELECT count(*) FROM course.course_versions WHERE course_id = ? AND state = 'publishing'`, course.ID); n != 0 {
 		t.Errorf("%d versions are still publishing after the release", n)
 	}
@@ -309,7 +335,7 @@ func TestE2E_E12_PublishUnderFault(t *testing.T) {
 	}); err != nil || code != http.StatusCreated {
 		t.Fatalf("add a lesson to the second course's draft: HTTP %d %s (err %v)", code, body, err)
 	}
-	s.KillWorker()
+	killPublishWorkers(s)
 	publishRaw(t, s, inst, other)
 	harness.Never(t, 3*time.Second, "the course staying in publishing while no worker runs", func() error {
 		if st := s.PublishState(t, inst, other); st != "publishing" {
@@ -317,7 +343,7 @@ func TestE2E_E12_PublishUnderFault(t *testing.T) {
 		}
 		return nil
 	})
-	s.StartWorker(t)
+	startPublishWorkers(t, s)
 	s.WaitPublished(t, inst, other)
 	if l, err := fetchLive(s.CourseURL, other.Slug); err != nil || !strings.HasSuffix(l.Title, "Retry") || l.Lessons != 1 {
 		t.Errorf("after Fault C the live course is %v (err %v), want the complete version 2", l, err)
@@ -374,4 +400,18 @@ func mustGet(t *testing.T, url, token string) []byte {
 		t.Fatalf("GET %s: HTTP %d %s (err %v)", url, code, raw, err)
 	}
 	return raw
+}
+
+// killPublishWorkers is the death of "the worker" of a publish: the workflow
+// runner and the activity server, with kill -9.
+func killPublishWorkers(s *harness.Stack) {
+	s.Kill(harness.PublishingWorker)
+	s.Kill(harness.CourseWorker)
+}
+
+// startPublishWorkers starts both again (the reconciler runs in course-worker).
+func startPublishWorkers(t *testing.T, s *harness.Stack) {
+	t.Helper()
+	s.Start(t, harness.CourseWorker)
+	s.Start(t, harness.PublishingWorker)
 }
