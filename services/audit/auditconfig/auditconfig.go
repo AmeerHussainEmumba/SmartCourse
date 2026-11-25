@@ -78,7 +78,7 @@ func LoadAPI() (*config.Config, error) {
 // and the JWT key are not used; placeholders satisfy the shared loader.
 func LoadWorker() (*config.Config, error) {
 	fill(map[string]string{
-		"REDIS_ADDR":     "unused.invalid:6379",
+		"REDIS_ADDR":      "unused.invalid:6379",
 		"JWT_SIGNING_KEY": "unused-by-audit-worker-0123456789abcdef",
 	})
 	cfg, err := config.Load()

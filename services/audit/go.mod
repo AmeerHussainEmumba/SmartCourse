@@ -146,28 +146,22 @@ require (
 )
 
 replace (
-	github.com/AmeerHussainEmumba/SmartCourse/libs/asynqx => ../../libs/asynqx
 	github.com/AmeerHussainEmumba/SmartCourse/libs/auth => ../../libs/auth
 	github.com/AmeerHussainEmumba/SmartCourse/libs/cache => ../../libs/cache
 	github.com/AmeerHussainEmumba/SmartCourse/libs/config => ../../libs/config
-	github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing => ../../libs/contracts/publishing
 	github.com/AmeerHussainEmumba/SmartCourse/libs/db => ../../libs/db
 	github.com/AmeerHussainEmumba/SmartCourse/libs/errors => ../../libs/errors
 	github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus => ../../libs/eventbus
 	github.com/AmeerHussainEmumba/SmartCourse/libs/events => ../../libs/events
 	github.com/AmeerHussainEmumba/SmartCourse/libs/httpx => ../../libs/httpx
-	github.com/AmeerHussainEmumba/SmartCourse/libs/idempotency => ../../libs/idempotency
 	github.com/AmeerHussainEmumba/SmartCourse/libs/infra => ../../libs/infra
-	github.com/AmeerHussainEmumba/SmartCourse/libs/jobs => ../../libs/jobs
 	github.com/AmeerHussainEmumba/SmartCourse/libs/kafka => ../../libs/kafka
 	github.com/AmeerHussainEmumba/SmartCourse/libs/logging => ../../libs/logging
 	github.com/AmeerHussainEmumba/SmartCourse/libs/mongostore => ../../libs/mongostore
 	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox => ../../libs/outbox
-	github.com/AmeerHussainEmumba/SmartCourse/libs/ratelimit => ../../libs/ratelimit
 	github.com/AmeerHussainEmumba/SmartCourse/libs/relay => ../../libs/relay
 	github.com/AmeerHussainEmumba/SmartCourse/libs/router => ../../libs/router
 	github.com/AmeerHussainEmumba/SmartCourse/libs/runtime => ../../libs/runtime
 	github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry => ../../libs/telemetry
-	github.com/AmeerHussainEmumba/SmartCourse/libs/temporal => ../../libs/temporal
 	github.com/AmeerHussainEmumba/SmartCourse/libs/testenv => ../../libs/testenv
 )

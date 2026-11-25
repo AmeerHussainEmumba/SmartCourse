@@ -1,0 +1,42 @@
+# audit-api (docs/plans/microservices-split.md §2, §4.1, §6): the failed-events
+# admin surface of the audit service (list, inspect, replay by republish).
+# Each service is its own Go module, so this image is built from that module
+# plus only the library modules it depends on; nothing else in the repo is
+# copied in. Keep the COPY list in step with the module's go.mod `replace`
+# directives (scripts/check-dockerfile-modules.sh): GOWORK=off below means a
+# missing module fails this build instead of being papered over by go.work.
+# The image shares the module with Dockerfile.audit-worker.
+# Build context is the repo root: docker build -f Dockerfile.audit-api .
+FROM golang:1.26.11-alpine AS build
+ENV GOWORK=off CGO_ENABLED=0
+WORKDIR /src
+COPY libs/auth ./libs/auth
+COPY libs/cache ./libs/cache
+COPY libs/config ./libs/config
+COPY libs/db ./libs/db
+COPY libs/errors ./libs/errors
+COPY libs/eventbus ./libs/eventbus
+COPY libs/events ./libs/events
+COPY libs/httpx ./libs/httpx
+COPY libs/infra ./libs/infra
+COPY libs/kafka ./libs/kafka
+COPY libs/logging ./libs/logging
+COPY libs/mongostore ./libs/mongostore
+COPY libs/outbox ./libs/outbox
+COPY libs/relay ./libs/relay
+COPY libs/router ./libs/router
+COPY libs/runtime ./libs/runtime
+COPY libs/telemetry ./libs/telemetry
+COPY libs/testenv ./libs/testenv
+COPY services/audit ./services/audit
+WORKDIR /src/services/audit
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    go build -trimpath -o /out/audit-api ./cmd/audit-api
+
+FROM alpine:3.20
+# Run as an unprivileged user: a compromise of the service should not be root in the container.
+RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 app
+USER app
+COPY --from=build /out/audit-api /usr/local/bin/audit-api
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/audit-api"]

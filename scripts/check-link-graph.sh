@@ -36,6 +36,8 @@ rules=(
   "services/analytics analytics-api services/identity,services/course,services/worker,libs/temporal,libs/asynqx,libs/kafka   yes 650"
   "services/course    course-api    services/identity,services/analytics,services/worker                no  760"
   "services/worker    worker        services/identity                                                   no  855"
+  "services/audit     audit-api     services/identity,services/course,services/analytics,services/worker,libs/temporal,libs/asynqx   yes 680"
+  "services/audit     audit-worker  services/identity,services/course,services/analytics,services/worker,libs/temporal,libs/asynqx   yes 680"
 )
 slack=${LINK_BUDGET_SLACK:-0}
 
