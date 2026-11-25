@@ -159,7 +159,7 @@ func (s *stack) start(smtp config.SMTPConfig, mongo config.MongoConfig) *worker 
 			CriticalConcurrency: 4, DefaultConcurrency: 1, LowConcurrency: 1, MaxRetry: 3,
 			BackoffBase: time.Second, BackoffMax: 2 * time.Second, ShutdownTimeout: 5 * time.Second,
 		},
-		Jobs: config.JobsConfig{OutboxPruneInterval: time.Hour},
+		Jobs: config.JobsConfig{OutboxPruneInterval: time.Hour, ProcessedEventsRetention: 336 * time.Hour},
 		SMTP: smtp, Mongo: mongo,
 	}
 	w := &worker{t: t, addr: addr, logs: &syncBuf{}, done: make(chan struct{})}

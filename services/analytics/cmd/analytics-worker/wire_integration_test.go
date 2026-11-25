@@ -77,7 +77,7 @@ func start(t *testing.T, mongoURI string) *stack {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- runtime.Run(ctx, "analytics-worker", wire, runtime.WithLogger(quiet))
+		done <- runtime.Run(ctx, "analytics-worker", wire, runtime.WithConfig(loadConfig), runtime.WithLogger(quiet))
 	}()
 	var once sync.Once
 	var runErr error

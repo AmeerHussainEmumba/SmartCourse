@@ -155,7 +155,7 @@ func workerConfig(t *testing.T, env *testenv.Env, brokers []string, registryURL,
 		},
 		Jobs: config.JobsConfig{
 			ReconcilePublishesInterval: time.Minute, EnrollmentCountInterval: time.Hour,
-			IdempotencyPruneInterval: time.Hour, OutboxPruneInterval: time.Hour, OutboxRetention: 168 * time.Hour,
+			IdempotencyPruneInterval: time.Hour, OutboxPruneInterval: time.Hour, OutboxRetention: 168 * time.Hour, ProcessedEventsRetention: 336 * time.Hour,
 		},
 		Asynq: config.AsynqConfig{
 			LowConcurrency: 2, MaxRetry: 3, BackoffBase: time.Second, BackoffMax: 5 * time.Second, ShutdownTimeout: 2 * time.Second,

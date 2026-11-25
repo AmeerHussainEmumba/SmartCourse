@@ -106,7 +106,7 @@ func startWorker(t *testing.T, env *testenv.Env, newPublisher publisherFactory) 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- runtime.Run(ctx, "identity-worker", func(p *runtime.Process) error { return wireWith(p, newPublisher) }, runtime.WithOutbox())
+		done <- runtime.Run(ctx, "identity-worker", func(p *runtime.Process) error { return wireWith(p, newPublisher) }, options()...)
 	}()
 	t.Cleanup(func() {
 		cancel()
