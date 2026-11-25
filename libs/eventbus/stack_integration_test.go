@@ -127,7 +127,7 @@ func (s *stack) startRunner(cfg runnerCfg, handlers ...relay.Handler) (*eventbus
 	if k.ConsumerShutdownTimeout == 0 {
 		k.ConsumerShutdownTimeout = 5 * time.Second
 	}
-	opts := []eventbus.ConsumerOption{eventbus.WithLogger(quiet)}
+	opts := []eventbus.ConsumerOption{eventbus.WithLogger(quiet), eventbus.WithParkBackoff(50*time.Millisecond, 200*time.Millisecond)}
 	if cfg.Sink != nil {
 		opts = append(opts, eventbus.WithSink(cfg.Sink))
 	}

@@ -67,14 +67,20 @@ type ConsumerConfig struct {
 	Backoff BackoffConfig
 
 	// OnExhausted is called once when a record has used its budget, after the
-	// last failed attempt, and the offset advances when it returns. This is the
-	// dead-letter seam (RFC §6.9, ADR-0031): park the record somewhere durable.
-	// It runs on the partition's goroutine and holds a MaxInFlight slot, so
-	// keep it short; it has no error return because the record is skipped
-	// either way, so a hook that cannot park must say so loudly (log, metric).
-	// A panic in the hook is recovered and logged. Nil means the record is only
-	// logged and skipped.
-	OnExhausted func(ctx context.Context, rec Record, err error)
+	// last failed attempt. This is the dead-letter seam (RFC §6.9, ADR-0031):
+	// park the record somewhere durable. It runs on the partition's goroutine
+	// and holds a MaxInFlight slot.
+	//
+	// Returning nil means the record is dealt with and the offset advances, so a
+	// poison record never stalls its partition. A hook whose store is down
+	// should not return nil (that drops the record): it should hold, retrying
+	// with backoff, until the store accepts the record, and return an error only
+	// when ctx is done (the consumer is stopping). A non-nil error leaves the
+	// record uncommitted: it is redelivered with a fresh budget to the next
+	// consumer of the group, and this partition's worker stops. A panic in the
+	// hook is recovered, logged, and the record is skipped. A nil OnExhausted
+	// means the record is only logged and skipped.
+	OnExhausted func(ctx context.Context, rec Record, err error) error
 
 	// ShutdownTimeout is how long Run waits for in-flight handlers once its
 	// context is cancelled (and how long a partition revoked by a rebalance
@@ -543,7 +549,9 @@ func (w *worker) handle(rec *kgo.Record) bool {
 }
 
 // exhaust runs the OnExhausted hook for a record that used its budget. It
-// reports false only if the worker was stopped before the hook could run.
+// reports false if the worker was stopped before the hook could run, or if the
+// hook returned an error: the record then stays uncommitted (redelivered with a
+// fresh budget), not skipped.
 func (w *worker) exhaust(r Record, err error) bool {
 	c := w.s.c
 	if !w.acquire() {
@@ -556,9 +564,16 @@ func (w *worker) exhaust(r Record, err error) bool {
 	if c.cfg.OnExhausted == nil {
 		return true
 	}
-	if herr := w.call(func() error { c.cfg.OnExhausted(w.ctx, r, err); return nil }); herr != nil {
+	var hookErr error
+	if herr := w.call(func() error { hookErr = c.cfg.OnExhausted(w.ctx, r, err); return nil }); herr != nil {
 		c.log.Error("OnExhausted hook panicked; the record is skipped anyway", "topic", r.Topic,
 			"partition", r.Partition, "offset", r.Offset, "error", herr)
+		return true
+	}
+	if hookErr != nil {
+		c.log.Error("OnExhausted hook did not deal with the record; leaving it uncommitted for redelivery", "topic", r.Topic,
+			"partition", r.Partition, "offset", r.Offset, "error", hookErr)
+		return false
 	}
 	return true
 }

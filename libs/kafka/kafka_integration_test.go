@@ -64,6 +64,7 @@ func TestKafka(t *testing.T) {
 	sub("OrderingPerKey", testOrderingPerKey)
 	sub("ConsumerKilledMidHandleIsRedelivered", testKilledMidHandle)
 	sub("PoisonRecordDoesNotStallPartition", testPoison)
+	sub("ExhaustedHookErrorLeavesTheRecordUncommitted", testExhaustedHookError)
 	sub("GracefulShutdownDrains", testGracefulShutdown)
 	sub("InFlightIsBounded", testBoundedInFlight)
 	sub("ConsumerJoiningMidStreamLosesNothing", testRebalance)
@@ -365,7 +366,7 @@ func testPoison(t *testing.T, env *testenv.KafkaEnv) {
 	cfg := kafka.ConsumerConfig{
 		Brokers: env.Brokers, GroupID: group, Topics: []string{topic}, MaxAttempts: 3,
 		Handler:     handler,
-		OnExhausted: func(_ context.Context, rec kafka.Record, err error) { hook <- exhausted{rec, err} },
+		OnExhausted: func(_ context.Context, rec kafka.Record, err error) error { hook <- exhausted{rec, err}; return nil },
 	}
 	r := startConsumer(t, cfg)
 
@@ -410,6 +411,66 @@ func testPoison(t *testing.T, env *testenv.KafkaEnv) {
 	_ = r2.stop(t)
 	if got := s2.snapshot(); fmt.Sprint(got) != "[ok3]" {
 		t.Fatalf("second consumer saw %v, want [ok3]: the poison offsets must have been committed", got)
+	}
+}
+
+// A hook that cannot park the record (its store is down) holds it and returns an
+// error when the consumer stops: the record must not be committed, so the next
+// consumer of the group receives it again, with a fresh budget.
+func testExhaustedHookError(t *testing.T, env *testenv.KafkaEnv) {
+	topic, group := uniq("holdexh"), uniq("g")
+	createTopic(t, env.Brokers, topic, 1)
+	p := newProducer(t, env.Brokers, kafka.ProducerConfig{})
+	produce(t, p, topic, "k", "poison")
+	produce(t, p, topic, "k", "ok1")
+
+	holding := make(chan struct{}, 1)
+	var seen sink
+	cfg := kafka.ConsumerConfig{
+		Brokers: env.Brokers, GroupID: group, Topics: []string{topic}, MaxAttempts: 2, ShutdownTimeout: 2 * time.Second,
+		Handler: func(_ context.Context, rec kafka.Record) error {
+			if string(rec.Value) == "poison" {
+				return errors.New("cannot process")
+			}
+			seen.add(string(rec.Value))
+			return nil
+		},
+		OnExhausted: func(ctx context.Context, _ kafka.Record, _ error) error {
+			select {
+			case holding <- struct{}{}:
+			default:
+			}
+			<-ctx.Done() // the sink never comes back before the consumer stops
+			return ctx.Err()
+		},
+	}
+	r := startConsumer(t, cfg)
+	recv(t, holding, "the hook to hold the record")
+	if got := seen.snapshot(); len(got) != 0 {
+		t.Fatalf("a record behind a held one was handled: %v", got)
+	}
+	_ = r.stop(t)
+
+	// The poison record was not committed: a new consumer gets it (and then
+	// ok1) again.
+	var seen2 sink
+	var tries sync.Map
+	cfg.Handler = func(_ context.Context, rec kafka.Record) error {
+		n, _ := tries.LoadOrStore(string(rec.Value), new(atomic.Int32))
+		n.(*atomic.Int32).Add(1)
+		if string(rec.Value) == "poison" {
+			return errors.New("still cannot process")
+		}
+		seen2.add(string(rec.Value))
+		return nil
+	}
+	cfg.OnExhausted = func(context.Context, kafka.Record, error) error { return nil } // sink is back
+	r2 := startConsumer(t, cfg)
+	waitFor(t, 30*time.Second, "ok1 after the poison record is parked", func() bool { return len(seen2.snapshot()) >= 1 })
+	_ = r2.stop(t)
+	n, ok := tries.Load("poison")
+	if !ok || n.(*atomic.Int32).Load() != 2 {
+		t.Fatalf("the redelivered poison record was tried %v times, want a fresh budget of 2", n)
 	}
 }
 

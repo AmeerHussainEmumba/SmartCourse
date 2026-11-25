@@ -309,7 +309,7 @@ func TestTransport_PoisonMessagesDoNotStallThePartition(t *testing.T) {
 		}
 	})
 
-	t.Run("a sink that refuses is counted and the partition still moves", func(t *testing.T) {
+	t.Run("a sink that refuses holds the record: nothing is dropped, nothing behind it moves, and it is parked when the sink is back (B-06, B-07)", func(t *testing.T) {
 		s := newStack(t)
 		agg := uuid.New()
 		parked := &sink{refuse: true}
@@ -323,12 +323,24 @@ func TestTransport_PoisonMessagesDoNotStallThePartition(t *testing.T) {
 			return nil
 		})
 		runner, _ := s.startRunner(runnerCfg{Sink: parked}, h)
-		s.eventually(90*time.Second, "the record behind the unparkable one", func() bool {
-			return equalInts(s.effectsFor("refused-consumer", agg), []int{2})
+		s.eventually(60*time.Second, "the record to be held (sink refused it at least 3 times)", func() bool {
+			return runner.HeldRecords() == 1 && parked.attempts() >= 3
 		})
-		s.eventually(30*time.Second, "the failed park to be counted", func() bool { return runner.ParkFailures() == 1 })
-		if parked.attempts() < 2 {
-			t.Fatalf("the sink was tried %d times, want a retry", parked.attempts())
+		if got := s.effectsFor("refused-consumer", agg); len(got) != 0 {
+			t.Fatalf("effects %v while the poison record was unparkable: the offset advanced past it", got)
+		}
+		if len(parked.parked()) != 0 {
+			t.Fatal("the sink recorded a park while it was refusing")
+		}
+		parked.setRefuse(false) // the sink is back
+		s.eventually(60*time.Second, "the held record parked and the record behind it handled", func() bool {
+			return len(parked.parked()) == 1 && equalInts(s.effectsFor("refused-consumer", agg), []int{2})
+		})
+		if runner.HeldRecords() != 0 {
+			t.Fatalf("HeldRecords = %d after the sink recovered", runner.HeldRecords())
+		}
+		if runner.ParkFailures() < 3 {
+			t.Fatalf("ParkFailures = %d, want every refused try counted", runner.ParkFailures())
 		}
 	})
 

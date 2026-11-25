@@ -360,8 +360,10 @@ func TestModes_ExhaustedRecordsAreParkedAndTheRestFlows(t *testing.T) {
 	})
 }
 
-// A sink that refuses is retried, counted, and the partition still moves.
-func TestModes_SinkThatRefusesIsCountedAndThePartitionMoves(t *testing.T) {
+// A sink that refuses holds the record (retried with backoff, counted, the offset
+// not advanced, the record behind it waiting) and parks it once the sink is back
+// (B-06, B-07).
+func TestModes_SinkThatRefusesHoldsTheRecordUntilItRecovers(t *testing.T) {
 	forEachMode(t, func(t *testing.T, m *modeStack) {
 		agg := uuid.New()
 		parked := &sink{refuse: true}
@@ -374,10 +376,18 @@ func TestModes_SinkThatRefusesIsCountedAndThePartitionMoves(t *testing.T) {
 			}
 			return nil
 		}))
-		m.eventually(90*time.Second, "the record behind the unparkable one", func() bool { return equalInts(rec.seqsOf(agg), []int{2}) })
-		m.eventually(30*time.Second, "the failed park to be counted", func() bool { return runner.ParkFailures() == 1 })
-		if parked.attempts() < 2 {
-			t.Fatalf("the sink was tried %d times, want a retry", parked.attempts())
+		m.eventually(60*time.Second, "the record to be held (sink refused it at least 3 times)", func() bool {
+			return runner.HeldRecords() == 1 && parked.attempts() >= 3
+		})
+		if got := rec.seqsOf(agg); len(got) != 0 {
+			t.Fatalf("handled %v while the poison record was unparkable: the offset advanced past it", got)
+		}
+		parked.setRefuse(false)
+		m.eventually(60*time.Second, "the held record parked and the record behind it handled", func() bool {
+			return len(parked.parked()) == 1 && equalInts(rec.seqsOf(agg), []int{2})
+		})
+		if runner.HeldRecords() != 0 || runner.ParkFailures() < 3 {
+			t.Fatalf("HeldRecords=%d ParkFailures=%d after recovery", runner.HeldRecords(), runner.ParkFailures())
 		}
 	})
 }
