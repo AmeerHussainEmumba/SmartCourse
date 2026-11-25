@@ -1,0 +1,24 @@
+# schema-init: a one-shot image that registers every event subject with the
+# Schema Registry (libs/events/cmd/register-schemas: BACKWARD compatibility,
+# idempotent). Compose runs it as `schema-init` before any worker starts;
+# `make register-schemas` does the same from the host. It is not a service:
+# it runs, prints one line per subject and exits.
+# libs/events has no sibling-module dependencies, so it is the only module
+# copied in. GOWORK=off means a new dependency fails this build instead of being
+# papered over by go.work (scripts/check-dockerfile-modules.sh checks the list).
+# Build context is the repo root: docker build -f Dockerfile.schema-init .
+FROM golang:1.26.11-alpine AS build
+ENV GOWORK=off CGO_ENABLED=0
+WORKDIR /src
+COPY libs/events ./libs/events
+WORKDIR /src/libs/events
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    go build -trimpath -o /out/register-schemas ./cmd/register-schemas
+
+FROM alpine:3.20
+# Run as an unprivileged user: a compromise of the tool should not be root in the container.
+RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 app
+USER app
+COPY --from=build /out/register-schemas /usr/local/bin/register-schemas
+# SCHEMA_REGISTRY_URL is read by the tool (flag -registry overrides it).
+ENTRYPOINT ["/usr/local/bin/register-schemas"]

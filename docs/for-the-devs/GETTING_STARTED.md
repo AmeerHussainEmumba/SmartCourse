@@ -40,7 +40,7 @@ These five ideas explain *why* the code is shaped the way it is. Misunderstandin
 
 - **Go 1.26+** (the modules declare `go 1.26.5`; CI and the images use 1.26.11) — check with `go version`.
 - **Docker** (with Compose v2, i.e. `docker compose`, not the old standalone `docker-compose`) — check with `docker compose version`.
-- That's it to get the system running, including course publishing (M2: Temporal is part of `make dev-workflow`, the profile tier these steps use, not `dev-core`) and email (Mailpit, a local mail sink that every profile starts). Kafka, MongoDB and the observability stack are optional tiers (`make dev-events`, `make dev-observability`): the APIs run fine without them, but the workers need Kafka and the Schema Registry (`make dev-events`; there is no in-process mode). See "Optional tiers" in §2 and what is wired in §5.
+- That's it to get the system running. `make dev-core` starts the infrastructure (Postgres, Redis, MinIO, Mailpit, Kafka, Schema Registry, MongoDB, Swagger UI) and nine of the ten binaries. Course publishing needs `make dev-workflow` (the tier these steps use): it adds Temporal, its UI and `publishing-worker`. The observability stack is the optional tier `make dev-observability`. Kafka is part of `core` (there is no in-process mode). See "Profiles" in §2 and `docs/guides/local-stack.md`. **Known issue:** the pinned MinIO images (`minio/minio`, `minio/mc`) cannot currently be pulled on a fresh machine, which blocks `core` there (README, "Known issue: MinIO images").
 
 ### Steps
 
@@ -55,13 +55,18 @@ cp env.example .env
 #    openssl rand -base64 48
 #    and put it in JWT_SIGNING_KEY in .env.
 
-# 2. Start infrastructure — Postgres, Redis, MinIO, and (since make seed
-#    publishes real courses through a real Temporal workflow, M2) Temporal
-#    itself. `dev-workflow` is a superset of `dev-core`, not a different
-#    stack — everything `dev-core` starts is still here too.
+# 2. Start the stack — infrastructure plus the services, and (since make
+#    seed publishes real courses through a real Temporal workflow, M2)
+#    Temporal and publishing-worker. `dev-workflow` is a superset of
+#    `dev-core`, not a different stack — everything `dev-core` starts is
+#    still here too. The compose postgres creates the per-service roles on a
+#    fresh volume; the workers retry a few times until the tables exist.
 make dev-workflow
 
-# 3. Apply the schema.
+# 3. Apply the schema (then the per-service roles, idempotent).
+#    One-shot alternative for a fresh stack: `make stack-up` does steps 2
+#    and 3, registers the event schemas and, when IDENTITY_ADMIN_EMAIL and
+#    IDENTITY_ADMIN_PASSWORD are set, creates the first admin.
 make migrate-up
 
 # 4. Populate realistic data — instructors, courses at every lifecycle
@@ -83,10 +88,10 @@ make migrate-up
 make seed
 
 # 5. Nothing left to do — `make dev-workflow` (step 2) already started the
-#    application containers too (identity-api, course-api, analytics-api,
-#    worker — they're in the `core` profile, which `workflow` includes —
-#    plus Temporal and its UI). See "Running natively instead" below if
-#    you want faster iteration than a Docker rebuild on every change.
+#    application containers too (the nine binaries of the `core` profile,
+#    which `workflow` includes, plus publishing-worker, Temporal and its
+#    UI). See "Running natively instead" below if you want faster
+#    iteration than a Docker rebuild on every change.
 ```
 
 Check it's alive (each HTTP service has its own `/health/ready`):
@@ -95,7 +100,8 @@ Check it's alive (each HTTP service has its own `/health/ready`):
 curl localhost:8090/health/ready    # identity-api
 curl localhost:8091/health/ready    # course-api
 curl localhost:8092/health/ready    # analytics-api
-curl localhost:9100/health/ready    # a binary's internal listener (METRICS_HTTP_ADDR)
+curl localhost:8093/health/ready    # audit-api
+curl localhost:9101/health/ready    # identity-api's internal listener; every binary has one (9101-9104 APIs, 9111-9116 workers)
 ```
 
 Try the real thing — log in as one of the accounts `make seed` just created (every seeded account shares the password printed at the end of that command). Auth lives in `identity-api`, port **8090**:
@@ -138,28 +144,36 @@ Everything is published on `127.0.0.1` only.
 
 | Port | What | Started by |
 |---|---|---|
-| 8090 / 8091 / 8092 | identity-api / course-api / analytics-api | `dev-core` and up |
+| 8090 / 8091 / 8092 / 8093 | identity-api / course-api / analytics-api / audit-api (container port 8080) | `dev-core` and up |
+| 9101 / 9102 / 9103 / 9104 | internal listeners of the four APIs (`/metrics`, `/health/*`) | `dev-core` and up |
+| 9111 / 9112 / 9113 / 9114 / 9116 | internal listeners of identity-worker / course-worker / analytics-worker / notification-worker / audit-worker | `dev-core` and up |
+| 9115 | internal listener of publishing-worker | `dev-workflow` and up |
 | 8089 | Swagger UI over `api/openapi.yaml` | `dev-core` and up |
 | 8025 (web) / 1025 (SMTP) | Mailpit, the local mail sink: read the mail the system sends | `dev-core` and up |
 | 5433 / 6380 | Postgres / Redis | `dev-core` and up |
 | 9002 (S3) / 9003 (console) | MinIO | `dev-core` and up |
+| 29092 / 8081 / 27017 | Kafka (from the host) / Schema Registry / MongoDB | `dev-core` and up |
 | 7233 / 8088 | Temporal / Temporal UI | `dev-workflow` and up |
-| 29092 / 8081 / 27017 | Kafka (from the host) / Schema Registry / MongoDB | `dev-events` and up |
 | 9090 / 3001 / 16686 | Prometheus / Grafana / Jaeger UI (OTLP on 4317 and 4318) | `dev-observability` and up |
 
-### Optional tiers: Kafka, MongoDB, observability
+`/metrics` is only on the internal listeners, never on an API's public port.
 
-Kafka is the only event transport (there is no `EVENT_TRANSPORT` and no in-process mode), so every worker needs the `dev-events` tier. Each binary asks `libs/config` only for the groups it needs; the table below says which. To bring the tier up:
+### Profiles
 
-```bash
-make dev-events                                   # adds Kafka, Schema Registry, MongoDB
-(cd libs/events && go run ./cmd/register-schemas -registry http://localhost:8081)   # idempotent
-# then in .env: KAFKA_BROKERS=kafka:9092 (localhost:29092 from the host),
-# SCHEMA_REGISTRY_URL=http://schema-registry:8081 (http://localhost:8081 from the host),
-# and, optionally, MONGO_URI=mongodb://mongodb:27017
-```
+| Command | Adds |
+|---|---|
+| `make dev-core` | Postgres, Redis, MinIO (+init), Mailpit, Kafka (+topic init), Schema Registry (+schema bootstrap), MongoDB, Swagger UI and nine binaries: everything except `publishing-worker` (so course publishing does not work on `core`) |
+| `make dev-workflow` | `core` + Temporal, Temporal UI, `publishing-worker` |
+| `make dev-observability` | `workflow` + Prometheus, Grafana, Jaeger |
+| `make dev-full` | everything |
+| `make dev-events` | deprecated alias of `dev-core` (Kafka, Schema Registry and MongoDB are in `core` now) |
+| `make dev-down` | stops every profile's containers (data volumes are kept) |
 
-A worker refuses to start, with a clear error, if `KAFKA_BROKERS` or `SCHEMA_REGISTRY_URL` is missing, the registry is unreachable or a schema subject is missing. `MONGO_URI` is optional for the workers: without it dead-letter parking is off and the worker still starts. The admin surface (failed-event listing and replay) is `audit-api`, not a worker listener. The metrics and tracing wiring for `make dev-observability` is still being finished (§5).
+### Kafka, the Schema Registry and MongoDB
+
+Kafka is the only event transport (there is no `EVENT_TRANSPORT` and no in-process mode), so every worker needs it, and the registry. All three are in `core`: compose creates the topics (and one `retry.<consumer>` topic per consumer) with `kafka-init`, and registers the event schemas with the one-shot `schema-init` service before any worker starts. On the host, `make register-schemas` does the same (idempotent). Each binary asks `libs/config` only for the groups it needs; the table below says which. The compose services get their in-network values (`kafka:9092`, `http://schema-registry:8081`, `mongodb://mongodb:27017`) from `docker-compose.yml`; a native `make run-*` uses `localhost:29092`, `http://localhost:8081` and `mongodb://localhost:27017` from `.env`.
+
+A worker refuses to start, with a clear error, if `KAFKA_BROKERS` or `SCHEMA_REGISTRY_URL` is missing, the registry is unreachable or a schema subject is missing. `MONGO_URI` is optional for the workers: without it dead-letter parking is off and the worker still starts. The admin surface (failed-event listing and replay) is `audit-api`, not a worker listener. `make dev-observability` adds Prometheus (which scrapes all ten internal listeners), Grafana and Jaeger (`observability/README.md`).
 
 ### Configuration per binary
 
@@ -182,14 +196,15 @@ Required variables per group: Postgres `POSTGRES_DSN` and `POSTGRES_SEARCH_PATH`
 
 ### Running natively instead
 
-`make dev-workflow` containerizes everything, including the app, which means a code change needs a rebuild to see. For faster iteration, stop the containerized app services (`docker compose stop identity-api course-api analytics-api worker` — leave Postgres/Redis/MinIO/Temporal running) and run natively instead, each in its own terminal:
+`make dev-workflow` containerizes everything, including the app, which means a code change needs a rebuild to see (`make dev-workflow UP_FLAGS=--build`). For faster iteration, stop the containerized binary you are changing (for example `docker compose stop course-api course-worker`; leave the infrastructure running) and run it natively, each in its own terminal, with the `.env` values for that binary (its own role DSN and `POSTGRES_SEARCH_PATH`, see `env.example` section 2) and a free `METRICS_HTTP_ADDR`:
 
 ```bash
-make run-identity-api     # :8090
-make run-course-api       # :8091
-make run-analytics-api    # :8092
-make run-worker           # no HTTP port
+make run-identity-api     # HTTP_PORT default 8080: set HTTP_PORT=8090 to match compose
+make run-course-api       # HTTP_PORT=8091
+make run-course-worker    # no public port; internal listener METRICS_HTTP_ADDR
 ```
+
+Any of the ten binaries works the same way (`make run-<binary>`, `make build-<binary>`).
 
 ### Browsing and running the API without writing curl by hand
 
