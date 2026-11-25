@@ -70,6 +70,8 @@ MinIO is chosen over a real cloud provider's object storage to keep local develo
 
 Reversal trigger matches ADR-0019: a real cloud deployment target is chosen, at which point MinIO is swapped for the provider's object storage via configuration, not a rewrite, because the client speaks the S3 API either way.
 
+**Note 2026-11-25.** The Compose image is now the community fork `pgsty/minio` (client `pgsty/mc`), pinned by tag and digest, because the official `minio/minio` and `minio/mc` images can no longer be pulled on a fresh machine. It is a third-party fork under AGPLv3 (as seen in the image's `--version` output and bundled licence file); the application is unchanged (S3 API only). Details, risk and revert steps: ADR-0019 amendment.
+
 ---
 
 ## DR-002 — Authentication mechanism is unspecified in the brief

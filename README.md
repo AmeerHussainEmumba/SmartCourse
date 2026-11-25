@@ -47,9 +47,9 @@ Browse and run every endpoint without writing curl by hand: **http://localhost:8
 | 29092 / 8081 / 27017 | Kafka (host listener) / Schema Registry / MongoDB |
 | 7233 / 9090 / 3001 / 16686 | Temporal / Prometheus / Grafana / Jaeger UI |
 
-### Known issue: MinIO images
+### Object store image
 
-On 2026-11-25 the pinned `minio/minio` and `minio/mc` images could not be pulled from Docker Hub or quay.io on a fresh machine (`pull access denied` / 401), so `make dev-core` fails there at the `minio` service. A machine that already holds the images is unaffected. The tags in `docker-compose.yml` were deliberately left unchanged: replacing the object store (a self-built image, or another S3-compatible store) is an [ADR-0019](docs/adr/smartcourse-adr.md#adr-0019--minio-for-learning-asset-object-storage) decision for the owner.
+The S3-compatible object store is `pgsty/minio` (a community fork of MinIO with prebuilt images, AGPLv3), pinned by tag and digest in `docker-compose.yml`, with `pgsty/mc` creating the bucket. The official `minio/minio` and `minio/mc` images can no longer be pulled on a fresh machine, which is why. See the amendment in [ADR-0019](docs/adr/smartcourse-adr.md#adr-0019--minio-for-learning-asset-object-storage) for the risk and how to revert.
 
 ## Architecture, in one paragraph
 

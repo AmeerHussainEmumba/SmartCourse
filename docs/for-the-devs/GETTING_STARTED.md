@@ -40,7 +40,7 @@ These five ideas explain *why* the code is shaped the way it is. Misunderstandin
 
 - **Go 1.26+** (the modules declare `go 1.26.5`; CI and the images use 1.26.11) — check with `go version`.
 - **Docker** (with Compose v2, i.e. `docker compose`, not the old standalone `docker-compose`) — check with `docker compose version`.
-- That's it to get the system running. `make dev-core` starts the infrastructure (Postgres, Redis, MinIO, Mailpit, Kafka, Schema Registry, MongoDB, Swagger UI) and nine of the ten binaries. Course publishing needs `make dev-workflow` (the tier these steps use): it adds Temporal, its UI and `publishing-worker`. The observability stack is the optional tier `make dev-observability`. Kafka is part of `core` (there is no in-process mode). See "Profiles" in §2 and `docs/guides/local-stack.md`. **Known issue:** the pinned MinIO images (`minio/minio`, `minio/mc`) cannot currently be pulled on a fresh machine, which blocks `core` there (README, "Known issue: MinIO images").
+- That's it to get the system running. `make dev-core` starts the infrastructure (Postgres, Redis, MinIO, Mailpit, Kafka, Schema Registry, MongoDB, Swagger UI) and nine of the ten binaries. Course publishing needs `make dev-workflow` (the tier these steps use): it adds Temporal, its UI and `publishing-worker`. The observability stack is the optional tier `make dev-observability`. Kafka is part of `core` (there is no in-process mode). See "Profiles" in §2 and `docs/guides/local-stack.md`. The object store is the community fork `pgsty/minio` (the official `minio/minio` images can no longer be pulled on a fresh machine); see README "Object store image" and ADR-0019.
 
 ### Steps
 

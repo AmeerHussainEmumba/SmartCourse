@@ -796,6 +796,16 @@ Option D is rejected because it couples asset storage to a specific API replica'
 
 A real cloud deployment target being chosen, at which point MinIO is replaced by the provider's object storage — the S3-compatible client makes this a configuration change, which is the reason Option A was chosen over anything MinIO-specific.
 
+### Amendment 2026-11-25 — image source changed to the `pgsty/minio` fork
+
+**What changed.** The official `minio/minio` and `minio/mc` images can no longer be pulled from Docker Hub or quay.io on a fresh machine (`pull access denied` / 401, verified by the project lead), so `docker compose --profile core up` failed for any reviewer or CI runner without the images cached. `docker-compose.yml` (`minio`, `minio-init`) and the integration-test helper `services/course/internal/miniotest` now use the community fork `pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372` and `pgsty/mc:RELEASE.2026-11-12T00-00-00Z@sha256:b532278b7a3747dbab6fe45eebb40a653efa704e6758e24e9d9ec54fc96c1800` (multi-arch index digests). Nothing in the application changed: it speaks only the S3 API, and the ports, `MINIO_*` variables, credentials, bucket name and health endpoint are the same. The decision (Option A, S3-compatible store, coded against the S3 API) stands; only where the image comes from changed.
+
+**Evidence it is compatible** (run 2026-11-25): the course integration tests (`assets`, `course`, `activities`, `-race -tags=integration`) pass against the fork; on a disposable compose project the bucket was created by `minio-init`, a pre-signed PUT succeeded, a lesson referenced the asset and the publish reached `ready`, while a wrong-length or wrong-type PUT (403), a never-uploaded key and a zero-byte object each failed the publish with `asset_invalid: asset not found`; E2E E01 passed (it does not start object storage).
+
+**Risk.** The fork is third-party and community-maintained (maintainer label `pgsty`), not the MinIO vendor. Its own docs and the `mc` image are being rebranded ("Silo"), so image names, tags or the `minio` binary name may change; tags could be withdrawn. Mitigations: pin by tag and digest (never `latest`), review the tag before any bump, and keep the S3-only application code so the store stays replaceable (SeaweedFS and RustFS were identified as alternatives). Supply-chain trust in a community build is lower than in the vendor's; this is for local development and CI, not a production decision. Licence: the images' `minio --version` / `mc --version` output prints "License: GNU AGPLv3", and the minio image ships `/licenses/LICENSE` (AGPL v3 text); same licence family as upstream MinIO. This is what was observed in the images, not a legal review.
+
+**Revert.** Put the previous references back (`minio/minio:RELEASE.2025-09-07T16-13-09Z`, `minio/mc:RELEASE.2025-08-13T08-35-41Z`) in `docker-compose.yml` and the `image` constant in `services/course/internal/miniotest/miniotest.go`, if those images are pullable again or from a private mirror/self-built image, or switch to another S3-compatible store; no application change needed. Do not use `latest`.
+
 ---
 
 ## ADR-0020 — GCRA rate limiting over fixed-window counters
