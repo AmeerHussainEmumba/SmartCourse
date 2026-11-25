@@ -32,7 +32,7 @@ A handler that fails past `KAFKA_CONSUMER_MAX_ATTEMPTS` is parked in MongoDB `fa
 ## Jobs (Asynq scheduler and low-queue servers, `libs/jobs`)
 
 - **Reconciler**, `maintenance:analytics-reconcile`, every `JOBS_ANALYTICS_RECONCILE_INTERVAL` (default 1 minute): `analytics.NewReconciler(db, rdb).Run` recomputes every aggregate from the mirrors and rebuilds the Most Popular Courses sorted set (RFC §9.1, ADR-0017). Safe to run twice or from two replicas.
-- **`PruneProcessedEvents`**, hourly, retention `PROCESSED_EVENTS_RETENTION` (default 14 days). `libs/config` has no field for it yet, so the worker reads it with `os.Getenv`. The retention is the duplicate-absorption window; the `daily_enrollments` counter is the one aggregate the event path increments, so a duplicate that outlives its marker is applied twice until the next reconcile corrects it.
+- **`PruneProcessedEvents`**, hourly, retention `PROCESSED_EVENTS_RETENTION` (default 14 days). It comes from `libs/config` (`cfg.Jobs.ProcessedEventsRetention`). The retention is the duplicate-absorption window; the `daily_enrollments` counter is the one aggregate the event path increments, so a duplicate that outlives its marker is applied twice until the next reconcile corrects it.
 
 ## Readiness
 

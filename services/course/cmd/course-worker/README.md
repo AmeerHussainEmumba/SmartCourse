@@ -18,10 +18,12 @@ Readiness: Postgres and Redis are fatal, Kafka (`kafka.HealthCheck`) is non-fata
 
 A consumer that spends its retry budget, or a row the relay cannot publish, is parked in MongoDB `failed_events` (`deadletter.go`) when `MONGO_URI` is set, idempotently per (event, consumer), with `dead_letter_total{consumer}` counted only for events really parked. A failed park returns an error, so the event stays retryable instead of being dropped. Without `MONGO_URI` there is no sink: the transport logs the event in full and drops it (the documented gap). `audit-api` lists and replays parked records by republishing to `retry.<consumer>`; this worker only writes them. Ported from `services/worker/deadletter` and `cmd/worker/mongo_wire.go` (the same park-before-drop contract, with unit and MongoDB tests).
 
-## Config
+## Configuration
 
-`libs/config` plus one variable it does not know: `PROCESSED_EVENTS_RETENTION` (Go duration, default `336h`). `RELAY_WORKERS` sizes the relay pool; the Postgres pool must hold it plus the consumers' in-flight handlers.
+**Required:** `POSTGRES_DSN` (`svc_course`), `POSTGRES_SEARCH_PATH=course,public`, `REDIS_ADDR`, `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY_ID`, `MINIO_SECRET_ACCESS_KEY`, `KAFKA_BROKERS`, `SCHEMA_REGISTRY_URL` (groups Postgres, Redis, MinIO, Kafka).
 
-## Tests
+**Optional:** `MONGO_URI` and `MONGO_*` (dead-letter parking), `TEMPORAL_*`, `RELAY_WORKERS` (the Postgres pool must hold it plus the consumers' in-flight handlers), `KAFKA_*` tuning, `ASYNQ_*`, `OUTBOX_RETENTION`, `PROCESSED_EVENTS_RETENTION` (`cfg.Jobs.ProcessedEventsRetention`, default `336h`; zero, negative or unparsable stops startup), the `JOBS_*_INTERVAL` settings, `METRICS_HTTP_ADDR`, `OTEL_*`.
 
-`wiring_test.go` and `deadletter_test.go` (no Docker): consumer groups and retry topics, the activity registration names against the contract, retention parsing, the five jobs and their specs, the Asynq pool, the park sink. `worker_integration_test.go` (Docker): the relay is publish-only over `course.outbox`; the whole worker through `runtime.Run` (readiness with Kafka, an event the course wrote goes through Kafka into the worker's own consumer, marker in `course.processed_events`); start-up fails naming Kafka when it is unreachable; MongoDB parking. Not covered here: the activities worker against a live Temporal server (E2E).
+**Not read:** `JWT_SIGNING_KEY`, Argon, SMTP. Declared in `main.go` as `requirements` and loaded with `config.LoadWith` through `runtime.WithConfig`; `config_test.go` proves the binary loads with only these variables. Per-variable reference: `env.example` and `libs/config/README.md`.
+
+`wiring_test.go` and `deadletter_test.go` (no Docker): consumer groups and retry topics, the activity registration names against the contract, the five jobs and their specs, the Asynq pool, the park sink. `worker_integration_test.go` (Docker): the relay is publish-only over `course.outbox`; the whole worker through `runtime.Run` (readiness with Kafka, an event the course wrote goes through Kafka into the worker's own consumer, marker in `course.processed_events`); start-up fails naming Kafka when it is unreachable; MongoDB parking. Not covered here: the activities worker against a live Temporal server (E2E).

@@ -18,3 +18,11 @@ docker compose --profile core up -d   # or containerized
 ## Why this split out cleanly
 
 Nothing outside the service reads its tables; every other module reads the caller from the JWT claims (`auth.FromContext`), never a lookup into `users`. Its events (`identity.user_registered`, `identity.user_role_changed`, `identity.user_profile_updated`) leave through `identity.outbox` and the `identity-worker` relay. See ADR-0023 and ADR-0024.
+
+## Configuration
+
+**Required:** `POSTGRES_DSN` (the `svc_identity` login), `POSTGRES_SEARCH_PATH=identity,public`, `REDIS_ADDR`, `JWT_SIGNING_KEY` (groups Postgres, Redis, JWT; Argon is validated, it has defaults).
+
+**Optional:** `HTTP_PORT`, `JWT_ACCESS_TTL`, `JWT_REFRESH_TTL`, `JWT_ISSUER`, `ARGON2_*`, `CORS_ALLOWED_ORIGINS`, the HTTP hardening settings, `METRICS_HTTP_ADDR`, `OTEL_*`.
+
+**Not read:** Kafka, Schema Registry, MinIO, MongoDB, SMTP. Declared in `main.go` as `requirements` and loaded with `config.LoadWith` through `runtime.WithConfig`; `config_test.go` proves the binary loads with only these variables and names a missing one. Per-variable reference: `env.example` and `libs/config/README.md`.
