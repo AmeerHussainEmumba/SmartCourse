@@ -234,7 +234,9 @@ func (s *seeder) ensureCourse(ctx context.Context, spec courseSpec) error {
 	if spec.limit > 0 {
 		body["enrollment_limit"] = spec.limit
 	}
-	var created idResponse
+	var created struct {
+		Course idResponse `json:"course"`
+	}
 	err := s.course.do(ctx, http.MethodPost, "/api/v1/courses", owner.token, body, &created)
 	if statusOf(err) == http.StatusConflict {
 		return s.existingCourse(ctx, spec)
@@ -246,7 +248,7 @@ func (s *seeder) ensureCourse(ctx context.Context, spec courseSpec) error {
 
 	for i, m := range spec.modules {
 		var mod idResponse
-		if err := s.course.do(ctx, http.MethodPost, "/api/v1/courses/"+created.ID+"/modules", owner.token,
+		if err := s.course.do(ctx, http.MethodPost, "/api/v1/courses/"+created.Course.ID+"/modules", owner.token,
 			map[string]any{"title": m.title, "position": i + 1}, &mod); err != nil {
 			return fmt.Errorf("add module %q: %w", m.title, err)
 		}
@@ -266,7 +268,7 @@ func (s *seeder) ensureCourse(ctx context.Context, spec courseSpec) error {
 		s.draftCount++
 		return nil
 	}
-	if err := s.publish(ctx, created.ID, owner.token); err != nil {
+	if err := s.publish(ctx, created.Course.ID, owner.token); err != nil {
 		if errors.Is(err, errPublishUnavailable) {
 			s.publishDown = true
 			s.pubSkipped = append(s.pubSkipped, spec.title+" (created as a draft; it stays a draft until the database is reset)")
@@ -277,13 +279,13 @@ func (s *seeder) ensureCourse(ctx context.Context, spec courseSpec) error {
 	}
 	s.publishedCount++
 	if spec.state == stateArchived {
-		if err := s.course.do(ctx, http.MethodPost, "/api/v1/courses/"+created.ID+"/archive", owner.token, nil, nil); err != nil {
+		if err := s.course.do(ctx, http.MethodPost, "/api/v1/courses/"+created.Course.ID+"/archive", owner.token, nil, nil); err != nil {
 			return fmt.Errorf("archive: %w", err)
 		}
 		s.archivedCount++
 		return nil
 	}
-	return s.enroll(ctx, spec, created.ID)
+	return s.enroll(ctx, spec, created.Course.ID)
 }
 
 // existingCourse handles a slug that is already taken (an earlier run): a

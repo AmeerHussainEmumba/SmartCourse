@@ -186,7 +186,7 @@ func (f *fake) serveCourse(w http.ResponseWriter, r *http.Request) {
 			c.limit = int(l)
 		}
 		f.courses[slug], f.byID[c.id] = c, c
-		writeJSON(w, 201, map[string]string{"id": c.id})
+		writeJSON(w, 201, map[string]any{"course": map[string]string{"id": c.id, "slug": slug}, "version": map[string]string{"state": "draft"}})
 	case len(parts) == 5 && parts[2] == "courses" && parts[4] == "modules":
 		c := f.byID[parts[3]]
 		if c == nil || caller == nil || c.owner != caller.id {
