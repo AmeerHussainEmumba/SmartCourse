@@ -91,6 +91,20 @@ func TestStartTelemetry_WorkerServesMetricsOnItsOwnListener(t *testing.T) {
 		t.Fatal("startTelemetry did not hand the Observability out")
 	}
 
+	// The same internal listener carries the probes (libs/runtime): live
+	// always, ready while Postgres and Redis answer.
+	for path, want := range map[string]string{"/health/live": `"live"`, "/health/ready": `"ready"`} {
+		resp, err := http.Get("http://" + addr + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || !strings.Contains(string(b), want) {
+			t.Errorf("GET %s = %d %s, want 200 with %s", path, resp.StatusCode, b, want)
+		}
+	}
+
 	cancel()
 	shutdown()
 	if code, _ := scrapeMetrics(t, addr); code != 0 {

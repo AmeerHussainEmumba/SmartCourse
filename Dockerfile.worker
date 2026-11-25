@@ -25,6 +25,7 @@ COPY libs/outbox ./libs/outbox
 COPY libs/ratelimit ./libs/ratelimit
 COPY libs/relay ./libs/relay
 COPY libs/router ./libs/router
+COPY libs/runtime ./libs/runtime
 COPY libs/telemetry ./libs/telemetry
 COPY libs/temporal ./libs/temporal
 COPY libs/testenv ./libs/testenv

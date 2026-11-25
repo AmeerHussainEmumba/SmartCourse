@@ -19,6 +19,7 @@ use (
 	./libs/outbox
 	./libs/ratelimit
 	./libs/relay
+	./libs/runtime
 	./libs/router
 	./libs/telemetry
 	./libs/temporal
