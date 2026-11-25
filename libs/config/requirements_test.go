@@ -13,6 +13,7 @@ func clearRequiredEnv(t *testing.T) {
 	for _, k := range []string{
 		"POSTGRES_DSN", "POSTGRES_SEARCH_PATH", "REDIS_ADDR", "MINIO_ENDPOINT",
 		"MINIO_ACCESS_KEY_ID", "MINIO_SECRET_ACCESS_KEY", "JWT_SIGNING_KEY",
+		"KAFKA_BROKERS", "SCHEMA_REGISTRY_URL", "MONGO_URI",
 	} {
 		t.Setenv(k, "")
 	}
@@ -58,6 +59,8 @@ func TestLoadWith_RequestedGroupStillFails(t *testing.T) {
 		"redis":    {Requirements{Redis: true}, "REDIS_ADDR is required"},
 		"minio":    {Requirements{MinIO: true}, "MINIO_ENDPOINT is required"},
 		"jwt":      {Requirements{JWT: true}, "JWT_SIGNING_KEY is required"},
+		"kafka":    {Requirements{Kafka: true}, "KAFKA_BROKERS is required"},
+		"mongo":    {Requirements{Mongo: true}, "MONGO_URI is required"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -100,5 +103,29 @@ func TestLoadWith_OptionalGroupsStillShapeValidated(t *testing.T) {
 	t.Setenv("METRICS_HTTP_ADDR", "not-an-addr")
 	if _, err := LoadWith(Requirements{}); err == nil {
 		t.Fatal("a bad METRICS_HTTP_ADDR must fail every binary")
+	}
+}
+
+// Each group requested alone reports only its own variables.
+func TestLoadWith_KafkaAndMongoOnlyWhenRequested(t *testing.T) {
+	clearRequiredEnv(t)
+	if _, err := LoadWith(Requirements{}); err != nil {
+		t.Fatalf("no groups: %v", err)
+	}
+	_, err := LoadWith(Requirements{Kafka: true})
+	if err == nil || strings.Contains(err.Error(), "MONGO_URI") || !strings.Contains(err.Error(), "SCHEMA_REGISTRY_URL is required") {
+		t.Fatalf("Kafka only: %v", err)
+	}
+	_, err = LoadWith(Requirements{Mongo: true})
+	if err == nil || strings.Contains(err.Error(), "KAFKA_BROKERS") {
+		t.Fatalf("Mongo only: %v", err)
+	}
+	// The default Load asks for neither.
+	setValidEnv(t)
+	t.Setenv("KAFKA_BROKERS", "")
+	t.Setenv("SCHEMA_REGISTRY_URL", "")
+	t.Setenv("MONGO_URI", "")
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load must not require Kafka or Mongo: %v", err)
 	}
 }

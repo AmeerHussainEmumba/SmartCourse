@@ -8,10 +8,10 @@ import (
 )
 
 // MongoConfig locates the MongoDB that holds the event archive, the audit log
-// and failed_events (libs/mongostore, ADR-0031). MongoDB is optional: with
-// URI empty the services that can use it (the worker's archiver and admin
-// replay, analytics-api's failed-events metric) run degraded and say so,
-// because ADR-0004 keeps MongoDB off every synchronous user path.
+// and failed_events (libs/mongostore, ADR-0031). MongoDB is optional unless a
+// binary asks for it (Requirements.Mongo makes MONGO_URI required): with URI
+// empty the services that can use it run degraded and say so, because ADR-0004
+// keeps MongoDB off every synchronous user path.
 type MongoConfig struct {
 	// URI is MONGO_URI, for example mongodb://mongodb:27017. It may carry
 	// credentials: never log it. Empty means MongoDB is not configured.
@@ -32,7 +32,7 @@ func (m MongoConfig) Configured() bool { return m.URI != "" }
 
 const maxMongoTimeout = 2 * time.Minute
 
-func loadMongo(getenv func(string) string, optDuration func(string, time.Duration) time.Duration) (MongoConfig, []string) {
+func loadMongo(need bool, getenv func(string) string, optDuration func(string, time.Duration) time.Duration) (MongoConfig, []string) {
 	m := MongoConfig{
 		URI:                    strings.TrimSpace(getenv("MONGO_URI")),
 		Database:               strings.TrimSpace(getenv("MONGO_DATABASE")),
@@ -44,6 +44,9 @@ func loadMongo(getenv func(string) string, optDuration func(string, time.Duratio
 		m.Database = "smartcourse"
 	}
 	var errs []string
+	if need && m.URI == "" {
+		errs = append(errs, "MONGO_URI is required")
+	}
 	if m.URI != "" {
 		// Only the scheme and shape are checked, and the URI is never echoed:
 		// it may hold a password.

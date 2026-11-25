@@ -100,3 +100,24 @@ func TestCronSpec(t *testing.T) {
 		}
 	}
 }
+
+func TestLoad_ProcessedEventsRetention(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("PROCESSED_EVENTS_RETENTION", "")
+	cfg, err := Load()
+	if err != nil || cfg.Jobs.ProcessedEventsRetention != 336*time.Hour {
+		t.Fatalf("default = %v, %v; want 336h", cfg.Jobs.ProcessedEventsRetention, err)
+	}
+	t.Setenv("PROCESSED_EVENTS_RETENTION", "48h")
+	cfg, err = Load()
+	if err != nil || cfg.Jobs.ProcessedEventsRetention != 48*time.Hour {
+		t.Fatalf("48h = %v, %v", cfg.Jobs.ProcessedEventsRetention, err)
+	}
+	for _, bad := range []string{"0", "0s", "-1h", "soon", "14d"} {
+		t.Setenv("PROCESSED_EVENTS_RETENTION", bad)
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "PROCESSED_EVENTS_RETENTION") {
+			t.Errorf("PROCESSED_EVENTS_RETENTION=%q: want a startup error, got %v", bad, err)
+		}
+	}
+}
