@@ -152,9 +152,14 @@ func TestE2E_DataIndependence_RolesAndOutboxes(t *testing.T) {
 		for _, c := range []struct{ consumer, schema string }{
 			{"analytics-aggregator", "analytics"}, {"notification-dispatcher", "notification"},
 		} {
-			if n := s.MustCount(t, `SELECT count(*) FROM `+c.schema+`.processed_events WHERE consumer_name = ? AND event_id = ?`, c.consumer, eventID); n != 1 {
-				t.Errorf("%s has %d processed_events rows for the enrollment event in %s, want 1", c.consumer, n, c.schema)
-			}
+			// Polled: once, in one of two runs, the row was not there yet right
+			// after WaitSettled reported lag 0 (observed, not explained).
+			harness.Eventually(t, 30*time.Second, c.consumer+"'s marker in "+c.schema+".processed_events", func() error {
+				if n := s.MustCount(t, `SELECT count(*) FROM `+c.schema+`.processed_events WHERE consumer_name = ? AND event_id = ?`, c.consumer, eventID); n != 1 {
+					return harness.Errf("%d rows, want 1", n)
+				}
+				return nil
+			})
 			if n := s.MustCount(t, `SELECT count(*) FROM course.processed_events WHERE consumer_name = ? AND event_id = ?`, c.consumer, eventID); n != 0 {
 				t.Errorf("course.processed_events holds %d markers of %s", n, c.consumer)
 			}

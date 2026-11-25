@@ -4,8 +4,9 @@ package e2e_test
 
 // The tests in the scenarios_*_e2e_test.go files are the executable form of
 // docs/plans/week-3.md section 5 (E1 to E14). They began as skipped specs whose
-// doc comment is the exact procedure; all fourteen are implemented now, and the
-// comment stays above each test. Rules for all of them:
+// doc comment is the exact procedure; E01 and E03 to E07 are implemented on the
+// ten-binary harness, E02 and E08 to E14 are pending (Wave C3b), and the comment
+// stays above each test. Rules for all of them:
 //
 //   - Black box. HTTP in; assertions on HTTP responses, Kafka topics, MongoDB,
 //     Redis, Mailpit, Jaeger and /metrics out. No calls into service packages.
@@ -28,5 +29,6 @@ package e2e_test
 // E1 (TestE2E_E01_HappyPath) and E3 (TestE2E_E03_DuplicateDelivery) are implemented in
 // scenarios_pipeline_e2e_test.go (build tag e2e).
 
-// E2 (TestE2E_E02_OneTraceAcrossPipeline) is implemented in scenarios_trace_e2e_test.go
-// (build tag e2e).
+// E2 (TestE2E_E02_OneTraceAcrossPipeline) is pending on the ten-binary harness
+// (Wave C3b): a skipped stub in scenarios_pending_e2e_test.go, the spec and the
+// old body in legacy/scenarios_trace_e2e_test.go.
