@@ -84,7 +84,7 @@ func TestAdversarial_Verify_FormatAbuseAndFieldMinimisation(t *testing.T) {
 	}
 	for _, c := range hostile {
 		rec := get(r, "/api/v1/certificates/verify/"+c, "")
-		if rec.Code != 400 && rec.Code != 404 && !(rec.Code == 301 && strings.HasSuffix(c, "/")) {
+		if rec.Code != 400 && rec.Code != 404 && (rec.Code != 301 || !strings.HasSuffix(c, "/")) {
 			t.Errorf("%.40q: status %d (want 400/404): %.200s", c, rec.Code, rec.Body.String())
 		}
 	}
