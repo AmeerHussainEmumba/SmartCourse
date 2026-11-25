@@ -62,8 +62,22 @@ func (s *Service) MarkComplete(ctx context.Context, studentID, enrollmentID, les
 			return apperrors.ErrInternal.Wrap(err)
 		}
 
-		if err := s.repo.markLessonComplete(ctx, tx, enrollmentID, lessonKey); err != nil {
+		lessonDoneAt, lessonChanged, err := s.repo.markLessonComplete(ctx, tx, enrollmentID, lessonKey)
+		if err != nil {
 			return apperrors.ErrInternal.Wrap(err)
+		}
+		if lessonChanged {
+			// Once per lesson completion: an idempotent repeat changed no row
+			// and writes nothing (RFC §8.3).
+			if err := outbox.Write(ctx, tx, outbox.Event{
+				AggregateType: "enrollment",
+				AggregateID:   enrollmentID,
+				EventType:     EventLessonCompleted,
+				SchemaVersion: 1,
+				Payload:       LessonCompletedPayload{EnrollmentID: enrollmentID, StudentID: studentID, LessonKey: lessonKey, CompletedAt: lessonDoneAt},
+			}); err != nil {
+				return apperrors.ErrInternal.Wrap(err)
+			}
 		}
 
 		complete, err := s.repo.isFullyComplete(ctx, tx, enrollmentID, *e.PublishedVersionID)
@@ -89,12 +103,9 @@ func (s *Service) MarkComplete(ctx context.Context, studentID, enrollmentID, les
 		return outbox.Write(ctx, tx, outbox.Event{
 			AggregateType: "enrollment",
 			AggregateID:   enrollmentID,
-			EventType:     "progress.course_completed",
+			EventType:     EventCourseCompleted,
 			SchemaVersion: 1,
-			// completed_at lets analytics.enrollment_mirror carry its own
-			// completed_at without querying course.enrollments for it
-			// (ADR-0024).
-			Payload: map[string]any{"enrollment_id": enrollmentID, "student_id": studentID, "completed_at": completedAt},
+			Payload:       CourseCompletedPayload{EnrollmentID: enrollmentID, StudentID: studentID, CompletedAt: completedAt},
 		})
 	})
 }

@@ -52,8 +52,11 @@ func samples() map[string]proto.Message {
 		"identity.user_role_changed":    &identityv1.UserRoleChanged{UserId: uid[0], Role: "instructor", Status: "active"},
 		"course.course_published":       &coursev1.CoursePublished{CourseId: uid[1], VersionId: uid[2], Title: "Go in Depth", InstructorId: uid[3]},
 		"course.course_archived":        &coursev1.CourseArchived{CourseId: uid[1]},
+		"course.publish_failed":         &coursev1.CoursePublishFailed{CourseId: uid[1], VersionId: uid[2], VersionNumber: 3, Title: "Go in Depth", InstructorId: uid[3], FailedActivity: "VerifyAssets", Reason: "asset not found", FailedAt: when},
 		"enrollment.student_enrolled":   &enrollmentv1.StudentEnrolled{EnrollmentId: uid[2], StudentId: uid[0], CourseId: uid[1], EnrolledAt: when},
 		"enrollment.student_withdrawn":  &enrollmentv1.StudentWithdrawn{EnrollmentId: uid[2], StudentId: uid[0], CourseId: uid[1]},
+		"progress.lesson_completed":     &progressv1.LessonCompleted{EnrollmentId: uid[2], StudentId: uid[0], LessonKey: uid[3], CompletedAt: when},
+		"progress.certificate_issued":   &progressv1.CertificateIssued{CertificateId: uid[3], EnrollmentId: uid[2], StudentId: uid[0], CourseId: uid[1], CourseTitle: "Go in Depth", IssuedAt: when},
 		"progress.course_completed":     &progressv1.CourseCompleted{EnrollmentId: uid[2], StudentId: uid[0], CompletedAt: when},
 	}
 }

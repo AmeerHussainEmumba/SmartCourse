@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Added: Workflow Issues, the ninth FR-5 metric (DR-026). Migration `000004` (`publish_failures`, `workflow_issue_stats`), a relay handler for `course.publish_failed`, `NewWorkflowIssuesSource`, `ReconcileWorkflowIssueStats` (run by `Reconciler.Run`), and `analytics.PublishWorkflow`. `cmd/analytics-api/wire.go` attaches the source, so `GET /analytics/issues` returns `workflow_issues` as an object (`failed`, `by_workflow`) instead of `null`. Counts publish failures since the event existed; earlier ones are not backfilled. 9 of 9 FR-5 metrics now have a source.
+
 - analytics-api wires telemetry in `cmd/analytics-api/main.go`: tracing, RED metrics, `/metrics`, bounded flush on shutdown (Phase 7). It does not expose the outbox gauges (no access to the outbox table).
 
 - Added: `services/analytics/failedevents` (`Source`, `LazyStore`): the Failed Events metric over `libs/mongostore` (ADR-0031). `cmd/analytics-api/wire.go` attaches it when `MONGO_URI` is set; MongoDB connects lazily so startup and other routes never depend on it. `registerRoutes` now returns a close func. `go.mod` requires `libs/mongostore`; `Dockerfile.analytics-api` copies it; `scripts/check-link-graph.sh` no longer forbids it for analytics-api only.

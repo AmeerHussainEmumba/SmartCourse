@@ -7,7 +7,7 @@ import (
 )
 
 func TestRender_EveryKindHasTextAndHTML(t *testing.T) {
-	for _, kind := range []string{KindWelcome, KindEnrollmentConfirm, KindCourseCompleted, KindCoursePublished} {
+	for _, kind := range []string{KindWelcome, KindEnrollmentConfirm, KindCourseCompleted, KindCoursePublished, KindCertificateIssued, KindPublishFailed} {
 		subject, text, html, err := Render(kind, TemplateData{Name: "Ada", CourseTitle: "Go 101"})
 		if err != nil {
 			t.Fatalf("%s: %v", kind, err)
@@ -62,6 +62,29 @@ func TestRender_FallbacksAndLengthCap(t *testing.T) {
 	_, long, _, _ := Render(KindWelcome, TemplateData{Name: strings.Repeat("x", 5000)})
 	if len(long) > 1000 {
 		t.Fatalf("name was not capped: %d bytes", len(long))
+	}
+}
+
+func TestRender_PublishFailed_ReasonIsEscapedClippedAndNeverInTheSubject(t *testing.T) {
+	subject, text, html, err := Render(KindPublishFailed, TemplateData{
+		Name: "Grace", CourseTitle: "Go", FailedActivity: "VerifyAssets",
+		Reason: "<script>x</script>\r\nBcc: victim@evil.test " + strings.Repeat("y", 2000),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(subject, "script") || strings.ContainsAny(subject, "\r\n") {
+		t.Fatalf("subject carries the reason or a line break: %q", subject)
+	}
+	if strings.Contains(html, "<script>") || !strings.Contains(html, "&lt;script&gt;") {
+		t.Fatalf("reason not escaped: %s", html)
+	}
+	if strings.Contains(text, "\nBcc:") || len(text) > 1500 {
+		t.Fatalf("reason kept a line break or was not clipped (%d bytes): %q", len(text), text)
+	}
+	_, bare, _, err := Render(KindPublishFailed, TemplateData{Name: "Grace", CourseTitle: "Go"})
+	if err != nil || strings.Contains(bare, "at step") || strings.Contains(bare, ": .") {
+		t.Fatalf("no activity or reason must render cleanly: %q (%v)", bare, err)
 	}
 }
 

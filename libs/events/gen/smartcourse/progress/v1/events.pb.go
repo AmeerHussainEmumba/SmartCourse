@@ -86,6 +86,165 @@ func (x *CourseCompleted) GetCompletedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+// progress.lesson_completed: written once per lesson completion (never on an
+// idempotent repeat), in the same transaction as the lesson_progress update.
+// Added in Week 3 (RFC §6.5 LessonCompleted).
+type LessonCompleted struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EnrollmentId  string                 `protobuf:"bytes,1,opt,name=enrollment_id,json=enrollmentId,proto3" json:"enrollment_id,omitempty"`
+	StudentId     string                 `protobuf:"bytes,2,opt,name=student_id,json=studentId,proto3" json:"student_id,omitempty"`
+	LessonKey     string                 `protobuf:"bytes,3,opt,name=lesson_key,json=lessonKey,proto3" json:"lesson_key,omitempty"`
+	CompletedAt   *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LessonCompleted) Reset() {
+	*x = LessonCompleted{}
+	mi := &file_smartcourse_progress_v1_events_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LessonCompleted) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LessonCompleted) ProtoMessage() {}
+
+func (x *LessonCompleted) ProtoReflect() protoreflect.Message {
+	mi := &file_smartcourse_progress_v1_events_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LessonCompleted.ProtoReflect.Descriptor instead.
+func (*LessonCompleted) Descriptor() ([]byte, []int) {
+	return file_smartcourse_progress_v1_events_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *LessonCompleted) GetEnrollmentId() string {
+	if x != nil {
+		return x.EnrollmentId
+	}
+	return ""
+}
+
+func (x *LessonCompleted) GetStudentId() string {
+	if x != nil {
+		return x.StudentId
+	}
+	return ""
+}
+
+func (x *LessonCompleted) GetLessonKey() string {
+	if x != nil {
+		return x.LessonKey
+	}
+	return ""
+}
+
+func (x *LessonCompleted) GetCompletedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CompletedAt
+	}
+	return nil
+}
+
+// progress.certificate_issued: written in the transaction that inserts the
+// certificate row. The verification code is deliberately NOT carried: it is a
+// bearer token for the public verification endpoint and must not be copied
+// into Kafka and the permanent archive.
+type CertificateIssued struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CertificateId string                 `protobuf:"bytes,1,opt,name=certificate_id,json=certificateId,proto3" json:"certificate_id,omitempty"`
+	EnrollmentId  string                 `protobuf:"bytes,2,opt,name=enrollment_id,json=enrollmentId,proto3" json:"enrollment_id,omitempty"`
+	StudentId     string                 `protobuf:"bytes,3,opt,name=student_id,json=studentId,proto3" json:"student_id,omitempty"`
+	CourseId      string                 `protobuf:"bytes,4,opt,name=course_id,json=courseId,proto3" json:"course_id,omitempty"`
+	CourseTitle   string                 `protobuf:"bytes,5,opt,name=course_title,json=courseTitle,proto3" json:"course_title,omitempty"`
+	IssuedAt      *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CertificateIssued) Reset() {
+	*x = CertificateIssued{}
+	mi := &file_smartcourse_progress_v1_events_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CertificateIssued) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CertificateIssued) ProtoMessage() {}
+
+func (x *CertificateIssued) ProtoReflect() protoreflect.Message {
+	mi := &file_smartcourse_progress_v1_events_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CertificateIssued.ProtoReflect.Descriptor instead.
+func (*CertificateIssued) Descriptor() ([]byte, []int) {
+	return file_smartcourse_progress_v1_events_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *CertificateIssued) GetCertificateId() string {
+	if x != nil {
+		return x.CertificateId
+	}
+	return ""
+}
+
+func (x *CertificateIssued) GetEnrollmentId() string {
+	if x != nil {
+		return x.EnrollmentId
+	}
+	return ""
+}
+
+func (x *CertificateIssued) GetStudentId() string {
+	if x != nil {
+		return x.StudentId
+	}
+	return ""
+}
+
+func (x *CertificateIssued) GetCourseId() string {
+	if x != nil {
+		return x.CourseId
+	}
+	return ""
+}
+
+func (x *CertificateIssued) GetCourseTitle() string {
+	if x != nil {
+		return x.CourseTitle
+	}
+	return ""
+}
+
+func (x *CertificateIssued) GetIssuedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.IssuedAt
+	}
+	return nil
+}
+
 var File_smartcourse_progress_v1_events_proto protoreflect.FileDescriptor
 
 const file_smartcourse_progress_v1_events_proto_rawDesc = "" +
@@ -95,7 +254,22 @@ const file_smartcourse_progress_v1_events_proto_rawDesc = "" +
 	"\renrollment_id\x18\x01 \x01(\tR\fenrollmentId\x12\x1d\n" +
 	"\n" +
 	"student_id\x18\x02 \x01(\tR\tstudentId\x12=\n" +
-	"\fcompleted_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAtB^Z\\github.com/AmeerHussainEmumba/SmartCourse/libs/events/gen/smartcourse/progress/v1;progressv1b\x06proto3"
+	"\fcompleted_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAt\"\xb3\x01\n" +
+	"\x0fLessonCompleted\x12#\n" +
+	"\renrollment_id\x18\x01 \x01(\tR\fenrollmentId\x12\x1d\n" +
+	"\n" +
+	"student_id\x18\x02 \x01(\tR\tstudentId\x12\x1d\n" +
+	"\n" +
+	"lesson_key\x18\x03 \x01(\tR\tlessonKey\x12=\n" +
+	"\fcompleted_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAt\"\xf7\x01\n" +
+	"\x11CertificateIssued\x12%\n" +
+	"\x0ecertificate_id\x18\x01 \x01(\tR\rcertificateId\x12#\n" +
+	"\renrollment_id\x18\x02 \x01(\tR\fenrollmentId\x12\x1d\n" +
+	"\n" +
+	"student_id\x18\x03 \x01(\tR\tstudentId\x12\x1b\n" +
+	"\tcourse_id\x18\x04 \x01(\tR\bcourseId\x12!\n" +
+	"\fcourse_title\x18\x05 \x01(\tR\vcourseTitle\x127\n" +
+	"\tissued_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\bissuedAtB^Z\\github.com/AmeerHussainEmumba/SmartCourse/libs/events/gen/smartcourse/progress/v1;progressv1b\x06proto3"
 
 var (
 	file_smartcourse_progress_v1_events_proto_rawDescOnce sync.Once
@@ -109,18 +283,22 @@ func file_smartcourse_progress_v1_events_proto_rawDescGZIP() []byte {
 	return file_smartcourse_progress_v1_events_proto_rawDescData
 }
 
-var file_smartcourse_progress_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_smartcourse_progress_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_smartcourse_progress_v1_events_proto_goTypes = []any{
 	(*CourseCompleted)(nil),       // 0: smartcourse.progress.v1.CourseCompleted
-	(*timestamppb.Timestamp)(nil), // 1: google.protobuf.Timestamp
+	(*LessonCompleted)(nil),       // 1: smartcourse.progress.v1.LessonCompleted
+	(*CertificateIssued)(nil),     // 2: smartcourse.progress.v1.CertificateIssued
+	(*timestamppb.Timestamp)(nil), // 3: google.protobuf.Timestamp
 }
 var file_smartcourse_progress_v1_events_proto_depIdxs = []int32{
-	1, // 0: smartcourse.progress.v1.CourseCompleted.completed_at:type_name -> google.protobuf.Timestamp
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	3, // 0: smartcourse.progress.v1.CourseCompleted.completed_at:type_name -> google.protobuf.Timestamp
+	3, // 1: smartcourse.progress.v1.LessonCompleted.completed_at:type_name -> google.protobuf.Timestamp
+	3, // 2: smartcourse.progress.v1.CertificateIssued.issued_at:type_name -> google.protobuf.Timestamp
+	3, // [3:3] is the sub-list for method output_type
+	3, // [3:3] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_smartcourse_progress_v1_events_proto_init() }
@@ -134,7 +312,7 @@ func file_smartcourse_progress_v1_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_smartcourse_progress_v1_events_proto_rawDesc), len(file_smartcourse_progress_v1_events_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   1,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

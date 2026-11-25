@@ -57,6 +57,9 @@ func (a *Activities) PromoteAndPublish(ctx context.Context, courseID, versionID 
 	return a.svc.PromoteAndPublish(ctx, courseID, versionID, oldVersionID, title)
 }
 
-func (a *Activities) MarkPublishFailed(ctx context.Context, versionID uuid.UUID, reason string) error {
-	return a.svc.MarkPublishFailed(ctx, versionID, reason)
+// MarkPublishFailed takes the failed activity's name as its last argument for
+// course.publish_failed. Workflows already running when this was added were
+// scheduled with two arguments; see the README's deployment note.
+func (a *Activities) MarkPublishFailed(ctx context.Context, versionID uuid.UUID, reason, failedActivity string) error {
+	return a.svc.MarkPublishFailed(ctx, versionID, reason, failedActivity)
 }

@@ -232,7 +232,7 @@ Don't assume the RFC describes the current state of the code — it describes th
 - **Assets:** `POST /assets/upload-url` issues pre-signed MinIO URLs; publishing checks every lesson asset against object storage.
 - **`Idempotency-Key`** on the course POST routes (`libs/idempotency`, DR-023).
 - **Certificates:** one per completed enrollment, owner-only list and get, public verification by code (`services/course/certificate`, DR-025).
-- **Analytics:** 8 of the 9 FR-5 metrics, including Most Popular Courses; per-course stats are owner-gated for instructors (DR-024); a reconciler recomputes everything from the mirrors every 60 s.
+- **Analytics:** all 9 FR-5 metrics have a source, including Most Popular Courses and Workflow Issues (DR-026); per-course stats are owner-gated for instructors (DR-024); a reconciler recomputes everything from the mirrors every 60 s.
 - **Worker:** Asynq pools (one server per queue), scheduled jobs (stale-publish reconciliation, analytics and enrollment-counter reconciliation, idempotency-key and outbox pruning), and the notification dispatcher with an SMTP provider pointed at Mailpit (web UI on http://localhost:8025). No real mail provider is integrated, by decision.
 - **Kafka transport:** `EVENT_TRANSPORT=kafka` makes the relay produce to Kafka after the broker acks and runs a consumer group per handler (`libs/kafka`, `services/worker/transport`, ADR-0029). The default stays `inprocess`.
 - **MongoDB:** the audit archiver (Kafka mode only), the dead-letter store, and replay of failed events through the worker's admin surface on `127.0.0.1:8093` (admin role only). `analytics-api` serves the Failed Events counts from the same store, and answers 503 on that one route when MongoDB is unavailable.
@@ -241,7 +241,7 @@ Don't assume the RFC describes the current state of the code — it describes th
 
 **In progress or not wired yet:**
 - **Observability.** The Prometheus, Grafana and Jaeger containers (`make dev-observability`) and `libs/telemetry` exist, and instrumenting the services with metrics and traces is being wired now; until it lands, treat the dashboards as empty. Alert thresholds are placeholders.
-- **Workflow Issues** (the other half of the ninth analytics metric): no source yet, so `workflow_issues` is `null` in `GET /analytics/issues`.
+- **Workflow Issues** (the other half of the ninth analytics metric): counts publishes that ended in `publish_failed`, from `course.publish_failed` events since that event existed (DR-026); failures before it are not counted.
 - **Search-index and cache reconciliation** (ADR-0025's gap).
 - **Unverified:** a Confluent-format consumer reading our Kafka bytes, multi-broker or TLS Kafka, the full stack running in Kafka mode from built images, and the CI jobs for the Kafka tier.
 - **Switching an existing database to Kafka mode:** rows already published in-process never reach Kafka, and a new consumer group starts at the beginning of each topic.

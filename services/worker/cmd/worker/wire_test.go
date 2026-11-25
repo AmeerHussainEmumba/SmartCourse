@@ -25,6 +25,7 @@ import (
 	temporalclient "go.temporal.io/sdk/client"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/events"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/analytics/analytics"
@@ -93,6 +94,7 @@ func TestBuildRelay_RegistersExactlyTheModulesHandlers(t *testing.T) {
 	// both sides of the comparison above) is also caught.
 	literal := []string{
 		"analytics-aggregator|course.course_published",
+		"analytics-aggregator|course.publish_failed",
 		"analytics-aggregator|enrollment.student_enrolled",
 		"analytics-aggregator|enrollment.student_withdrawn",
 		"analytics-aggregator|identity.user_registered",
@@ -103,9 +105,11 @@ func TestBuildRelay_RegistersExactlyTheModulesHandlers(t *testing.T) {
 		"course-instructor-mirror|identity.user_registered",
 		"enrollment-course-archival|course.course_archived",
 		"notification-dispatcher|course.course_published",
+		"notification-dispatcher|course.publish_failed",
 		"notification-dispatcher|enrollment.student_enrolled",
 		"notification-dispatcher|identity.user_profile_updated",
 		"notification-dispatcher|identity.user_registered",
+		"notification-dispatcher|progress.certificate_issued",
 		"notification-dispatcher|progress.course_completed",
 	}
 	if !reflect.DeepEqual(got, literal) {
@@ -133,6 +137,12 @@ func TestEveryEmittedEventTypeHasAConsumer(t *testing.T) {
 	_, thisFile, _, _ := runtime.Caller(0)
 	servicesDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "..")
 	emitted := map[string]string{}
+	// Producers name their event types either with a string literal or with an
+	// exported Event* constant (services/course/{progress,certificate,course}).
+	// The constants are collected first so both forms are seen.
+	consts := map[string]string{}
+	type usage struct{ name, file string }
+	var viaConst []usage
 	fset := token.NewFileSet()
 	err := filepath.Walk(servicesDir, func(p string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
@@ -143,14 +153,26 @@ func TestEveryEmittedEventTypeHasAConsumer(t *testing.T) {
 			return perr
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
-			kv, ok := n.(*ast.KeyValueExpr)
-			if !ok {
-				return true
-			}
-			if id, ok := kv.Key.(*ast.Ident); ok && id.Name == "EventType" {
-				if bl, ok := kv.Value.(*ast.BasicLit); ok && bl.Kind == token.STRING {
-					s, _ := strconv.Unquote(bl.Value)
-					emitted[s] = p
+			switch n := n.(type) {
+			case *ast.ValueSpec:
+				for i, name := range n.Names {
+					if i < len(n.Values) && strings.HasPrefix(name.Name, "Event") {
+						if bl, ok := n.Values[i].(*ast.BasicLit); ok && bl.Kind == token.STRING {
+							consts[name.Name], _ = strconv.Unquote(bl.Value)
+						}
+					}
+				}
+			case *ast.KeyValueExpr:
+				if id, ok := n.Key.(*ast.Ident); ok && id.Name == "EventType" {
+					switch v := n.Value.(type) {
+					case *ast.BasicLit:
+						if v.Kind == token.STRING {
+							s, _ := strconv.Unquote(v.Value)
+							emitted[s] = p
+						}
+					case *ast.Ident:
+						viaConst = append(viaConst, usage{v.Name, p})
+					}
 				}
 			}
 			return true
@@ -160,6 +182,14 @@ func TestEveryEmittedEventTypeHasAConsumer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, u := range viaConst {
+		val, ok := consts[u.name]
+		if !ok {
+			t.Errorf("EventType: %s in %s is not an Event* string constant this guard can resolve", u.name, filepath.Base(u.file))
+			continue
+		}
+		emitted[val] = u.file
+	}
 	if len(emitted) < 8 {
 		t.Fatalf("expected at least 8 emitted event types, found %d: %v", len(emitted), emitted)
 	}
@@ -167,8 +197,21 @@ func TestEveryEmittedEventTypeHasAConsumer(t *testing.T) {
 	for _, p := range registeredPairs(t, buildRelay(&infra.Dependencies{}, relayTestConfig())) {
 		consumed[strings.SplitN(p, "|", 2)[1]] = true
 	}
+	// Events no relay handler consumes by design. progress.lesson_completed is
+	// archived (the audit-archiver subscribes to every events.Types() entry) but
+	// no RFC consumer needs it yet: RFC §4.6 lists "progress metrics" for it, and
+	// the completion figures analytics reports derive from course_completed.
+	archiveOnly := map[string]bool{"progress.lesson_completed": true}
+	for et := range archiveOnly {
+		if _, ok := events.Lookup(et); !ok {
+			t.Errorf("%s is listed as archive-only but is not in events.Types(), so nothing consumes it", et)
+		}
+		if consumed[et] {
+			t.Errorf("%s is listed as archive-only but has a consumer: remove it from the list", et)
+		}
+	}
 	for et, file := range emitted {
-		if !consumed[et] {
+		if !consumed[et] && !archiveOnly[et] {
 			t.Errorf("event type %q (emitted in %s) has no registered consumer in the worker", et, filepath.Base(file))
 		}
 	}

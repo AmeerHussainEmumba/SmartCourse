@@ -4,7 +4,7 @@ SmartCourse's one Temporal workflow — course publishing (RFC §7, ADR-0009, AD
 
 ## What's here
 
-- **`workflow.go`** — `PublishCourseWorkflow`, implementing RFC §7.4's activity graph: `ValidateMetadata` → `{VerifyAssets, ComputeMetadata}` → `BuildOutline` → `{IndexSearch, WarmCache}` → `PromoteAndPublish`. On any activity's final failure, `failPublish` records the error via `MarkPublishFailed` and returns it — no compensation of earlier activities, because none of them touch the live version (RFC §7.4's own stated design property).
+- **`workflow.go`** — `PublishCourseWorkflow`, implementing RFC §7.4's activity graph: `ValidateMetadata` → `{VerifyAssets, ComputeMetadata}` → `BuildOutline` → `{IndexSearch, WarmCache}` → `PromoteAndPublish`. On any activity's final failure, `failPublish` records the error via `MarkPublishFailed` and returns it — no compensation of earlier activities, because none of them touch the live version (RFC §7.4's own stated design property). `failPublish` also passes the failed activity's name (from the `ActivityError`) as `MarkPublishFailed`'s third argument, which becomes `failed_activity` on `course.publish_failed`. Deployment note: a workflow already running when this was added was scheduled with the two-argument activity; that case was not tested, so let in-flight publishes finish before deploying.
 - **`activities.go`** — `Activities`, a thin wrapper whose methods do nothing but forward to `course.Service`. The actual business logic lives on `Service` so it's identical whether Temporal calls it or a test calls it directly, and so this package carries the only Temporal SDK import in the codebase — `services/course/course` never imports it.
 
 ## Why the dependency only runs one way

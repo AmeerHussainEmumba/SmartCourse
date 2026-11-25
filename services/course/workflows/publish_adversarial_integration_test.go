@@ -66,12 +66,12 @@ func (c *chaosActivities) PromoteAndPublish(ctx context.Context, courseID, versi
 	return nil
 }
 
-func (c *chaosActivities) MarkPublishFailed(ctx context.Context, versionID uuid.UUID, reason string) error {
+func (c *chaosActivities) MarkPublishFailed(ctx context.Context, versionID uuid.UUID, reason, failedActivity string) error {
 	c.markCalls.Add(1)
 	if c.markAlwaysFails {
 		return errChaos
 	}
-	return c.Activities.MarkPublishFailed(ctx, versionID, reason)
+	return c.Activities.MarkPublishFailed(ctx, versionID, reason, failedActivity)
 }
 
 type fixture struct {

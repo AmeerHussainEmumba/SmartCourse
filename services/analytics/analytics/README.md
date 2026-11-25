@@ -18,7 +18,7 @@ Platform and course-level aggregate metrics (RFC §4.3, §9; SmartCourse.md FR-5
 
 ## What this closes, and what it doesn't
 
-FR-5 names nine metrics (SmartCourse.md; DR-021). **8 of 9 are live; the ninth is built up to its data source.**
+FR-5 names nine metrics (SmartCourse.md; DR-021). **9 of 9 have a source** (DR-026): the ninth, Failed Events / Workflow Issues, is served in two halves, and its failed-events half needs MongoDB.
 
 | # | Metric | Where it is served | Backed by |
 |---|---|---|---|
@@ -28,7 +28,7 @@ FR-5 names nine metrics (SmartCourse.md; DR-021). **8 of 9 are live; the ninth i
 | 6 | Average time to complete | `GET /analytics/courses/{id}` | `course_stats.avg_completion_s` |
 | 7 | New enrollments over time | `GET /analytics/courses/{id}/daily-enrollments` | `daily_enrollments` |
 | 8 | **Most popular courses** (new, Week 3) | `GET /analytics/popular-courses` | Redis sorted set `analytics:popular_courses`, reconciled from `course_stats` + `course_mirror` every `Reconciler.Run`; Postgres fallback |
-| 9 | Failed events / workflow issues | `GET /analytics/issues` (admin only) | **Half live.** Failed events are served from MongoDB `failed_events` (`services/analytics/failedevents`, attached in `cmd/analytics-api/wire.go`); the workflow-failure half is not built and reported as `null`. 503 while MongoDB is unset or unreachable |
+| 9 | Failed events / workflow issues | `GET /analytics/issues` (admin only) | Failed events from MongoDB `failed_events` (`services/analytics/failedevents`, attached in `cmd/analytics-api/wire.go`); workflow issues from `workflow_issue_stats`, fed by `course.publish_failed` (`workflow_issues.go`). 503 while MongoDB is unset or unreachable |
 
 (Metrics 1-4 are four numbers on one route, so the count of nine is by metric, as the baseline lists them.)
 
@@ -37,7 +37,10 @@ FR-5 names nine metrics (SmartCourse.md; DR-021). **8 of 9 are live; the ninth i
 **Failed Events / Workflow Issues** needs the dead-letter store (MongoDB `failed_events`) and workflow failure counts. This package links neither: `issues.go` defines the two narrow interfaces and `Service.WithIssueSources` attaches them. `GET /analytics/issues` is admin-only (401/403).
 
 - **Failed events: live.** `services/analytics/failedevents` implements `FailedEventsSource` over `libs/mongostore` (one aggregation over `failed_events`, no payloads) and `cmd/analytics-api/wire.go` attaches it. analytics-api is therefore the one HTTP service allowed to link `libs/mongostore` (the link-graph rule was relaxed for it alone; ADR-0031 deviation note). The report has `total`, `unresolved` (parked), `replayed`, `by_event_type` and `by_consumer` (parked only) and `oldest_unresolved_age_seconds` (null when nothing is parked). MongoDB connects lazily on first use, retried at most every 5 s, so startup and every other route are independent of it: with `MONGO_URI` unset or MongoDB unreachable the route answers 503 (`ErrSourceUnavailable`), never zeros.
-- **Workflow issues: not built, reported as `null`.** Failure counts live in the course schema, which this module may not read (ADR-0024). Recommendation: have the publish workflow's failure path write a `course.publish_failed` event (RFC §6.5 already names `CoursePublishFailed`; no service emits it yet) and mirror a per-workflow failure count into an analytics table through a handler here, like every other metric. That needs a course-side emit, a catalogue entry in `libs/events` and an analytics migration, all outside this change, so it is left for the lead. Until then `Service.WithIssueSources(failed, nil)` is valid and the section is `null` (unavailable), not zero.
+- **Workflow issues: live (DR-026).** Failure facts live in the course schema, which this module may not read (ADR-0024), so `course.publish_failed` (emitted by `services/course/course` when a version ends in `publish_failed`, from the workflow's failure step or the stale-publish reconciler) is mirrored here: migration `000004` adds `publish_failures` (one row per event, keyed by event id) and `workflow_issue_stats` (the count). `handlePublishFailed` inserts the row and recomputes the count under a row lock, so concurrent failures are all counted and a redelivery counts once; `Reconciler.Run` recomputes every count from the mirror. `NewWorkflowIssuesSource(db)` reads `workflow_issue_stats` and `cmd/analytics-api/wire.go` attaches it whether or not MongoDB is configured. `GET /analytics/issues` therefore always returns `workflow_issues` as an object: `{"failed": N, "by_workflow": {"PublishCourseWorkflow": N}}`.
+  - **What it counts:** publish attempts that ended in `publish_failed` since the event existed: a cumulative count of failures, not of versions currently failing (a version that failed twice counts twice; one that later published still counts). Publishing is the only workflow, so `by_workflow` has one key.
+  - **Not backfilled:** failures before the event existed are not counted (the only record is `course_versions.publish_error`, in the course schema). The metric starts at zero at deploy.
+  - **Without a workflow source** (`WithIssueSources(failed, nil)`, only in tests now) the service still reports the section as `null` rather than a made-up zero.
 
 ### Instructor ownership (deviation from DR-022's "instructors may read any course")
 

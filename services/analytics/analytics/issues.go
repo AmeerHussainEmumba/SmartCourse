@@ -5,9 +5,10 @@
 // service supplies implementations through Service.WithIssueSources.
 // analytics-api supplies the failed-events one over libs/mongostore
 // (services/analytics/failedevents; ADR-0031 deviation note). The workflow
-// source is not built: the failure counts live in the course schema, which
-// this module may not read. Until failed events are attached the route
-// answers 503 rather than reporting a made-up zero.
+// source reads workflow_issue_stats, fed by course.publish_failed events
+// (workflow_issues.go, DR-026): the failure counts live in the course schema,
+// which this module may not read, so they arrive as events. Until failed events
+// are attached the route answers 503 rather than reporting a made-up zero.
 package analytics
 
 import (
@@ -35,7 +36,9 @@ type FailedEventsSummary struct {
 }
 
 // WorkflowIssuesSummary counts workflow runs that ended in failure, by
-// workflow name (for example the course publishing workflow).
+// workflow name (for example the course publishing workflow). Failed is a
+// cumulative count of failures recorded since course.publish_failed existed,
+// not of workflows currently failing.
 type WorkflowIssuesSummary struct {
 	Failed     int64
 	ByWorkflow map[string]int64
@@ -52,7 +55,8 @@ type WorkflowIssuesSource interface {
 }
 
 // IssuesReport is what GET /analytics/issues returns. WorkflowIssues is nil
-// when no workflow source is attached (reported as unavailable, not zero).
+// when no workflow source is attached (reported as unavailable, not zero);
+// analytics-api always attaches one.
 type IssuesReport struct {
 	FailedEvents   *FailedEventsSummary
 	WorkflowIssues *WorkflowIssuesSummary

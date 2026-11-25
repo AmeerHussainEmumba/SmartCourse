@@ -110,7 +110,9 @@ func (d *deliverer) handle(ctx context.Context, payload []byte) error {
 		d.release(row.ID, err)
 		return fmt.Errorf("load course title: %w", err)
 	}
-	subject, text, html, err := Render(row.Kind, TemplateData{Name: rcpt.Name, CourseTitle: title})
+	subject, text, html, err := Render(row.Kind, TemplateData{
+		Name: rcpt.Name, CourseTitle: title, FailedActivity: params["failed_activity"], Reason: params["reason"],
+	})
 	if err != nil {
 		_ = d.finish(row.ID, statusFailed, err)
 		return err

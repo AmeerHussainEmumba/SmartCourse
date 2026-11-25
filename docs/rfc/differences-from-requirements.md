@@ -44,8 +44,9 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-021](#dr-021--the-analytics-metric-count-is-nine-not-ten) | The analytics metric count is nine, not ten | Correction | Accepted |
 | [DR-022](#dr-022--limits-and-behaviours-chosen-during-the-bug-fix-pass-confirmed) | Limits and behaviours chosen during the bug-fix pass, confirmed | Clarification | Accepted |
 | [DR-023](#dr-023--idempotency-key-scope-and-replay-semantics) | `Idempotency-Key` scope and replay semantics | Clarification | Proposed |
-| [DR-024](#dr-024--analytics-ownership-and-the-metric-count-after-week-3) | Analytics ownership gate, nullable owner, and 8 of 9 metrics | Clarification | Proposed |
+| [DR-024](#dr-024--analytics-ownership-and-the-metric-count-after-week-3) | Analytics ownership gate, nullable owner, and 8 of 9 metrics (9 of 9 after DR-026) | Clarification | Proposed |
 | [DR-025](#dr-025--certificates-and-notification-design-choices) | Certificates and notification design choices | Clarification | Proposed |
+| [DR-026](#dr-026--workflow-issues-source-and-the-three-event-gaps) | Workflow Issues source, the three event-catalogue gaps, and what is not backfilled | Clarification | Proposed |
 
 ---
 
@@ -482,7 +483,7 @@ Storing 4xx responses is a change to one predicate in `libs/idempotency` (`stora
 | Behaviour change | An instructor asking about a course analytics has not seen now gets 404 instead of zeros |
 | Most Popular Courses | `GET /analytics/popular-courses`: ranks published courses by active plus completed enrollments, served from a Redis sorted set that the reconciler rebuilds, falling back to Postgres when Redis is absent, down, slow or empty. Any authenticated user may read it; it returns course ids and counts only (no title, because the mirror holds none). Archived courses stay in the ranking, because `course_mirror.published` is never cleared |
 | Reconciliation | `analytics.NewReconciler(db, rdb).Run` recomputes the platform snapshot, every course's stats and the daily buckets from the mirrors; the worker runs it every 60 s. `daily_enrollments` is now rebuilt by it as well as counted on events |
-| Metric count | 8 of the 9 FR-5 metrics are live. The ninth, Failed Events / Workflow Issues, has an admin-only route that answers 503 until a source is attached |
+| Metric count | 8 of the 9 FR-5 metrics were live when this was written. The ninth, Failed Events / Workflow Issues, had an admin-only route that answered 503 until a source was attached. **Superseded by DR-026: 9 of 9 now have a source** |
 
 ### Why this is logged
 
@@ -518,6 +519,37 @@ None of these are specified by the baseline. They are choices a reviewer may rea
 ### If this turns out to be wrong
 
 Each choice is local: the certificate columns are one migration, the enqueue path is one package, and the unknown-enrollment behaviour is a branch in `IssueForCompletion`.
+
+---
+
+## DR-026 — Workflow Issues source and the three event-catalogue gaps
+
+**Category:** Clarification · **Date:** 2026-11-24 · **Related:** DR-024, DR-025, RFC §4.6, §6.5, §7.4, §9, ADR-0024, ADR-0030, ADR-0031, `libs/events/README.md`, `services/analytics/analytics/README.md`
+
+### What was chosen
+
+| Area | Choice |
+|---|---|
+| Missing events | The E2E run found that RFC §6.5's `LessonCompleted`, `CertificateIssued` and `CoursePublishFailed` were never emitted. They are now: `progress.lesson_completed` (once per lesson completion, not on an idempotent repeat), `progress.certificate_issued` (in the transaction that inserts the certificate, on the inserting path only) and `course.publish_failed` (in the transaction that moves a version to `publish_failed`, from the workflow's failure step and from the stale-publish reconciler, once per failure). Schemas are BACKWARD-compatible additions; the catalogue is 11 events and 15 registry subjects. `CourseCreated`, `CourseVersionCreated` and `CoursePublishRequested` remain unemitted: the RFC's consumer table gives them no consumer |
+| What "Workflow Issues" counts | The number of course publishes that ended in `publish_failed`, from `course.publish_failed` events, shown as `workflow_issues.failed` and `by_workflow` (`PublishCourseWorkflow`) on `GET /analytics/issues`. It is a cumulative count of failures, not of versions currently failing: a version that failed twice counts twice and one that later published still counts. It is not a count of failed Temporal workflows of any other type (publishing is the only workflow) |
+| Where the count lives | `analytics.publish_failures` (one row per event, keyed by event id) and `analytics.workflow_issue_stats` (the count), migration 000004. The handler recomputes the count under a row lock and the 60 s reconciler recomputes it from the mirror. Analytics still reads no other schema (ADR-0024) |
+| Metric count | **9 of the 9 FR-5 metrics have a source.** The failed-events half still needs MongoDB: without it the route answers 503, as before. `workflow_issues` is now always an object, never null |
+| Notifications | A certificate-issued mail to the student and a publish-failed mail to the instructor (the RFC's §4.6 table asks for both). The certificate's verification code is in neither the event nor the mail |
+| Audit log | The RFC's §4.6 table says `CoursePublishFailed` and `CertificateIssued` are "archive + audit". Both are archived (the archiver subscribes to every catalogue type); neither is in the archiver's `audit_log` list yet, which is unchanged here |
+
+### Not backfilled, and what that means
+
+- **Outbox rows written before this change** are not rewritten. Nothing emitted `lesson_completed`, `certificate_issued` or `publish_failed` before, so there is nothing to replay: only new events exist. Certificates issued before this change have no `certificate_issued` event and their students were not mailed; lessons completed earlier have no `lesson_completed` event.
+- **Publish failures that happened before this change are not counted** in Workflow Issues, and their instructors were not mailed. The only record is `course_versions.publish_error` in the course schema, which analytics may not read. The metric starts at zero and so understates history; it is a count since the event existed.
+- **In-flight publish workflows at deploy time** were scheduled with the two-argument `MarkPublishFailed`; the activity now takes the failed activity's name as a third argument. Whether a workflow already past `ValidateMetadata` fails cleanly on that mismatch was not tested; drain or let publishes finish before deploying.
+
+### Why this is logged
+
+The baseline names the metric but not its source, and the RFC lists events the code did not emit. A reviewer may want the count to mean open failures rather than total failures, or an `audit_log` entry for both new events.
+
+### If this turns out to be wrong
+
+The count's definition is one query in `analytics/workflow_issues.go`; the event is one `outbox.Write` in each producer; the migration has a tested down path that drops both tables.
 
 ---
 

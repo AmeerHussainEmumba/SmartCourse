@@ -8,6 +8,7 @@ import (
 
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
+	"gorm.io/gorm"
 )
 
 // publishReconcileGrace is how old a `publishing` claim must be before
@@ -73,7 +74,16 @@ func (s *Service) ReconcileStalePublishes(ctx context.Context) (ReconcileResult,
 			res.Running++
 			continue
 		}
-		changed, err := s.repo.ReleaseStalePublish(ctx, sp, reason)
+		// The release and its course.publish_failed event commit together.
+		var changed bool
+		err = s.repo.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var err error
+			changed, err = s.repo.WithTx(tx).ReleaseStalePublish(ctx, sp, reason)
+			if err != nil || !changed {
+				return err
+			}
+			return s.writePublishFailed(ctx, tx, sp.VersionID, FailedActivityReconciler, reason)
+		})
 		switch {
 		case err != nil:
 			res.Errors++

@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -85,18 +86,26 @@ func (r *Repository) studentName(ctx context.Context, tx *gorm.DB, studentID uui
 // ON CONFLICT DO NOTHING. Concurrent inserts for one enrollment serialise on
 // the unique index; exactly one reports inserted=true, the rest see the
 // committed row and report false without erroring (and without aborting the
-// surrounding transaction, which a bare INSERT-then-catch-23505 would).
-func (r *Repository) insertIfAbsent(ctx context.Context, tx *gorm.DB, c *Certificate) (bool, error) {
-	res := tx.WithContext(ctx).Exec(`
+// surrounding transaction, which a bare INSERT-then-catch-23505 would). It
+// returns the issued_at the database stamped, so the event carries the row's
+// own value.
+func (r *Repository) insertIfAbsent(ctx context.Context, tx *gorm.DB, c *Certificate) (time.Time, bool, error) {
+	var issuedAt []time.Time
+	err := tx.WithContext(ctx).Raw(`
 		INSERT INTO certificates
 			(id, enrollment_id, student_id, course_id, course_version_id, verification_code, student_name, course_title)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (enrollment_id) DO NOTHING`,
-		c.ID, c.EnrollmentID, c.StudentID, c.CourseID, c.CourseVersionID, c.VerificationCode, c.StudentName, c.CourseTitle)
-	if res.Error != nil {
-		return false, fmt.Errorf("insert certificate for enrollment %s: %w", c.EnrollmentID, res.Error)
+		ON CONFLICT (enrollment_id) DO NOTHING
+		RETURNING issued_at`,
+		c.ID, c.EnrollmentID, c.StudentID, c.CourseID, c.CourseVersionID, c.VerificationCode, c.StudentName, c.CourseTitle).
+		Scan(&issuedAt).Error
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("insert certificate for enrollment %s: %w", c.EnrollmentID, err)
 	}
-	return res.RowsAffected == 1, nil
+	if len(issuedAt) != 1 {
+		return time.Time{}, false, nil
+	}
+	return issuedAt[0].UTC(), true, nil
 }
 
 func (r *Repository) ListByStudent(ctx context.Context, studentID uuid.UUID) ([]Certificate, error) {

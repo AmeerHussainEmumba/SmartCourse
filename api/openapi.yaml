@@ -9,11 +9,10 @@ info:
     error shape, Idempotency-Key) and docs/rfc/smartcourse-prd.md for
     product context. Publishing workflow status (M2, ADR-0025) is built —
     see POST/GET on /courses/{id}/publish[-status] and GET /courses/search
-    below. 8 of FR-5's 9 analytics metrics are live (DR-021; the ninth, failed events / workflow issues, has an admin route that answers 503 until a source is attached) — see /analytics/*
+    below. All 9 of FR-5's analytics metrics are live (DR-021, DR-026; the ninth, failed events / workflow issues, is an admin route that needs MongoDB for its failed-events half and answers 503 without it) — see /analytics/*
     below (DR-017: the last two of these had been computed since ADR-0024
     but had no read path until this spec caught up to reality). Endpoints
-    not yet built (the failed-events source behind /analytics/issues,
-    admin/audit beyond role change, failed-event replay) are not listed
+    not yet built (admin/audit beyond role change, failed-event replay) are not listed
     here — an absent path means "not built yet," not "undocumented."
     Certificates (/certificates, public verification by code) and Most
     Popular Courses (/analytics/popular-courses) are built.
@@ -513,8 +512,11 @@ paths:
       summary: >
         Failed Events / Workflow Issues (FR-5), admin only. Dead-letter backlog from the MongoDB
         failed_events store. Answers 503 while the store is not configured (MONGO_URI unset) or not
-        reachable; no other analytics route is affected. workflow_issues is null (unavailable, not
-        zero) because failed-workflow counts have no source yet.
+        reachable; no other analytics route is affected. workflow_issues is always an object: the
+        number of course publishes that ended in publish_failed, counted from course.publish_failed
+        events (DR-026). It is a cumulative count of failures, not of versions currently failing (a
+        version that failed twice counts twice), and it starts at zero when the event was introduced:
+        publish failures before that are not counted.
       security: [{ bearerAuth: [] }]
       responses:
         '200':
@@ -535,10 +537,10 @@ paths:
                       oldest_unresolved_age_seconds: { type: integer, format: int64, nullable: true, description: "Null when nothing is unresolved" }
                   workflow_issues:
                     type: object
-                    nullable: true
+                    required: [failed, by_workflow]
                     properties:
-                      failed: { type: integer, format: int64 }
-                      by_workflow: { type: object, additionalProperties: { type: integer, format: int64 } }
+                      failed: { type: integer, format: int64, description: "Publish failures recorded since course.publish_failed existed" }
+                      by_workflow: { type: object, additionalProperties: { type: integer, format: int64 }, description: "Failures per workflow type, for example PublishCourseWorkflow; {} when none" }
         '403': { description: "Caller is not an admin", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '503': { description: "The failed-events store is not configured or not reachable", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 

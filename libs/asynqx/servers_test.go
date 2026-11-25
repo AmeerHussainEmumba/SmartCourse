@@ -34,6 +34,30 @@ func TestNewServers_DefaultsAreTheRFCPools(t *testing.T) {
 	}
 }
 
+// Asynq's own default check interval (5s) made every retry gap about 5s
+// whatever the backoff said (E07). Unset means one second on every server.
+func TestNewServers_DelayedTaskCheckIntervalDefaultsToOneSecond(t *testing.T) {
+	ss, err := NewServers(ServersConfig{Redis: unusedRedis})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for q, s := range ss.byQueue {
+		if got := s.cfg.DelayedTaskCheckInterval; got != time.Second {
+			t.Errorf("queue %s: DelayedTaskCheckInterval = %v, want 1s", q, got)
+		}
+	}
+	ss, err = NewServers(ServersConfig{Redis: unusedRedis, DelayedTaskCheckInterval: 250 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ss.byQueue[QueueCritical].cfg.DelayedTaskCheckInterval; got != 250*time.Millisecond {
+		t.Errorf("an explicit interval was overridden: %v", got)
+	}
+	if _, err := NewServer(ServerConfig{Redis: unusedRedis, DelayedTaskCheckInterval: -time.Second}); err == nil {
+		t.Error("a negative interval must be rejected")
+	}
+}
+
 func TestNewServers_ConfiguredPoolsOnly(t *testing.T) {
 	ss, err := NewServers(ServersConfig{Redis: unusedRedis, Pools: map[string]int{QueueLow: 2, QueueCritical: 7}})
 	if err != nil {

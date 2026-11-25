@@ -37,7 +37,7 @@ func TestPublishCourseWorkflow_HappyPath_RunsFullGraphInOrder(t *testing.T) {
 	env.OnActivity(a.IndexSearch, mock.Anything, outline).Return(nil).Once()
 	env.OnActivity(a.WarmCache, mock.Anything, outline).Return(nil).Once()
 	env.OnActivity(a.PromoteAndPublish, mock.Anything, in.CourseID, in.VersionID, in.OldVersionID, in.Title).Return(nil).Once()
-	env.OnActivity(a.MarkPublishFailed, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe() // must NOT actually be called — asserted below
+	env.OnActivity(a.MarkPublishFailed, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe() // must NOT actually be called — asserted below
 
 	env.ExecuteWorkflow(PublishCourseWorkflow, in)
 
@@ -47,7 +47,7 @@ func TestPublishCourseWorkflow_HappyPath_RunsFullGraphInOrder(t *testing.T) {
 	if err := env.GetWorkflowError(); err != nil {
 		t.Fatalf("expected no workflow error, got: %v", err)
 	}
-	env.AssertNotCalled(t, "MarkPublishFailed", mock.Anything, mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, "MarkPublishFailed", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	env.AssertExpectations(t)
 }
 
@@ -64,7 +64,7 @@ func TestPublishCourseWorkflow_ValidateMetadataFails_StopsBeforePromote(t *testi
 
 	var a *Activities
 	env.OnActivity(a.ValidateMetadata, mock.Anything, in.VersionID).Return(cause).Once()
-	env.OnActivity(a.MarkPublishFailed, mock.Anything, in.VersionID, cause.Error()).Return(nil).Once()
+	env.OnActivity(a.MarkPublishFailed, mock.Anything, in.VersionID, cause.Error(), "ValidateMetadata").Return(nil).Once()
 
 	env.ExecuteWorkflow(PublishCourseWorkflow, in)
 
@@ -99,7 +99,7 @@ func TestPublishCourseWorkflow_VerifyAssetsFails_StillWaitsOnComputeMetadata(t *
 	// attempts, not just the first.
 	env.OnActivity(a.VerifyAssets, mock.Anything, in.VersionID).Return(cause).Times(3)
 	env.OnActivity(a.ComputeMetadata, mock.Anything, in.VersionID).Return(nil).Once()
-	env.OnActivity(a.MarkPublishFailed, mock.Anything, in.VersionID, cause.Error()).Return(nil).Once()
+	env.OnActivity(a.MarkPublishFailed, mock.Anything, in.VersionID, cause.Error(), "VerifyAssets").Return(nil).Once()
 
 	env.ExecuteWorkflow(PublishCourseWorkflow, in)
 

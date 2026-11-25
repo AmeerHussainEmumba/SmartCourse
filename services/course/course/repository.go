@@ -390,6 +390,17 @@ func (r *Repository) UpdateVersionState(ctx context.Context, id uuid.UUID, state
 		Updates(map[string]any{"state": state, "publish_error": publishErr}).Error
 }
 
+// FailVersion moves a version to publish_failed with its error, and reports
+// whether it did: a version already in publish_failed is left as is, so a
+// repeated call (a retried activity) changes nothing and the caller emits
+// course.publish_failed once per transition.
+func (r *Repository) FailVersion(ctx context.Context, id uuid.UUID, reason string) (bool, error) {
+	res := r.db.WithContext(ctx).Exec(`
+		UPDATE course_versions SET state = 'publish_failed', publish_error = ?
+		WHERE id = ? AND state <> 'publish_failed'`, reason, id)
+	return res.RowsAffected > 0, res.Error
+}
+
 func (r *Repository) UpdateVersionMetadata(ctx context.Context, id uuid.UUID, title, description string, category, level *string, tags []string) error {
 	if tags == nil {
 		tags = []string{}
