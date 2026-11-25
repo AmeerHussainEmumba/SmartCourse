@@ -16,11 +16,6 @@ import "testing"
 // "How to extend the harness"), delete its stub below and its line in the
 // allowlist of scripts/check-pending-e2e.sh, and update its matrix row.
 
-// E2: one trace across the pipeline (legacy/scenarios_trace_e2e_test.go).
-func TestE2E_E02_OneTraceAcrossPipeline(t *testing.T) {
-	t.Skip("pending: Wave C3b - port to the ten-binary harness; spec and old body in test/e2e/legacy/scenarios_trace_e2e_test.go")
-}
-
 // E8: counter drift (legacy/scenarios_correctness_e2e_test.go).
 func TestE2E_E08_CounterDrift(t *testing.T) {
 	t.Skip("pending: Wave C3b - port to the ten-binary harness; spec and old body in test/e2e/legacy/scenarios_correctness_e2e_test.go")
