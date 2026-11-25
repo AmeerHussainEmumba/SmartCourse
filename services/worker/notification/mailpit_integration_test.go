@@ -113,7 +113,10 @@ func TestMailpit_RealContainer_ReceivesRenderedMail(t *testing.T) {
 		HTML string
 	}
 	getJSON(t, base+"/api/v1/message/"+m.ID, &full)
-	if !strings.Contains(full.Text, "Go 101") || !strings.Contains(full.HTML, "&lt;b&gt;Lovelace&lt;/b&gt;") {
+	// The display name is sanitized (S-10): markup characters are dropped, so no
+	// tag survives in either body, escaped or not, and the readable part stays.
+	if !strings.Contains(full.Text, "Go 101") || !strings.Contains(full.HTML, "Lovelace") ||
+		strings.Contains(full.HTML, "<b>") || strings.Contains(full.HTML, "&lt;b&gt;") {
 		t.Fatalf("bodies not as rendered:\ntext=%q\nhtml=%q", full.Text, full.HTML)
 	}
 }
