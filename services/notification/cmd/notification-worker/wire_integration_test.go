@@ -189,7 +189,7 @@ func (w *worker) get(path string) (int, string) {
 	if err != nil {
 		return 0, ""
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(b)
 }
