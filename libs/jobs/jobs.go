@@ -77,10 +77,29 @@ type Registry interface {
 	Register(taskType, queue string, fn func(ctx context.Context, payload []byte) error) error
 }
 
+// Namespaced is implemented by *asynqx.Scheduler and *asynqx.Servers: the queue
+// namespace they enqueue to and consume from.
+type Namespaced interface {
+	Namespace() asynqx.Namespace
+}
+
+// ErrNamespaceMismatch is returned by Register when the scheduler and the
+// registry use different queue namespaces: the ticks would be enqueued where
+// no server consumes them.
+var ErrNamespaceMismatch = errors.New("jobs: scheduler and registry use different asynqx namespaces")
+
 // Register schedules every job on sc and installs its handler on the low queue
-// (RFC §6.7: maintenance). maxRetry is the retry budget of each tick's task.
-// Call it before starting either.
+// (RFC §6.7: maintenance). The queue is the logical QueueLow; the asynqx
+// scheduler and servers apply their own namespace, so it is the service's
+// namespaced low queue, and Register refuses a scheduler and a registry whose
+// namespaces differ. maxRetry is the retry budget of each tick's task. Call it
+// before starting either.
 func Register(sc Scheduler, reg Registry, maxRetry int, js ...Job) error {
+	if a, ok := sc.(Namespaced); ok {
+		if b, ok := reg.(Namespaced); ok && a.Namespace() != b.Namespace() {
+			return fmt.Errorf("%w: %q vs %q", ErrNamespaceMismatch, a.Namespace(), b.Namespace())
+		}
+	}
 	for _, j := range js {
 		if j.Run == nil {
 			return fmt.Errorf("jobs: %s has no Run", j.Name)

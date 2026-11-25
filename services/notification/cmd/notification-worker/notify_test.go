@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,17 @@ func testServers(t *testing.T) *asynqx.Servers {
 // The delivery task belongs on the critical queue (RFC §6.7): registering it
 // again there reports the queue it already holds, so this fails if it was put
 // on another queue.
+func TestBuildAsynq_QueuesAreTheNotificationNamespace(t *testing.T) {
+	servers := testServers(t)
+	want := []string{"notification:critical", "notification:default", "notification:low"}
+	if got := servers.Queues(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("queues = %v, want %v", got, want)
+	}
+	if servers.Namespace() != "notification" {
+		t.Errorf("namespace = %q, want notification", servers.Namespace())
+	}
+}
+
 func TestRegisterDelivery_RegistersOnTheCriticalQueue(t *testing.T) {
 	servers := testServers(t)
 	prov := notification.ProviderFunc(func(_ context.Context, _ notification.Message) error { return nil })

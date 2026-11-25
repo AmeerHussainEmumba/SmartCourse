@@ -119,8 +119,11 @@ func TestBuildAsynq_PoolsPerQueueAndJobHandlers(t *testing.T) {
 	}
 	defer scheduler.Shutdown()
 
-	if got := servers.Queues(); !reflect.DeepEqual(got, []string{asynqx.QueueCritical, asynqx.QueueDefault, asynqx.QueueLow}) {
+	if got := servers.Queues(); !reflect.DeepEqual(got, []string{"identity:critical", "identity:default", "identity:low"}) {
 		t.Fatalf("queues = %v", got)
+	}
+	if servers.Namespace() != "identity" || scheduler.Namespace() != "identity" {
+		t.Errorf("namespaces: servers %q, scheduler %q, want identity", servers.Namespace(), scheduler.Namespace())
 	}
 	by := field(reflect.ValueOf(servers), "byQueue")
 	for q, want := range map[string]int64{asynqx.QueueCritical: 7, asynqx.QueueDefault: 4, asynqx.QueueLow: 2} {

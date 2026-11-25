@@ -236,3 +236,27 @@ func TestDeadLetters_NotConnectedIsNotParked(t *testing.T) {
 		t.Fatal("Ping before connect must fail")
 	}
 }
+
+// Every queue the worker serves, and its scheduler, carry the analytics
+// namespace: another service's worker on the same Redis never sees these tasks.
+func TestBuildAsynq_QueuesAreTheAnalyticsNamespace(t *testing.T) {
+	cfg := &config.Config{Asynq: config.AsynqConfig{
+		CriticalConcurrency: 2, DefaultConcurrency: 1, LowConcurrency: 1,
+		BackoffBase: time.Second, BackoffMax: time.Second, ShutdownTimeout: time.Second,
+	}}
+	js, err := buildJobs(&gorm.DB{}, nil, jobsCfg())
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers, scheduler, err := buildAsynq(cfg, slog.Default(), js)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scheduler.Shutdown()
+	if got, want := servers.Queues(), []string{"analytics:critical", "analytics:default", "analytics:low"}; !slices.Equal(got, want) {
+		t.Fatalf("queues = %v, want %v", got, want)
+	}
+	if servers.Namespace() != "analytics" || scheduler.Namespace() != "analytics" {
+		t.Errorf("namespaces: servers %q, scheduler %q, want analytics", servers.Namespace(), scheduler.Namespace())
+	}
+}

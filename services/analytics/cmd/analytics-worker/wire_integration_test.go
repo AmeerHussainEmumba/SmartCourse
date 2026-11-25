@@ -265,7 +265,7 @@ func TestAnalyticsWorker_ReconcileTaskRunsTheRealReconciler(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rc := asynqx.NewClient(asynqx.RedisClient(s.env.RDB.Options().Addr, "", 0))
+	rc := asynqx.NewClient(asynqx.RedisClient(s.env.RDB.Options().Addr, "", 0), asynqx.WithNamespace("analytics"))
 	t.Cleanup(func() { _ = rc.Close() })
 	s.eventually(60*time.Second, "ready", func() bool { code, _ := s.ready(); return code == 200 })
 	if _, err := rc.Enqueue(context.Background(), asynqx.Job{

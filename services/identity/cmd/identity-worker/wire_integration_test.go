@@ -18,7 +18,6 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/asynqx"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/jobs"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
@@ -179,7 +178,7 @@ func TestIdentityWorker_RunsRelayReseederAndJobs(t *testing.T) {
 	}
 
 	// Jobs: the Asynq servers are up and run PruneOutbox when its task is enqueued.
-	c := asynqx.NewClient(asynqx.RedisClient(env.RDB.Options().Addr, "", 0))
+	c := asynqx.NewClient(asynqx.RedisClient(env.RDB.Options().Addr, "", 0), asynqx.WithNamespace("identity"))
 	defer c.Close()
 	if _, err := c.Enqueue(context.Background(), asynqx.Job{Type: jobs.TypeOutboxPrune, ID: "wiring-prune", Queue: asynqx.QueueLow}); err != nil {
 		t.Fatal(err)
@@ -232,7 +231,7 @@ func TestIdentityWorker_AFailingRelayDoesNotStopTheReseederOrJobs(t *testing.T) 
 		v, err := env.RDB.Get(context.Background(), auth.TokenVersionRedisKey(uid.String())).Int()
 		return err == nil && v == 2
 	})
-	c := asynqx.NewClient(asynqx.RedisClient(env.RDB.Options().Addr, "", 0))
+	c := asynqx.NewClient(asynqx.RedisClient(env.RDB.Options().Addr, "", 0), asynqx.WithNamespace("identity"))
 	defer c.Close()
 	if _, err := c.Enqueue(context.Background(), asynqx.Job{Type: jobs.TypeOutboxPrune, ID: "wiring-prune-2", Queue: asynqx.QueueLow}); err != nil {
 		t.Fatal(err)

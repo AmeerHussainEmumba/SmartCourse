@@ -16,6 +16,13 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/enrollment"
 )
 
+// asynqNamespace prefixes every Asynq queue this worker uses (course:critical,
+// course:default, course:low). Workers of different services share one Redis database
+// and the same logical queue names; without the prefix they consume and archive
+// each other's tasks ("handler not found"). Servers, scheduler, client and
+// queue gauges must all use it.
+const asynqNamespace = "course"
+
 // Task types of the two course-specific jobs, also their scheduler entry names:
 // the same string on every replica (the housekeeping names are in libs/jobs).
 const (
@@ -107,6 +114,7 @@ func buildAsynq(cfg *config.Config, logger *slog.Logger, js []jobs.Job) (*asynqx
 	a := cfg.Asynq
 	servers, err := asynqx.NewServers(asynqx.ServersConfig{
 		Redis:           redis,
+		Namespace:       asynqNamespace,
 		Pools:           map[string]int{asynqx.QueueLow: a.LowConcurrency},
 		ShutdownTimeout: a.ShutdownTimeout,
 		Backoff:         asynqx.BackoffConfig{Base: a.BackoffBase, Max: a.BackoffMax, Jitter: asynqx.DefaultBackoff.Jitter},
@@ -119,7 +127,7 @@ func buildAsynq(cfg *config.Config, logger *slog.Logger, js []jobs.Job) (*asynqx
 	if err != nil {
 		return nil, nil, fmt.Errorf("build asynq servers: %w", err)
 	}
-	scheduler, err := asynqx.NewScheduler(asynqx.SchedulerConfig{Redis: redis, Logger: logger})
+	scheduler, err := asynqx.NewScheduler(asynqx.SchedulerConfig{Redis: redis, Namespace: asynqNamespace, Logger: logger})
 	if err != nil {
 		return nil, nil, fmt.Errorf("build scheduler: %w", err)
 	}
@@ -137,7 +145,7 @@ func buildAsynq(cfg *config.Config, logger *slog.Logger, js []jobs.Job) (*asynqx
 // Asynq queue gauges.
 func runJobs(ctx context.Context, logger *slog.Logger, cfg *config.Config, servers *asynqx.Servers, scheduler *asynqx.Scheduler, scheduled int, m *telemetry.Metrics) error {
 	if m != nil {
-		inspector := asynqx.NewInspector(asynqx.RedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB))
+		inspector := asynqx.NewInspector(asynqx.RedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB), asynqx.WithNamespace(asynqNamespace))
 		stop := telemetry.StartPoller(ctx, queueGaugeInterval, inspector.Gauges(m))
 		defer func() {
 			stop()

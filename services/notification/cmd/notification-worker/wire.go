@@ -22,6 +22,13 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/services/notification/notification"
 )
 
+// asynqNamespace prefixes every Asynq queue this worker uses (notification:critical,
+// notification:default, notification:low). Workers of different services share one Redis database
+// and the same logical queue names; without the prefix they consume and archive
+// each other's tasks ("handler not found"). Servers, scheduler, client and
+// queue gauges must all use it.
+const asynqNamespace = "notification"
+
 // lagGaugeInterval is how often the consumer lag gauges query the brokers, so
 // the broker load does not depend on how often Prometheus scrapes.
 const lagGaugeInterval = 15 * time.Second
@@ -87,7 +94,7 @@ func wire(p *runtime.Process) error {
 	p.Go("scheduler", scheduler.Run)
 
 	if registered {
-		client := asynqx.NewClient(asynqx.RedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB))
+		client := asynqx.NewClient(asynqx.RedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB), asynqx.WithNamespace(asynqNamespace))
 		p.OnShutdown("asynq-client", func(context.Context) error { return client.Close() })
 		p.Go("sweeper", func(ctx context.Context) error {
 			notification.RunSweeper(ctx, db, notificationEnqueuer{client}, sweepInterval, notification.SweepOptions{})
@@ -119,7 +126,8 @@ func buildAsynq(cfg *config.Config, logger *slog.Logger, js []jobs.Job) (*asynqx
 	redis := asynqx.RedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
 	a := cfg.Asynq
 	servers, err := asynqx.NewServers(asynqx.ServersConfig{
-		Redis: redis,
+		Redis:     redis,
+		Namespace: asynqNamespace,
 		Pools: map[string]int{
 			asynqx.QueueCritical: a.CriticalConcurrency,
 			asynqx.QueueDefault:  a.DefaultConcurrency,
@@ -136,7 +144,7 @@ func buildAsynq(cfg *config.Config, logger *slog.Logger, js []jobs.Job) (*asynqx
 	if err != nil {
 		return nil, nil, fmt.Errorf("build asynq servers: %w", err)
 	}
-	scheduler, err := asynqx.NewScheduler(asynqx.SchedulerConfig{Redis: redis, Logger: logger})
+	scheduler, err := asynqx.NewScheduler(asynqx.SchedulerConfig{Redis: redis, Namespace: asynqNamespace, Logger: logger})
 	if err != nil {
 		return nil, nil, fmt.Errorf("build scheduler: %w", err)
 	}
