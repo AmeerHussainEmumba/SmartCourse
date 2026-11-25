@@ -16,6 +16,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/asynqx"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/eventbus"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/jobs"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
@@ -80,17 +81,9 @@ func wireWith(p *runtime.Process, prepare prepareFunc) error {
 		p.Logger.Warn("MONGO_URI is not set: events that exhaust their retries are logged and dropped, not parked")
 	}
 
-	copts := []eventbus.ConsumerOption{
-		eventbus.WithLogger(p.Logger),
-		eventbus.WithTracing(p.Obs.TracingEnabled()),
-		eventbus.WithMetrics(p.Obs.Metrics),
-	}
-	if sink != nil {
-		copts = append(copts, eventbus.WithSink(sink))
-	}
-	consumers, err := eventbus.NewConsumers(cfg.Kafka, analytics.Handlers(), p.Deps.DB, copts...)
+	consumers, err := buildConsumers(cfg.Kafka, p.Deps.DB, sink, p.Logger, p.Obs)
 	if err != nil {
-		return fmt.Errorf("build consumers: %w", err)
+		return err
 	}
 	p.Go("consumers", func(ctx context.Context) error {
 		return runConsumers(ctx, p.Logger, cfg.Kafka, consumers, p.Obs.Metrics, prepare)
@@ -124,6 +117,26 @@ func wireWith(p *runtime.Process, prepare prepareFunc) error {
 		return nil
 	})
 	return nil
+}
+
+// buildConsumers is eventbus.NewConsumers over analytics.Handlers(): one
+// consumer group per consumer name the handlers declare ("analytics-aggregator"),
+// subscribed to the handlers' source topics and its retry topic. sink is nil
+// without MongoDB (log and drop). Nothing is started.
+func buildConsumers(k config.KafkaConfig, db *gorm.DB, sink relay.DeadLetterSink, logger *slog.Logger, obs *infra.Observability) (*eventbus.Consumers, error) {
+	opts := []eventbus.ConsumerOption{
+		eventbus.WithLogger(logger),
+		eventbus.WithTracing(obs.TracingEnabled()),
+		eventbus.WithMetrics(obs.Metrics),
+	}
+	if sink != nil {
+		opts = append(opts, eventbus.WithSink(sink))
+	}
+	c, err := eventbus.NewConsumers(k, analytics.Handlers(), db, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("build consumers: %w", err)
+	}
+	return c, nil
 }
 
 // runConsumers provisions the topics (retrying while Kafka is down, so a broker
