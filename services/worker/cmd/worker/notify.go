@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/asynqx"
@@ -66,16 +67,30 @@ func wireNotifications(ctx context.Context, logger *slog.Logger, servers *asynqx
 	return func() { _ = client.Close() }
 }
 
-// notificationEnqueuer adapts asynqx.Client to notification.Enqueuer. The task
-// ID is derived from the payload, so enqueuing a row the sweep already queued
-// is a no-op that asynqx reports as a duplicate, not an error.
+// taskIDBucket is how long one task ID stays the same for one delivery. It
+// matches the sweeper's default RequeueAfter: inside the window a second
+// enqueue of the same row is a harmless duplicate, and after it a fresh ID lets
+// the sweep re-enqueue a row whose earlier task was archived (an Asynq task ID
+// keeps existing while the task sits in the archive, so a fixed ID would make
+// every later enqueue a silent duplicate and the row would stay pending).
+const taskIDBucket = 5 * time.Minute
+
+// deliveryTaskID derives the Asynq task ID from the payload and the current
+// time bucket.
+func deliveryTaskID(taskType string, payload []byte, now time.Time) string {
+	return asynqx.DeterministicID(taskType, string(payload), strconv.FormatInt(now.Unix()/int64(taskIDBucket/time.Second), 10))
+}
+
+// notificationEnqueuer adapts asynqx.Client to notification.Enqueuer. Enqueuing
+// a row the sweep already queued within the same time bucket is a no-op that
+// asynqx reports as a duplicate, not an error.
 type notificationEnqueuer struct{ c *asynqx.Client }
 
 func (e notificationEnqueuer) Enqueue(ctx context.Context, taskType string, payload []byte) error {
 	_, err := e.c.Enqueue(ctx, asynqx.Job{
 		Type:    taskType,
 		Payload: payload,
-		ID:      asynqx.DeterministicID(taskType, string(payload)),
+		ID:      deliveryTaskID(taskType, payload, time.Now()),
 		Queue:   asynqx.QueueCritical,
 		Timeout: deliveryTimeout,
 	})

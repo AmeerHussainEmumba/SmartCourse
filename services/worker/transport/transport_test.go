@@ -32,6 +32,11 @@ func samplePayloads(agg uuid.UUID) map[string]map[string]any {
 		"enrollment.student_enrolled":   {"enrollment_id": uuid.New(), "student_id": uuid.New(), "course_id": agg, "enrolled_at": now},
 		"enrollment.student_withdrawn":  {"enrollment_id": uuid.New(), "student_id": uuid.New(), "course_id": agg},
 		"progress.course_completed":     {"enrollment_id": agg, "student_id": uuid.New(), "completed_at": now},
+		"progress.lesson_completed":     {"enrollment_id": agg, "student_id": uuid.New(), "lesson_key": "intro", "completed_at": now},
+		"progress.certificate_issued": {"certificate_id": uuid.New(), "enrollment_id": agg, "student_id": uuid.New(), "course_id": uuid.New(),
+			"course_title": "Distributed Systems", "issued_at": now},
+		"course.publish_failed": {"course_id": agg, "version_id": uuid.New(), "version_number": 2, "title": "Distributed Systems",
+			"instructor_id": uuid.New(), "failed_activity": "VerifyAssets", "reason": "asset missing", "failed_at": now},
 	}
 }
 
