@@ -43,7 +43,6 @@ func TestArchiveCourse_OutboxRowCarriesTheRequestTrace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	obs.RegisterMetricsRoute(r)
 	registerRoutes(r, deps, cfg, nil)
 
 	instructor, courseID := uuid.New(), uuid.New()
@@ -109,7 +108,7 @@ func TestArchiveCourse_OutboxRowCarriesTheRequestTrace(t *testing.T) {
 	// The same request is a RED series labelled by the route template, and the
 	// service exposes the DB pool and outbox gauges.
 	m := httptest.NewRecorder()
-	r.ServeHTTP(m, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	obs.MetricsHandler().ServeHTTP(m, httptest.NewRequest(http.MethodGet, "/metrics", nil)) // the internal listener serves this handler
 	body := m.Body.String()
 	for _, want := range []string{
 		`http_requests_total{method="POST",route="/api/v1/courses/:id/archive",status="204"} 1`,
