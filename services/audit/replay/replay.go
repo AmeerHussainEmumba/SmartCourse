@@ -146,6 +146,7 @@ type Replayer struct {
 	timeout time.Duration
 	now     func() time.Time
 	log     *slog.Logger
+	known   map[string]bool
 }
 
 // Option configures New.
@@ -160,12 +161,27 @@ func WithProduceTimeout(d time.Duration) Option {
 	}
 }
 
+// WithConsumers replaces the set of consumers a record may be replayed for
+// (default topics.Consumers()). A record parked for any other name is refused:
+// nobody reads its retry topic, so producing there and marking the record
+// replayed would lose the event silently. A new consumer must be added to
+// libs/kafka/topics, which also provisions its retry topic.
+func WithConsumers(names ...string) Option {
+	return func(r *Replayer) {
+		r.known = map[string]bool{}
+		for _, n := range names {
+			r.known[n] = true
+		}
+	}
+}
+
 // WithLogger sets the logger (default slog.Default).
 func WithLogger(l *slog.Logger) Option { return func(r *Replayer) { r.log = l } }
 
 // New builds a Replayer.
 func New(store Store, prod Producer, opts ...Option) *Replayer {
 	r := &Replayer{store: store, prod: prod, timeout: DefaultProduceTimeout, now: func() time.Time { return time.Now().UTC() }, log: slog.Default()}
+	WithConsumers(topics.Consumers()...)(r)
 	for _, o := range opts {
 		o(r)
 	}
@@ -243,6 +259,9 @@ func (r *Replayer) replayOne(ctx context.Context, listed mongostore.FailedEvent)
 		return o, nil
 	}
 
+	if !r.known[rec.Consumer] {
+		return r.refuse(o, rec, "the record's consumer is not a known consumer, so nothing reads its retry topic", nil), nil
+	}
 	evt, reason := decode(rec)
 	if reason != "" {
 		return r.refuse(o, rec, reason, nil), nil
