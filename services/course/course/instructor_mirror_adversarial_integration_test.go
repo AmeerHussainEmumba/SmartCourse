@@ -65,7 +65,7 @@ func TestAdvInstructorMirror_DuplicatedAndReorderedIdentityEvents(t *testing.T) 
 		{30, uuid.New(), "identity.user_profile_updated", map[string]any{"user_id": uid, "full_name": "Third"}},
 	}
 	for seed := int64(0); seed < 8; seed++ {
-		if err := env.DB.Exec(`TRUNCATE instructor_mirror, processed_events`).Error; err != nil {
+		if err := env.DB.Exec(`DELETE FROM instructor_mirror`).Error; err != nil || env.DB.Exec(`DELETE FROM processed_events`).Error != nil {
 			t.Fatal(err)
 		}
 		rng := rand.New(rand.NewSource(seed))
