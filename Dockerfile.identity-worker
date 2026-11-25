@@ -1,0 +1,40 @@
+# The identity-worker image (docs/plans/microservices-split.md §6): the identity
+# outbox relay (publish-only), the token-version re-seeder and the housekeeping
+# jobs. Template: Dockerfile.identity-api (same module, same COPY set; see its
+# header). Build context is the repo root:
+#   docker build -f Dockerfile.identity-worker .
+FROM golang:1.26.11-alpine AS build
+ENV GOWORK=off CGO_ENABLED=0
+WORKDIR /src
+COPY libs/asynqx ./libs/asynqx
+COPY libs/auth ./libs/auth
+COPY libs/cache ./libs/cache
+COPY libs/config ./libs/config
+COPY libs/db ./libs/db
+COPY libs/errors ./libs/errors
+COPY libs/eventbus ./libs/eventbus
+COPY libs/events ./libs/events
+COPY libs/httpx ./libs/httpx
+COPY libs/idempotency ./libs/idempotency
+COPY libs/infra ./libs/infra
+COPY libs/jobs ./libs/jobs
+COPY libs/kafka ./libs/kafka
+COPY libs/logging ./libs/logging
+COPY libs/outbox ./libs/outbox
+COPY libs/ratelimit ./libs/ratelimit
+COPY libs/relay ./libs/relay
+COPY libs/router ./libs/router
+COPY libs/runtime ./libs/runtime
+COPY libs/telemetry ./libs/telemetry
+COPY libs/testenv ./libs/testenv
+COPY services/identity ./services/identity
+WORKDIR /src/services/identity
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    go build -trimpath -o /out/identity-worker ./cmd/identity-worker
+
+FROM alpine:3.20
+# Run as an unprivileged user: a compromise of the service should not be root in the container.
+RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 app
+USER app
+COPY --from=build /out/identity-worker /usr/local/bin/identity-worker
+ENTRYPOINT ["/usr/local/bin/identity-worker"]

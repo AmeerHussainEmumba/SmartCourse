@@ -53,4 +53,3 @@ func TestAdminCLI_CreatesTheFirstAdminOnceAgainstRealPostgres(t *testing.T) {
 		t.Error("password is not stored as an Argon2id hash")
 	}
 }
-

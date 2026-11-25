@@ -1,16 +1,20 @@
 # services/identity/cmd/identity-api
 
-SmartCourse's identity HTTP service — one of the services `cmd/api` was split into (ADR-0023, extending ADR-0022's api/worker split).
+SmartCourse's identity HTTP service (ADR-0023). One of identity's three binaries; see `services/identity/README.md`.
 
 ```
 go run ./services/identity/cmd/identity-api
-docker compose --profile core up -d   # or containerized, alongside course-api, analytics-api, worker + infra
+docker compose --profile core up -d   # or containerized
 ```
 
 ## What's here
 
-`main.go` is deliberately thin, same shape as every other `cmd/*-api`: load config, connect to Postgres/Redis (`libs/infra.Connect`), build the Gin engine, register health checks, register only `services/identity/identity`'s routes (`registerRoutes` in `wire.go`), serve, handle `SIGTERM` for graceful shutdown.
+`main.go` is one line: `runtime.Main("identity-api", wire, runtime.WithOutbox())`. `wire.go` builds the Gin router (`newRouter`: identity's routes from `services/identity/identity`, the public health routes, tracing and request metrics) and registers the HTTP server as a critical component.
+
+- **`/metrics` is not on the public port.** It is served by the internal listener (`METRICS_HTTP_ADDR`, default `:9100`) together with `/health/live` and `/health/ready`. `TestIdentityAPI_MetricsOnlyOnTheInternalListener` pins it.
+- **The token-version re-seeder is not here.** It runs in `identity-worker` (`TestIdentityAPI_DoesNotRunTheTokenVersionReseeder`).
+- Connects as `svc_identity` (`POSTGRES_SEARCH_PATH=identity,public`).
 
 ## Why this split out cleanly
 
-Identity is the most self-contained module in the codebase: no other module reads its tables directly (nor could it now — `identity` is its own Postgres schema, ADR-0024), and every module that needs to know who's calling reads it off the JWT claims (`auth.FromContext`), not a database lookup into `users`. Splitting its HTTP surface into its own binary doesn't introduce any new cross-service call — nothing changes about how `libs/auth` issues or verifies tokens; it's still the same shared package every binary imports. The one thing `identity` does share with other services is its relay events (`identity.user_registered`, `identity.user_role_changed`, `identity.user_profile_updated`) — `services/course/course` and `services/analytics/analytics` each keep their own small mirror of fields they need, consumed by `services/worker/cmd/worker`, never a live query into this service's schema. See ADR-0023 and ADR-0024 for the full reasoning.
+Nothing outside the service reads its tables; every other module reads the caller from the JWT claims (`auth.FromContext`), never a lookup into `users`. Its events (`identity.user_registered`, `identity.user_role_changed`, `identity.user_profile_updated`) leave through `identity.outbox` and the `identity-worker` relay. See ADR-0023 and ADR-0024.

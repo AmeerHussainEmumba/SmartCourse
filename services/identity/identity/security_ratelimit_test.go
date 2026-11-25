@@ -16,7 +16,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-
 )
 
 func TestSecurity_RateLimit_RegisterPerIP_BlocksSixth_AndRoutesDoNotShareBuckets(t *testing.T) {
