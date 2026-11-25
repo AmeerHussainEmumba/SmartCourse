@@ -2,7 +2,7 @@
 
 // Adversarial publish / blue-green / cache tests (ADR-0010, ADR-0025). They
 // drive the real activities against real Postgres and Redis; the Temporal
-// orchestration side is attacked in services/course/workflows.
+// orchestration side is attacked in services/publishing and services/course/activities.
 package course_test
 
 import (

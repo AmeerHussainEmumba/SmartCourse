@@ -465,14 +465,14 @@ func (s *Service) DeleteLesson(ctx context.Context, courseID, instructorID, less
 // --- publish -----------------------------------------------------------------
 //
 // M2 implements RFC §7.4's full activity graph as a Temporal workflow
-// (services/course/workflows.PublishCourseWorkflow, ADR-0009/0025):
+// (services/publishing's PublishCourseWorkflow, ADR-0009/0025):
 //
 //	ValidateMetadata -> {VerifyAssets, ComputeMetadata} -> BuildOutline -> {IndexSearch, WarmCache} -> PromoteVersion
 //
 // Every exported method below this comment up to PromoteAndPublish is one
 // node in that graph — plain, Temporal-agnostic Go methods on Service, each
 // independently retryable because Temporal calls them as separate
-// activities (services/course/workflows.Activities just forwards to these; the
+// activities (services/course/activities.Activities just forwards to these; the
 // Temporal SDK import stays out of this package entirely, matching RFC
 // §4.4's module-boundary discipline extended to the new package). This
 // replaces M1's runPublishChecks/validateMetadata/validateLessonContent,

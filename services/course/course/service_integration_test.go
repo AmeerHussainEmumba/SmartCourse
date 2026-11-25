@@ -13,7 +13,7 @@
 // runPublishPipeline instead of calling Publish, exercising the exact same
 // Postgres/Redis effects (ValidateMetadata through PromoteAndPublish)
 // without requiring a live Temporal server in this test tier.
-// services/course/workflows/publish_workflow_integration_test.go is where
+// services/publishing is where
 // PublishCourseWorkflow's own orchestration (branching, concurrency,
 // failure handling) is tested, via Temporal's own TestWorkflowEnvironment
 // against these same real Activities — see docs/guides/testing.md for why
@@ -54,7 +54,7 @@ func newTestService(env *testenv.Env) *course.Service {
 
 // runPublishPipeline drives the course currently drafted under courseID
 // through RFC §7.4's activity graph in the same order
-// services/course/workflows.PublishCourseWorkflow does, calling the same exported
+// services/publishing's PublishCourseWorkflow does, calling the same exported
 // Service methods the real workflow's Activities forward to — real
 // Postgres, real Redis, nothing mocked, just without a live Temporal
 // server orchestrating it. Returns the final publish status so callers can

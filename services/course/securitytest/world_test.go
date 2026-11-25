@@ -186,7 +186,7 @@ func (w *world) newDraft(owner int) courseFx {
 }
 
 // newPublished creates and publishes a course through the same activity
-// sequence the real workflow runs (services/course/workflows), without a
+// sequence the real workflow runs (services/publishing), without a
 // Temporal server.
 func (w *world) newPublished(owner int) courseFx {
 	w.t.Helper()
