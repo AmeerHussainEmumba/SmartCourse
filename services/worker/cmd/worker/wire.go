@@ -12,6 +12,7 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/asynqx"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/analytics/analytics"
@@ -40,25 +41,53 @@ func buildRelay(deps *infra.Dependencies, cfg *config.Config, opts ...relay.Opti
 	return rl
 }
 
-// buildPublishWorker wires services/course/workflows' PublishCourseWorkflow and its
-// Activities onto a Temporal worker.Worker, polling cfg.Temporal.TaskQueue.
+// publishWorkers is the two Temporal workers the publish workflow needs (the
+// publishing contract, docs/plans/microservices-split.md §5): one polls the
+// workflow queue (cfg.Temporal.TaskQueue) and runs PublishCourseWorkflow, the
+// other polls the activity queue (cfg.Temporal.ActivityQueue) and runs the
+// activities. They are separate workers on separate queues because Wave B moves
+// them into different processes; here one process runs both.
+type publishWorkers struct {
+	workflow, activities temporalworker.Worker
+}
+
+// Start starts both; if the second fails the first is stopped again.
+func (p publishWorkers) Start() error {
+	if err := p.workflow.Start(); err != nil {
+		return err
+	}
+	if err := p.activities.Start(); err != nil {
+		p.workflow.Stop()
+		return err
+	}
+	return nil
+}
+
+// Stop stops both.
+func (p publishWorkers) Stop() {
+	p.activities.Stop()
+	p.workflow.Stop()
+}
+
+// buildPublishWorker wires services/course/workflows' PublishCourseWorkflow onto
+// a worker polling cfg.Temporal.TaskQueue and its Activities onto a worker
+// polling cfg.Temporal.ActivityQueue.
 // Independent of buildRelay (one Temporal, one the in-process outbox relay);
 // main.go runs them as two separate goroutines so a Temporal outage never
 // takes the relay down with it (ADR-0009/0025).
-func buildPublishWorker(deps *infra.Dependencies, cfg *config.Config, temporal temporalclient.Client) temporalworker.Worker {
+func buildPublishWorker(deps *infra.Dependencies, cfg *config.Config, temporal temporalclient.Client) publishWorkers {
 	courseSvc := newCourseService(deps, cfg, temporal)
 	activities := workflows.NewActivities(courseSvc)
 
-	w := temporalworker.New(temporal, cfg.Temporal.TaskQueue, temporalworker.Options{})
-	// Registered under course.PublishWorkflowName explicitly, rather than
-	// relying on the default (the Go function's own name) — that's the
-	// same string course.Service.Publish uses to start it by name, which
-	// is how it starts a workflow without importing this package (course
-	// must not import services/course/workflows; services/course/workflows imports
-	// course for Activities, so the dependency can only run one way).
-	w.RegisterWorkflowWithOptions(workflows.PublishCourseWorkflow, workflow.RegisterOptions{Name: course.PublishWorkflowName})
-	w.RegisterActivity(activities)
-	return w
+	wf := temporalworker.New(temporal, cfg.Temporal.TaskQueue, temporalworker.Options{})
+	// Registered under publishing.WorkflowName explicitly, rather than relying on
+	// the default (the Go function's own name): the same string the starter
+	// (course.Service.Publish) uses, from the contract.
+	wf.RegisterWorkflowWithOptions(workflows.PublishCourseWorkflow, workflow.RegisterOptions{Name: publishing.WorkflowName})
+
+	act := temporalworker.New(temporal, cfg.Temporal.ActivityQueue, temporalworker.Options{})
+	act.RegisterActivity(activities) // method names are the contract's activity names
+	return publishWorkers{workflow: wf, activities: act}
 }
 
 // newCourseService builds the course service the worker's Temporal activities

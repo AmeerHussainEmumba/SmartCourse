@@ -12,6 +12,7 @@ WORKDIR /src
 COPY libs/auth ./libs/auth
 COPY libs/cache ./libs/cache
 COPY libs/config ./libs/config
+COPY libs/contracts/publishing ./libs/contracts/publishing
 COPY libs/db ./libs/db
 COPY libs/errors ./libs/errors
 COPY libs/httpx ./libs/httpx

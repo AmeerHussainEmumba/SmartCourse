@@ -3,6 +3,7 @@ module github.com/AmeerHussainEmumba/SmartCourse/services/course
 go 1.26.5
 
 require (
+	github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing v0.0.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/golang-migrate/migrate/v4 v4.20.1 // indirect
@@ -185,3 +186,5 @@ replace (
 )
 
 replace github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry => ../../libs/telemetry
+
+replace github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing => ../../libs/contracts/publishing

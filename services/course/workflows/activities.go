@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/temporal"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
 )
 
@@ -18,7 +19,7 @@ import (
 // or a future test calls it directly, and so services/course/course stays free of
 // a Temporal SDK import (RFC §4.4's module-boundary discipline: course must
 // not know this package exists, since the dependency can only run one way
-// — see course.PublishWorkflowName's doc comment).
+// — see publishing.WorkflowName's doc comment).
 type Activities struct {
 	svc *course.Service
 }
@@ -51,22 +52,22 @@ func (a *Activities) ComputeMetadata(ctx context.Context, versionID uuid.UUID) e
 	return failure(ctx, "ComputeMetadata", a.svc.ComputeMetadata(ctx, versionID))
 }
 
-func (a *Activities) BuildOutline(ctx context.Context, courseID, versionID uuid.UUID) (*course.PublishOutline, error) {
+func (a *Activities) BuildOutline(ctx context.Context, courseID, versionID uuid.UUID) (*publishing.PublishOutline, error) {
 	outline, err := a.svc.BuildOutline(ctx, courseID, versionID)
 	return outline, failure(ctx, "BuildOutline", err)
 }
 
-// IndexSearch and WarmCache take course.PublishOutline by value, not
+// IndexSearch and WarmCache take publishing.PublishOutline by value, not
 // pointer: Temporal's data converter marshals activity arguments to JSON
 // for workflow history, and workflow.ExecuteActivity's own call already
-// passed BuildOutline's *course.PublishOutline result across that same
+// passed BuildOutline's *publishing.PublishOutline result across that same
 // boundary once — a pointer here would just be a second indirection for
 // data that's already copied.
-func (a *Activities) IndexSearch(ctx context.Context, outline course.PublishOutline) error {
+func (a *Activities) IndexSearch(ctx context.Context, outline publishing.PublishOutline) error {
 	return failure(ctx, "IndexSearch", a.svc.IndexSearch(ctx, &outline))
 }
 
-func (a *Activities) WarmCache(ctx context.Context, outline course.PublishOutline) error {
+func (a *Activities) WarmCache(ctx context.Context, outline publishing.PublishOutline) error {
 	return failure(ctx, "WarmCache", a.svc.WarmCache(ctx, &outline))
 }
 

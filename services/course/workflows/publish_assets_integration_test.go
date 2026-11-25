@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/testsuite"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/assets"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
@@ -22,7 +23,7 @@ import (
 // cleanly (publish_failed with a readable error, live version untouched, no
 // course_published event), and a draft whose asset was uploaded publishes.
 
-func runPublish(t *testing.T, svc *course.Service, in course.PublishWorkflowInput) error {
+func runPublish(t *testing.T, svc *course.Service, in publishing.PublishWorkflowInput) error {
 	t.Helper()
 	var suite testsuite.WorkflowTestSuite
 	te := suite.NewTestWorkflowEnvironment()
@@ -57,7 +58,7 @@ func TestPublishWorkflow_MissingAsset_FailsCleanly_LiveVersionUntouched(t *testi
 	if _, err := svc.AddLesson(ctx, courseID, instr, uuid.MustParse(mod.ID), course.CreateLessonRequest{Title: "L", Position: 1, ContentType: "text", Content: map[string]any{"b": "x"}, DurationS: 5}); err != nil {
 		t.Fatal(err)
 	}
-	if err := runPublish(t, svc, course.PublishWorkflowInput{CourseID: courseID, VersionID: v1, Title: "Live Title"}); err != nil {
+	if err := runPublish(t, svc, publishing.PublishWorkflowInput{CourseID: courseID, VersionID: v1, Title: "Live Title"}); err != nil {
 		t.Fatalf("first publish: %v", err)
 	}
 
@@ -80,7 +81,7 @@ func TestPublishWorkflow_MissingAsset_FailsCleanly_LiveVersionUntouched(t *testi
 		t.Fatal(err)
 	}
 
-	err = runPublish(t, svc, course.PublishWorkflowInput{CourseID: courseID, VersionID: v2, OldVersionID: &v1, Title: "Draft Title"})
+	err = runPublish(t, svc, publishing.PublishWorkflowInput{CourseID: courseID, VersionID: v2, OldVersionID: &v1, Title: "Draft Title"})
 	if err == nil {
 		t.Fatal("publish succeeded although a lesson references a missing asset")
 	}
@@ -122,7 +123,7 @@ func TestPublishWorkflow_MissingAsset_FailsCleanly_LiveVersionUntouched(t *testi
 	if err := env.DB.Exec(`UPDATE lessons SET asset_key = ? WHERE asset_key = ?`, resp.AssetKey, missing).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := runPublish(t, svc, course.PublishWorkflowInput{CourseID: courseID, VersionID: v2, OldVersionID: &v1, Title: "Draft Title"}); err != nil {
+	if err := runPublish(t, svc, publishing.PublishWorkflowInput{CourseID: courseID, VersionID: v2, OldVersionID: &v1, Title: "Draft Title"}); err != nil {
 		t.Fatalf("publish after uploading the asset: %v", err)
 	}
 	env.DB.Raw(`SELECT published_version_id FROM courses WHERE id = ?`, courseID).Row().Scan(&published)

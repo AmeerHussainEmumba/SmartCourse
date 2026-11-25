@@ -100,7 +100,14 @@ type MinIOConfig struct {
 type TemporalConfig struct {
 	HostPort  string
 	Namespace string
+	// TaskQueue is TEMPORAL_TASK_QUEUE, the WORKFLOW queue (default
+	// "publish-workflows"): the queue the publish workflow is started on and
+	// the orchestrating worker polls.
 	TaskQueue string
+	// ActivityQueue is TEMPORAL_ACTIVITY_QUEUE (default "course-activities"): the
+	// queue the workflow schedules its activities on and the activity worker
+	// polls. Both defaults equal libs/contracts/publishing's constants.
+	ActivityQueue string
 }
 
 type JWTConfig struct {
@@ -254,9 +261,10 @@ func Load() (*Config, error) {
 			PublicEndpoint:  os.Getenv("MINIO_PUBLIC_ENDPOINT"),
 		},
 		Temporal: TemporalConfig{
-			HostPort:  envOr("TEMPORAL_HOST_PORT", "temporal:7233"),
-			Namespace: envOr("TEMPORAL_NAMESPACE", "default"),
-			TaskQueue: envOr("TEMPORAL_TASK_QUEUE", "course-publish"),
+			HostPort:      envOr("TEMPORAL_HOST_PORT", "temporal:7233"),
+			Namespace:     envOr("TEMPORAL_NAMESPACE", "default"),
+			TaskQueue:     envOr("TEMPORAL_TASK_QUEUE", "publish-workflows"),
+			ActivityQueue: envOr("TEMPORAL_ACTIVITY_QUEUE", "course-activities"),
 		},
 		JWT: JWTConfig{
 			SigningKey:      req("JWT_SIGNING_KEY"),

@@ -23,8 +23,10 @@ import (
 	"testing"
 
 	temporalclient "go.temporal.io/sdk/client"
+	temporalworker "go.temporal.io/sdk/worker"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/events"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/infra"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
@@ -222,44 +224,64 @@ func TestEveryEmittedEventTypeHasAConsumer(t *testing.T) {
 	}
 }
 
+// registered reads what a Temporal worker has registered and which queue it
+// polls, through the SDK's unexported fields (this guard fails loudly when they
+// move).
+func registered(t *testing.T, w temporalworker.Worker) (queue string, workflows, activities []string) {
+	t.Helper()
+	agg := reflect.ValueOf(w).Elem()
+	reg := agg.FieldByName("registry")
+	if !reg.IsValid() {
+		t.Fatal("temporal AggregatedWorker no longer has a `registry` field; update this guard")
+	}
+	reg = reg.Elem()
+	for _, k := range reg.FieldByName("workflowFuncMap").MapKeys() {
+		workflows = append(workflows, k.String())
+	}
+	for _, k := range reg.FieldByName("activityFuncMap").MapKeys() {
+		activities = append(activities, k.String())
+	}
+	sort.Strings(workflows)
+	sort.Strings(activities)
+	return agg.FieldByName("executionParams").FieldByName("TaskQueue").String(), workflows, activities
+}
+
 // buildPublishWorker must register the workflow under the exact name
-// course.Service.Publish starts it by, and every Activities method.
+// course.Service.Publish starts it by, on the workflow queue, and every
+// Activities method under the contract's activity names on the activity queue:
+// the two live on different queues so Wave B can serve them from different
+// processes.
 func TestBuildPublishWorker_RegistersWorkflowNameAndAllActivities(t *testing.T) {
 	cl, err := temporalclient.NewLazyClient(temporalclient.Options{}) // no connection is made
 	if err != nil {
 		t.Fatalf("lazy client: %v", err)
 	}
 	defer cl.Close()
-	cfg := &config.Config{Temporal: config.TemporalConfig{TaskQueue: "wiring-test-queue"}}
+	cfg := &config.Config{Temporal: config.TemporalConfig{TaskQueue: "wiring-test-queue", ActivityQueue: "wiring-test-activities"}}
 	w := buildPublishWorker(&infra.Dependencies{}, cfg, cl)
 
-	reg := reflect.ValueOf(w).Elem().FieldByName("registry")
-	if !reg.IsValid() {
-		t.Fatal("temporal AggregatedWorker no longer has a `registry` field; update this guard")
-	}
-	reg = reg.Elem()
-	var wfNames, actNames []string
-	for _, k := range reg.FieldByName("workflowFuncMap").MapKeys() {
-		wfNames = append(wfNames, k.String())
-	}
-	for _, k := range reg.FieldByName("activityFuncMap").MapKeys() {
-		actNames = append(actNames, k.String())
-	}
-	sort.Strings(wfNames)
-	sort.Strings(actNames)
+	wfQueue, wfNames, wfActs := registered(t, w.workflow)
+	actQueue, actWfs, actNames := registered(t, w.activities)
 
-	if course.PublishWorkflowName == "" {
-		t.Fatal("course.PublishWorkflowName is empty")
+	if wfQueue != "wiring-test-queue" || actQueue != "wiring-test-activities" {
+		t.Fatalf("queues = workflow %q, activities %q", wfQueue, actQueue)
 	}
-	if !reflect.DeepEqual(wfNames, []string{course.PublishWorkflowName}) {
-		t.Fatalf("registered workflows = %v, want exactly [%s]", wfNames, course.PublishWorkflowName)
+	if publishing.WorkflowName == "" {
+		t.Fatal("publishing.WorkflowName is empty")
+	}
+	if !reflect.DeepEqual(wfNames, []string{publishing.WorkflowName}) {
+		t.Fatalf("registered workflows = %v, want exactly [%s]", wfNames, publishing.WorkflowName)
+	}
+	if len(wfActs) != 0 || len(actWfs) != 0 {
+		t.Fatalf("the workflow worker has activities %v / the activity worker has workflows %v: they must not overlap", wfActs, actWfs)
 	}
 
-	wantActs := []string{"BuildOutline", "ComputeMetadata", "IndexSearch", "MarkPublishFailed", "PromoteAndPublish", "ValidateMetadata", "VerifyAssets", "WarmCache"}
+	wantActs := append([]string(nil), publishing.ActivityNames()...)
+	sort.Strings(wantActs)
 	if !reflect.DeepEqual(actNames, wantActs) {
 		t.Fatalf("registered activities = %v\nwant %v", actNames, wantActs)
 	}
-	// And the literal list must track the Activities type itself.
+	// And the contract's list must track the Activities type itself.
 	at := reflect.TypeOf(&workflows.Activities{})
 	var methods []string
 	for i := 0; i < at.NumMethod(); i++ {
@@ -267,7 +289,7 @@ func TestBuildPublishWorker_RegistersWorkflowNameAndAllActivities(t *testing.T) 
 	}
 	sort.Strings(methods)
 	if !reflect.DeepEqual(methods, wantActs) {
-		t.Fatalf("workflows.Activities methods %v differ from the guard's list %v: a new activity must be registered AND added here", methods, wantActs)
+		t.Fatalf("workflows.Activities methods %v differ from publishing.ActivityNames %v: a new activity must be registered AND added to the contract", methods, wantActs)
 	}
 }
 

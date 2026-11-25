@@ -206,7 +206,7 @@ func startPublishWorker(ctx context.Context, logger *slog.Logger, deps *infra.De
 			}
 			continue
 		}
-		logger.Info("publish worker started", slog.String("task_queue", cfg.Temporal.TaskQueue))
+		logger.Info("publish worker started", slog.String("task_queue", cfg.Temporal.TaskQueue), slog.String("activity_queue", cfg.Temporal.ActivityQueue))
 		<-ctx.Done()
 		pw.Stop()
 		temporalClient.Close()

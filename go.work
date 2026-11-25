@@ -5,6 +5,7 @@ use (
 	./libs/auth
 	./libs/cache
 	./libs/config
+	./libs/contracts/publishing
 	./libs/db
 	./libs/errors
 	./libs/events
