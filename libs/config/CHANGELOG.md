@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Added `LoadWith(Requirements)` and `AllRequirements()`: a binary declares which required groups it needs (`Postgres`, `Redis`, `MinIO`, `JWT`, `Argon`). A group that is not requested is neither required nor validated. `Load()` is `LoadWith(AllRequirements())` and behaves exactly as before. The publishing worker uses `LoadWith(config.Requirements{})`. Additive.
+
 - `TemporalConfig.ActivityQueue` (`TEMPORAL_ACTIVITY_QUEUE`, default `course-activities`); `TEMPORAL_TASK_QUEUE` is now the WORKFLOW queue and its default changed from `course-publish` to `publish-workflows` (`libs/contracts/publishing`). A deployment that sets `TEMPORAL_TASK_QUEUE` keeps its value for the workflow, and the activities move to the activity queue: the worker serves both.
 
 - Kafka consumer retry defaults lengthened to 8 attempts, 500 ms base, 30 s cap (about a minute in all), because a handler that depends on another consumer group's mirror (the certificate issuer needs the student name) must outlast that group lagging or starting; with the old 5 x 200 ms it could exhaust in about 3 seconds and park the event. Found by E2E scenario E01.

@@ -40,3 +40,7 @@ All optional; validated at `Load`, never dialled (an unreachable collector must 
 | `OTEL_TRACES_SAMPLER_ARG` | `1` | Head-sampling ratio from 0 to 1. |
 | `METRICS_ENABLED` | `true` | Off: no `/metrics`, no collectors, no request metrics. |
 | `METRICS_HTTP_ADDR` | `:9100` | The worker's own metrics listener (`host:port`); the HTTP services serve `/metrics` on their API port. |
+
+## Declaring what a binary needs (`LoadWith`)
+
+`Load()` requires every group. A binary that needs fewer calls `config.LoadWith(config.Requirements{Postgres: true, ...})` (pass it to the runtime with `runtime.WithConfig`). Groups: `Postgres` (DSN, search path, pool sizes), `Redis`, `MinIO`, `JWT` (signing key and TTLs), `Argon`. Unrequested groups are not required and not validated; optional groups (Temporal, Telemetry, Kafka, SMTP, Asynq, Mongo, Admin, HTTP limits) are always read and shape-validated. `LoadWith(config.Requirements{})` is the publishing worker's configuration. Tests: `requirements_test.go`.
