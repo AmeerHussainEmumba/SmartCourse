@@ -52,14 +52,17 @@ Admin role only, `RequireFreshPrivilegeStrict`: a Redis miss on the token-versio
 
 ## Layout
 
-`archive` (archiver handler, audit list), `deadletter` (park sink), `replay` (republish), `admin` (HTTP), `consume` (consumer runner), `store` (lazy Mongo), `auditconfig` (config stopgap), `cmd/audit-api`, `cmd/audit-worker`, `integration` (Kafka + Mongo tests).
+`archive` (archiver handler, audit list), `deadletter` (park sink), `replay` (republish), `admin` (HTTP), `store` (lazy Mongo), `cmd/audit-api`, `cmd/audit-worker` (each loads its configuration with `config.LoadWith` in its `wire.go`), `integration` (Kafka + Mongo tests).
 
 ## Open items and known gaps
 
-- **`consume` replaces `eventbus.NewConsumers` for now.** `NewConsumers` requires a `*gorm.DB` and writes `processed_events` in Postgres, which this service does not have; its idempotency is the event id in Mongo. `consume` is the same loop without the transaction. A db-less mode in `libs/eventbus` would let it be deleted.
-- **`auditconfig` is a stopgap.** `libs/config.Load` still requires `POSTGRES_*`, `MINIO_*` and `SCHEMA_REGISTRY_URL` and reads Kafka brokers only with `EVENT_TRANSPORT=kafka`; `auditconfig` fills inert placeholders and forces the transport. A per-service loader in `libs/config` replaces it.
+- **Config follow-up (after the `libs/config` Kafka and Mongo requirement groups merge).** Each binary's `loadConfig` (`cmd/*/wire.go`) calls `config.LoadWith` with only the groups that exist today (Redis and JWT for `audit-api`, none for `audit-worker`) and checks `MONGO_URI` and `KAFKA_BROKERS` itself. Two lines in it, marked `FOLLOW-UP`, set `EVENT_TRANSPORT=kafka` and an inert `SCHEMA_REGISTRY_URL` because `libs/config` still parses the brokers only in kafka mode and then demands a registry URL; replace them and the two checks with `Requirements{Kafka: true, Mongo: true}` once that lands. No `POSTGRES_*` or `MINIO_*` is needed any more.
 - No `kafka_consumer_lag` gauge for the archiver and no Prometheus series for audit-write failures (a process counter and an error log only).
 - Not verified: behaviour on a multi-broker cluster, MongoDB auth/TLS, a real Schema Registry (tests use the stand-in), orchestrator probe behaviour.
+
+## Consumer
+
+`audit-worker` runs `eventbus.NewStreamConsumers` over `archive.Handlers`: the mode of `libs/eventbus` with no Postgres transaction and no `processed_events` marker. The archiver is idempotent by event id in MongoDB (first write wins, `AppendAuditOnce`), which is what makes at-least-once delivery and a replay through `retry.audit-archiver` safe; the old `consume` package, a copy of the consumer loop, is gone.
 
 ## Tests
 

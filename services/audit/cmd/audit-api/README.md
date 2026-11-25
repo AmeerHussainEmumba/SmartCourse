@@ -12,4 +12,4 @@ The audit service's admin HTTP surface (`GET/POST /api/v1/admin/failed-events...
 | `KAFKA_BROKERS`, `KAFKA_PRODUCE_TIMEOUT` | the replay producer (required); no Schema Registry needed |
 | `MAX_BODY_BYTES`, `HTTP_*_TIMEOUT`, `TRUSTED_PROXIES`, `HSTS_ENABLED` | as the other APIs |
 
-`POSTGRES_*`, `MINIO_*`, `SCHEMA_REGISTRY_URL` are not used (placeholders fill them, see `auditconfig`). Built by `Dockerfile.audit-api`. Wiring: `wire.go` (`runtime.Main`, no Postgres).
+`POSTGRES_*`, `MINIO_*`, `SCHEMA_REGISTRY_URL` are not used and not required (`loadConfig` in `wire.go` asks `config.LoadWith` for Redis and JWT only; the `SCHEMA_REGISTRY_URL` and `EVENT_TRANSPORT` workaround there is marked for removal). Built by `Dockerfile.audit-api`. Wiring: `wire.go` (`runtime.Main` without `WithDependencies`: no Postgres or database driver).

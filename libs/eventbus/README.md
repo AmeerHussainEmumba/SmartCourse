@@ -16,6 +16,9 @@ rl := relay.New(db, relay.WithPublisher(pub), relay.WithObserver(eventbus.RelayO
 consumers, _ := eventbus.NewConsumers(k, handlers, db,
     eventbus.WithSink(sink), eventbus.WithLogger(logger), eventbus.WithTracing(obs.TracingEnabled()), eventbus.WithMetrics(obs.Metrics))
 go consumers.Run(ctx)
+
+// Consuming with no Postgres (idempotency lives in the handler's own store):
+consumers, _ := eventbus.NewStreamConsumers(k, handlers, eventbus.WithSink(sink), eventbus.WithLogger(logger))
 ```
 
 `k` is `config.KafkaConfig`. `Prepare` creates the missing topics (`topics.Ensure`, which includes `retry.<consumer>` for every known consumer) and reads the schema ids and versions the producer frames records with; it fails with a message naming the broker or the missing subject. It does not register schemas (`libs/events/cmd/register-schemas` does, at deploy).
@@ -33,6 +36,8 @@ A relay with **no handlers** is a supported, tested mode (`libs/relay` `TestRela
 **Retry topic.** Every group also subscribes to `retry.<consumer-name>` (`topics.Retry`). A record from there takes exactly the same path, so a replay of an event the consumer already processed is absorbed by `processed_events`. A group creates its own retry topic at start (idempotent) so a new consumer name works before it is added to `topics.Consumers`.
 
 `Consumers.LagGauges(m)` feeds `kafka_consumer_lag{group,topic}` (summed over partitions; the label set is bounded by the groups and their topics), `Stats()`, `Groups()`, `Topics(group)` and `ParkFailures()` report on the run. `event_processed_total{consumer,outcome}` is counted from `WithMetrics`; `dead_letter_total` is counted by the sink's store.
+
+**Two modes, one runner.** `NewConsumers` is the transactional mode above. `NewStreamConsumers(cfg, handlers, opts...)` is for a service with no database whose idempotency lives elsewhere (the audit archiver dedups by event id in MongoDB): a handler is delivered **without a transaction and without a `processed_events` marker**. `relay.Handler.Handle` receives a nil `*gorm.DB`, so such a handler must not use it, and it must be safe to run more than once for one event: Kafka is at-least-once and a replay through the retry topic redelivers an event that was already handled (the marker would absorb it in the transactional mode; here nothing does, `TestStream_ReplayOfAHandledEventRunsTheHandlerAgain`). A handler panic is recovered into an error. Everything else is shared code, not a copy: the group per consumer name, the retry topic subscription, `MaxInFlight`, the retry budget, parking through the sink with one history entry per attempt, the `relay.Source` in the handler's context (and, since Wave C5, in the sink's context, which the audit sink stores), tracing and metrics (the `duplicate` outcome never occurs).
 
 ## Replay by republish
 
@@ -57,6 +62,6 @@ err = pub.PublishRetry(ctx, consumer, schemaID, evt)         // produce it; nil 
 
 ## Tests
 
-Unit (no Docker): codec round trips for every event type, routing, validation, `EncodeForRetry`, fuzz targets (`go test -fuzz`). `-tags=integration` (Docker: Postgres, Kafka): per-aggregate order end to end, duplicate delivery, a consumer killed mid-batch, a broker stopped and started with a backlog, poison records, dead-letter parking, the source seam, the retry topic, publish-only relay feeding consumers built from handlers, `PruneProcessed`. `-tags=bugrepro` keeps one reproducer. `go test -race -tags=integration ./...` takes about two minutes.
+Unit (no Docker): `NewStreamConsumers` validation, codec round trips for every event type, routing, validation, `EncodeForRetry`, fuzz targets (`go test -fuzz`). `-tags=integration` (Docker: Postgres, Kafka). `modes_integration_test.go` runs the same scenarios in both modes (the stream mode against a stack with no Postgres): order, source, retry topic, exhaustion parking with history and metrics, a refusing sink, bounded in-flight, opt-in tracing. The rest (Postgres mode): per-aggregate order end to end, duplicate delivery, a consumer killed mid-batch, a broker stopped and started with a backlog, poison records, dead-letter parking, the source seam, the retry topic, publish-only relay feeding consumers built from handlers, `PruneProcessed`. `-tags=bugrepro` keeps one reproducer. `go test -race -tags=integration ./...` takes about two minutes.
 
 Not verified: behaviour on a multi-broker cluster (the tests use one broker, replication factor 1), and the partition count under load (`topics.DefaultPartitions` is a placeholder, RFC §20 D5).

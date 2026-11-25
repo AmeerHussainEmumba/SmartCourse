@@ -53,8 +53,8 @@ func httpGet(t *testing.T, url, bearer string) (int, string) {
 }
 
 // The public router must not serve /metrics (it was mounted there before the
-// split). Mutation check: put obs.RegisterMetricsRoute(r) back into buildRouter
-// and this test fails.
+// split). Mutation check: mount
+// r.GET("/metrics", gin.WrapH(obs.MetricsHandler())) in buildRouter and this test fails.
 func TestAnalyticsAPI_PublicRouterHasNoMetrics(t *testing.T) {
 	env := setup(t)
 	deps := &infra.Dependencies{DB: env.DB, RDB: env.RDB}
