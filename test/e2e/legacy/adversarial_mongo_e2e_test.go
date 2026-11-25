@@ -1,4 +1,4 @@
-//go:build e2e && bugrepro
+//go:build e2e_legacy && bugrepro
 
 package e2e_test
 

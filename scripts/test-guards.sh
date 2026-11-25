@@ -188,8 +188,8 @@ d=$(fresh c14)
 perl -0pi -e 's/(func TestE2E_E03_DuplicateDelivery\(t \*testing\.T\) \{\n)/$1\tt.Skip("pending: Phase 3 - back to a skip")\n/' "$d/test/e2e/scenarios_pipeline_e2e_test.go"
 expect_fail "pending-e2e guard fails when E03 goes back to a skip" "FAIL E03 is still skipped as pending" "$d" scripts/check-pending-e2e.sh
 d=$(fresh c15)
-perl -0pi -e 's/(ALLOWED=")/$1\nE08 Phase-8/' "$d/scripts/check-pending-e2e.sh"
-expect_fail "pending-e2e guard fails when an allowlisted spec is implemented but still listed" "FAIL E08 is implemented .* remove its line" "$d" scripts/check-pending-e2e.sh
+perl -0pi -e 's/(ALLOWED=")/$1\nE03 Phase-3/' "$d/scripts/check-pending-e2e.sh"
+expect_fail "pending-e2e guard fails when an allowlisted spec is implemented but still listed" "FAIL E03 is implemented .* remove its line" "$d" scripts/check-pending-e2e.sh
 d=$(fresh c16)
 perl -0pi -e 's/func TestE2E_E05_KafkaDownThenUp/func notASpec_E05_KafkaDownThenUp/' "$d/test/e2e/scenarios_resilience_e2e_test.go"
 expect_fail "pending-e2e guard fails when a spec is deleted" "FAIL E05: found 0 spec functions" "$d" scripts/check-pending-e2e.sh

@@ -3,10 +3,8 @@ module github.com/AmeerHussainEmumba/SmartCourse/test/e2e
 go 1.26.5
 
 require (
-	github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/events v0.0.0
-	github.com/gin-gonic/gin v1.12.0
-	github.com/go-redis/redis_rate/v10 v10.0.1 // indirect
+	github.com/gin-gonic/gin v1.12.0 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0 // indirect
@@ -14,19 +12,16 @@ require (
 	github.com/redis/go-redis/v9 v9.22.0
 	go.temporal.io/sdk v1.50.0
 	golang.org/x/crypto v0.57.0 // indirect
-	gorm.io/driver/postgres v1.6.3
+	gorm.io/driver/postgres v1.6.3 // indirect
 	gorm.io/gorm v1.31.2
 )
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
+	github.com/AmeerHussainEmumba/SmartCourse/libs/config v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/db v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/errors v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/httpx v0.0.0 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/logging v0.0.0 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/outbox v0.0.0 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/ratelimit v0.0.0 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/relay v0.0.0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
@@ -132,11 +127,7 @@ require (
 
 require (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/auth v0.0.0
-	github.com/AmeerHussainEmumba/SmartCourse/libs/config v0.0.0
-	github.com/AmeerHussainEmumba/SmartCourse/libs/router v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/testenv v0.0.0
-	github.com/AmeerHussainEmumba/SmartCourse/services/course v0.0.0
-	github.com/AmeerHussainEmumba/SmartCourse/services/identity v0.0.0
 	github.com/moby/moby/api v1.55.0
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/twmb/franz-go v1.22.3
@@ -163,8 +154,6 @@ replace (
 	github.com/AmeerHussainEmumba/SmartCourse/libs/router => ../../libs/router
 	github.com/AmeerHussainEmumba/SmartCourse/libs/temporal => ../../libs/temporal
 	github.com/AmeerHussainEmumba/SmartCourse/libs/testenv => ../../libs/testenv
-	github.com/AmeerHussainEmumba/SmartCourse/services/course => ../../services/course
-	github.com/AmeerHussainEmumba/SmartCourse/services/identity => ../../services/identity
 )
 
 replace github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing => ../../libs/contracts/publishing

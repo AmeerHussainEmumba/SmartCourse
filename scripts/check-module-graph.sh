@@ -8,10 +8,10 @@
 #   libs/*            may require only other libs/*
 #   services/*        may require only libs/*  (no service imports another: the
 #                     microservice split, docs/plans/microservices-split.md)
-#   tools/seed        requires no service (an HTTP client of the public APIs)
-#   test/e2e          TEMPORARY exception (identity, course) until Wave C moves the
-#                     F-38 test to the container harness; after that it requires
-#                     no service either
+#   tools/seed, test/e2e
+#                     require no service either: the seed is an HTTP client of the
+#                     public APIs; the E2E tier builds and runs the binaries and
+#                     talks to them over HTTP, Kafka and the databases
 #
 # Usage: scripts/check-module-graph.sh
 set -euo pipefail
@@ -21,7 +21,6 @@ mod=github.com/AmeerHussainEmumba/SmartCourse
 
 allowed_services() { # module dir -> space-separated allowed services/* modules
   case "$1" in
-    test/e2e)        echo "services/identity services/course" ;;
     *)               echo "" ;;
   esac
 }

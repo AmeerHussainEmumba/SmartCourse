@@ -36,3 +36,17 @@ profile.cov
 /services/*/analytics-api
 /services/worker/worker
 /tools/seed/seed
+
+# Compiled binaries built inside cmd/<binary> (go build without -o): never commit them.
+/services/*/cmd/*/identity-api
+/services/*/cmd/*/identity-worker
+/services/*/cmd/*/identity-admin
+/services/*/cmd/*/course-api
+/services/*/cmd/*/course-worker
+/services/*/cmd/*/analytics-api
+/services/*/cmd/*/analytics-worker
+/services/*/cmd/*/notification-worker
+/services/*/cmd/*/publishing-worker
+/services/*/cmd/*/audit-api
+/services/*/cmd/*/audit-worker
+/bin/
