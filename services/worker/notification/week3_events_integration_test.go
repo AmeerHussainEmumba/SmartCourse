@@ -76,8 +76,10 @@ func TestCertificateIssued_MailsTheStudentOnce(t *testing.T) {
 	if m.To != "ada@example.com" || strings.ContainsAny(m.Subject, "\r\n") {
 		t.Errorf("recipient %q subject %q", m.To, m.Subject)
 	}
-	if strings.Contains(m.HTML, "<b>") || !strings.Contains(m.HTML, "&lt;b&gt;") {
-		t.Errorf("title not escaped in HTML: %s", m.HTML)
+	// Course titles are sanitized (S-10): markup characters are dropped, so no tag
+	// survives in the HTML, escaped or not, and the readable title stays.
+	if strings.Contains(m.HTML, "<b>") || strings.Contains(m.HTML, "&lt;b&gt;") || !strings.Contains(m.HTML, "Concurrency") {
+		t.Errorf("title markup survived or the title was lost: %s", m.HTML)
 	}
 	if strings.Contains(m.Text, "\nBcc:") {
 		t.Errorf("title kept its line break in the text part: %q", m.Text)
@@ -144,8 +146,9 @@ func TestPublishFailed_MailsTheInstructorOnce(t *testing.T) {
 	if !strings.Contains(m.Text, "VerifyAssets") || !strings.Contains(m.Text, "missing") {
 		t.Errorf("the mail does not say what failed: %q", m.Text)
 	}
-	if strings.Contains(m.HTML, "<script>") || !strings.Contains(m.HTML, "&lt;script&gt;") {
-		t.Errorf("reason not escaped in HTML: %s", m.HTML)
+	// The failure reason is sanitized (S-10): no script tag survives, escaped or not.
+	if strings.Contains(m.HTML, "<script>") || strings.Contains(m.HTML, "&lt;script&gt;") || !strings.Contains(m.HTML, "missing") {
+		t.Errorf("reason markup survived or the reason was lost: %s", m.HTML)
 	}
 	if strings.Contains(m.Text, "\nBcc:") {
 		t.Errorf("reason kept its line break: %q", m.Text)
