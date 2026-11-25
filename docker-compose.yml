@@ -126,15 +126,12 @@ services:
       timeout: 3s
       retries: 10
 
-  # KNOWN ISSUE (verified by the lead on 2026-11-25): `minio/minio` and
-  # `minio/mc` cannot currently be pulled from Docker Hub or quay.io on a fresh
-  # machine (pull access denied / 401), so `core` cannot start on one. The
-  # pinned tags below are left as they were: replacing the object store (a
-  # self-built image, or another S3-compatible store) is an ADR-0019 decision
-  # for the owner. Machines that already hold the images are unaffected.
-  # See README.md "Known issue: MinIO images".
+  # Object store: pgsty/minio, a community fork of MinIO with prebuilt images,
+  # because the official minio/minio and minio/mc images can no longer be pulled
+  # from Docker Hub or quay.io on a fresh machine. Third-party, AGPLv3, pinned by
+  # tag and digest. See ADR-0019 (amendment) and DR-001; revert steps are there.
   minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
     profiles: *profiles-core
     command: server /data --console-address ":9001"
     environment:
@@ -151,9 +148,9 @@ services:
       timeout: 3s
       retries: 10
 
-  # Same known issue as `minio` above (minio/mc is not pullable on a fresh machine).
+  # One-shot bucket creation with the fork's client image (pgsty/mc).
   minio-init:
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: pgsty/mc:RELEASE.2026-11-12T00-00-00Z@sha256:b532278b7a3747dbab6fe45eebb40a653efa704e6758e24e9d9ec54fc96c1800
     profiles: *profiles-core
     depends_on:
       minio:
