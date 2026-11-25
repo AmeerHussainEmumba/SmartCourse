@@ -16,11 +16,6 @@ import "testing"
 // "How to extend the harness"), delete its stub below and its line in the
 // allowlist of scripts/check-pending-e2e.sh, and update its matrix row.
 
-// E13: archive and audit (legacy/scenarios_archive_e2e_test.go).
-func TestE2E_E13_ArchiveAndAudit(t *testing.T) {
-	t.Skip("pending: Wave C3b - port to the ten-binary harness; spec and old body in test/e2e/legacy/scenarios_archive_e2e_test.go")
-}
-
 // E14: auth and access on the new surface (legacy/scenarios_access_e2e_test.go).
 func TestE2E_E14_AuthAndAccessOnNewSurface(t *testing.T) {
 	t.Skip("pending: Wave C3b - port to the ten-binary harness; spec and old body in test/e2e/legacy/scenarios_access_e2e_test.go")

@@ -5,6 +5,7 @@ package e2e_test
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 
@@ -35,6 +36,15 @@ func countEvent(recs []harness.KRecord, eventID string) int {
 		}
 	}
 	return n
+}
+
+func keysOf[V any](m map[string]V) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func abs(f float64) float64 {
