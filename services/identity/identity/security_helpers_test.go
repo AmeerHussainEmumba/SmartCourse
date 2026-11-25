@@ -80,7 +80,7 @@ var lightArgon = config.Argon2Config{MemoryKiB: 8 * 1024, Iterations: 1, Paralle
 // security tests exercise the production middleware chain.
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	return newHarnessWith(t, testenv.Setup(t), lightArgon)
+	return newHarnessWith(t, setupIdentity(t), lightArgon)
 }
 
 func newHarnessWith(t *testing.T, env *testenv.Env, argon config.Argon2Config) *harness {
@@ -174,3 +174,14 @@ func errCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 }
 
 func uniq(prefix string) string { return prefix + "-" + uuid.NewString()[:8] + "@example.com" }
+
+// setupIdentity starts the containers and points env.DB at the identity
+// service's own role (svc_identity, search_path "identity,public"): the
+// connection a real binary has. The owner connection (env.Owner) has the
+// search_path "public" only, so unqualified service tables on it fail loudly.
+func setupIdentity(t *testing.T) *testenv.Env {
+	t.Helper()
+	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "identity")
+	return env
+}

@@ -32,7 +32,9 @@ mod=github.com/AmeerHussainEmumba/SmartCourse
 # Events metric is served from failed_events. identity-api stays forbidden, and
 # so does every other forbidden prefix below; course-api's rule is unchanged.
 rules=(
-  "services/identity  identity-api  services/course,services/analytics,services/worker,libs/temporal,libs/mongostore,libs/asynqx,libs/kafka  yes 580"
+  "services/identity  identity-api  services/course,services/analytics,services/worker,libs/temporal,libs/mongostore,libs/asynqx,libs/kafka,libs/eventbus,libs/jobs  yes 580"
+  "services/identity  identity-admin services/course,services/analytics,services/worker,libs/temporal,libs/mongostore,libs/asynqx,libs/kafka,libs/eventbus,libs/jobs  yes 580"
+  "services/identity  identity-worker services/course,services/analytics,services/worker,libs/mongostore                                   yes 640"
   "services/analytics analytics-api services/identity,services/course,services/worker,libs/temporal,libs/asynqx,libs/kafka   yes 650"
   "services/course    course-api    services/identity,services/analytics,services/worker                no  760"
   "services/worker    worker        services/identity                                                   no  855"
