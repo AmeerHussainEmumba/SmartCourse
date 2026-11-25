@@ -1,4 +1,4 @@
-//go:build e2e && bugrepro
+//go:build e2e
 
 package e2e_test
 
@@ -9,7 +9,10 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/test/e2e/harness"
 )
 
-// TestAdversarial_CertificateNeedsNameMirror_ParkedInsteadOfWaiting (B-10)
+// TestAdversarial_CertificateNeedsNameMirror_SurvivesAMirrorStall
+//
+// This one HELD in the run recorded in the register (a 90 s stall; not bisected
+// further): it is a regression guard, not a defect reproducer.
 //
 // The certificate-issuer needs the student's display name from
 // course.instructor_mirror, which a DIFFERENT consumer group
@@ -28,8 +31,8 @@ import (
 //
 // Expected: once the mirror has the student the certificate is issued without
 // operator action.
-// Run: cd test/e2e && GOWORK=off go test -tags='e2e bugrepro' -count=1 -v -run TestAdversarial_CertificateNeedsNameMirror .
-func TestAdversarial_CertificateNeedsNameMirror_ParkedInsteadOfWaiting(t *testing.T) {
+// Run: cd test/e2e && GOWORK=off go test -tags=e2e -count=1 -v -run TestAdversarial_CertificateNeedsNameMirror .
+func TestAdversarial_CertificateNeedsNameMirror_SurvivesAMirrorStall(t *testing.T) {
 	s := harness.Start(t, harness.Options{})
 	inst := s.NewInstructor(t)
 	course := s.PublishedCourse(t, inst, 1)
