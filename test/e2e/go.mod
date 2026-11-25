@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0 // indirect
 	github.com/lib/pq v1.10.9 // indirect
-	github.com/redis/go-redis/v9 v9.22.0 // indirect
+	github.com/redis/go-redis/v9 v9.22.0
 	go.temporal.io/sdk v1.50.0
 	golang.org/x/crypto v0.57.0 // indirect
 	gorm.io/driver/postgres v1.6.3

@@ -18,11 +18,12 @@ const Password = "correct-horse-battery-1"
 
 // User is a registered, logged-in account.
 type User struct {
-	Email string
-	ID    uuid.UUID
-	Name  string
-	Role  string
-	Token string // access token of the latest login
+	Email        string
+	ID           uuid.UUID
+	Name         string
+	Role         string
+	Token        string // access token of the latest login
+	RefreshToken string
 }
 
 // Course is a course the harness created.
@@ -50,17 +51,44 @@ func nextIP() string {
 // Do sends one JSON request and returns the status and body. token may be
 // empty; body may be nil.
 func Do(method, url, token string, body any) (int, []byte, error) {
+	r, err := DoFull(method, url, token, body, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	return r.Status, r.Body, nil
+}
+
+// Response is a full HTTP response: status, headers and body.
+type Response struct {
+	Status int
+	Header http.Header
+	Body   []byte
+}
+
+// ErrorCode is the `code` of the standard {code, message} error body, "" when
+// the body is not one.
+func (r *Response) ErrorCode() string {
+	var e struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(r.Body, &e)
+	return e.Code
+}
+
+// DoFull is Do with extra request headers (an Idempotency-Key, a traceparent,
+// an X-Forwarded-For of the caller's choosing) and the response headers back.
+func DoFull(method, url, token string, body any, headers map[string]string) (*Response, error) {
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return 0, nil, err
+			return nil, err
 		}
 		rd = bytes.NewReader(b)
 	}
 	req, err := http.NewRequest(method, url, rd)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -69,13 +97,19 @@ func Do(method, url, token string, body any) (int, []byte, error) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("X-Forwarded-For", nextIP())
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
-	return resp.StatusCode, raw, err
+	if err != nil {
+		return nil, err
+	}
+	return &Response{Status: resp.StatusCode, Header: resp.Header, Body: raw}, nil
 }
 
 // call is Do that fails the test unless the status is want.
@@ -115,8 +149,9 @@ func (s *Stack) Login(t testing.TB, email string) *User {
 		"email": email, "password": Password,
 	})
 	var r struct {
-		AccessToken string `json:"access_token"`
-		User        struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		User         struct {
 			ID       string `json:"id"`
 			FullName string `json:"full_name"`
 			Role     string `json:"role"`
@@ -127,7 +162,7 @@ func (s *Stack) Login(t testing.TB, email string) *User {
 	if err != nil || r.AccessToken == "" {
 		t.Fatalf("login %s: no user id or token in %s", email, raw)
 	}
-	return &User{Email: email, ID: id, Name: r.User.FullName, Role: r.User.Role, Token: r.AccessToken}
+	return &User{Email: email, ID: id, Name: r.User.FullName, Role: r.User.Role, Token: r.AccessToken, RefreshToken: r.RefreshToken}
 }
 
 func uniqueEmail(prefix string) string {
@@ -211,7 +246,19 @@ func (s *Stack) NewCourse(t testing.TB, inst *User, lessons, enrollmentLimit int
 // StartPublish asks to publish (202) and returns without waiting.
 func (s *Stack) StartPublish(t testing.TB, inst *User, c *Course) {
 	t.Helper()
-	call(t, http.StatusAccepted, "POST", s.CourseURL+"/api/v1/courses/"+c.ID.String()+"/publish", inst.Token, nil)
+	// The shared Temporal can answer 503 (workflow start failed) for a moment
+	// after a scenario that killed workers or terminated workflows; the claim
+	// is released on that failure, so a retry is safe.
+	Eventually(t, 45*time.Second, "publish to be accepted (202)", func() error {
+		code, raw, err := Do("POST", s.CourseURL+"/api/v1/courses/"+c.ID.String()+"/publish", inst.Token, nil)
+		if err != nil {
+			return err
+		}
+		if code != http.StatusAccepted {
+			return Errf("HTTP %d %s", code, raw)
+		}
+		return nil
+	})
 }
 
 // PublishState is the state publish-status reports ("running", "ready", ...).
