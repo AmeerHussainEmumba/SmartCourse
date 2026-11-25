@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Security: `GET /analytics/issues` (admin only) now checks the token version (`auth.RequireFreshPrivilegeStrict`, fail closed on a Redis miss: 401 `token_stale`; 503 when Redis is unreachable or not wired). Before, a demoted admin's old token kept reading it (observed by the E10 and access scenarios). `api/openapi.yaml` documents the 401. Tests that call the route as an admin must seed `user:tv:<id>` in Redis.
+
 - Added: Workflow Issues, the ninth FR-5 metric (DR-026). Migration `000004` (`publish_failures`, `workflow_issue_stats`), a relay handler for `course.publish_failed`, `NewWorkflowIssuesSource`, `ReconcileWorkflowIssueStats` (run by `Reconciler.Run`), and `analytics.PublishWorkflow`. `cmd/analytics-api/wire.go` attaches the source, so `GET /analytics/issues` returns `workflow_issues` as an object (`failed`, `by_workflow`) instead of `null`. Counts publish failures since the event existed; earlier ones are not backfilled. 9 of 9 FR-5 metrics now have a source.
 
 - analytics-api wires telemetry in `cmd/analytics-api/main.go`: tracing, RED metrics, `/metrics`, bounded flush on shutdown (Phase 7). It does not expose the outbox gauges (no access to the outbox table).

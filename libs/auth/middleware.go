@@ -87,8 +87,29 @@ func RequireRole(roles ...string) gin.HandlerFunc {
 // in Redis. A Redis failure fails CLOSED here — the one place in the system
 // where that's correct, because the entire point of this check is that
 // trust must be current, not assumed.
+//
+// A cache MISS, though, reads as version 1 ("never changed"): fine for the
+// instructor routes (a flush must not lock every instructor out; see README),
+// wrong for an admin surface, where a flush would re-accept the old token of an
+// admin demoted from version 1. Admin-only routes that have no durable source
+// use RequireFreshPrivilegeStrict.
 func RequireFreshPrivilege(rdb *redis.Client) gin.HandlerFunc {
-	return requireFresh(rdb, nil)
+	return requireFresh(rdb, nil, false)
+}
+
+// RequireFreshPrivilegeStrict is RequireFreshPrivilege for admin-only routes
+// of a service that cannot read the durable token version (the worker admin
+// API and analytics-api cannot read identity's tables, ADR-0022 to 0024). A
+// Redis miss on the token-version key FAILS CLOSED: 401 token_stale, never
+// "version 1". The key comes back when identity's re-seeder rewrites every
+// version above 1 (within one tick of its interval after a flush) or the admin
+// logs in, refreshes, or calls an identity /me or admin route (any of which
+// writes the key, version 1 included). The price is a bounded lockout of
+// admins from these routes after a Redis flush; the gain is that a demoted
+// admin's old token is never accepted because the cache forgot the demotion.
+// Redis errors other than a miss still answer 503.
+func RequireFreshPrivilegeStrict(rdb *redis.Client) gin.HandlerFunc {
+	return requireFresh(rdb, nil, true)
 }
 
 // ErrUserNotFound is returned by a TokenVersionSource for an unknown (or
@@ -109,10 +130,10 @@ type TokenVersionSource interface {
 // still fail closed. Use it on any route that must honour demotion or
 // suspension promptly (identity applies it to /me as well as admin routes).
 func RequireFreshPrivilegeWithSource(rdb *redis.Client, src TokenVersionSource) gin.HandlerFunc {
-	return requireFresh(rdb, src)
+	return requireFresh(rdb, src, false)
 }
 
-func requireFresh(rdb *redis.Client, src TokenVersionSource) gin.HandlerFunc {
+func requireFresh(rdb *redis.Client, src TokenVersionSource, strict bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, ok := FromContext(c.Request.Context())
 		if !ok {
@@ -131,6 +152,11 @@ func requireFresh(rdb *redis.Client, src TokenVersionSource) gin.HandlerFunc {
 		current, err := rdb.Get(ctx, key).Int()
 		if err != nil {
 			switch {
+			case err == redis.Nil && src == nil && strict:
+				// No durable source and the route is privileged: a miss proves
+				// nothing about the current version, so refuse.
+				httpx.Fail(c, apperrors.ErrTokenStale)
+				return
 			case err == redis.Nil && src == nil:
 				// Legacy behaviour of RequireFreshPrivilege: a miss means
 				// "never changed" (version 1). Unsafe after a Redis flush;

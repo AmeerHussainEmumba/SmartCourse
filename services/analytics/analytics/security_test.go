@@ -4,6 +4,7 @@
 package analytics_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -27,14 +28,22 @@ type secEnv struct {
 
 func newSecEnv(t *testing.T) *secEnv {
 	env := testenv.Setup(t)
-	svc := analytics.NewService(analytics.NewRepository(env.DB))
+	svc := analytics.NewService(analytics.NewRepository(env.DB)).WithPopularCache(env.RDB)
 	return &secEnv{t: t, env: env, r: newTestEngine(t, svc)}
 }
 
+// token issues a version-1 token. An admin's version is also written to Redis
+// as identity does at login: the admin-only issues route fails closed on a miss.
 func (s *secEnv) token(role string) string {
-	tok, err := auth.IssueAccessToken(testJWTCfg(), uuid.New(), role, 1)
+	id := uuid.New()
+	tok, err := auth.IssueAccessToken(testJWTCfg(), id, role, 1)
 	if err != nil {
 		s.t.Fatal(err)
+	}
+	if role == "admin" {
+		if err := s.env.RDB.Set(context.Background(), auth.TokenVersionRedisKey(id.String()), 1, 0).Err(); err != nil {
+			s.t.Fatal(err)
+		}
 	}
 	return tok
 }
