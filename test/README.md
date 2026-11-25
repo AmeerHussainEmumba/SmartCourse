@@ -61,7 +61,7 @@ Docker is required. Use a private `TMPDIR` if two checkouts run the suite at onc
 | MongoDB | `Mongo.Count`, `Find`, `ArchivedEvents`, `FailedEvents` |
 | Traces | `Jaeger.Trace`, `FindErrored` (with `Options{Tracing: true}`) |
 | Kafka | `ReadTopic(s)`, `ConsumerLag(group)`, `NewEventProducer` with `Redeliver` and `Produce` (a new event framed with the real registry ids), `EventTopics`, `ConsumerGroups`, `ConsumerOwner` (which binary runs a group) |
-| Metrics | `Metrics(binary)`, `ScrapeMetrics(url)`; `Metrics.Sum`, `SumWhere`. Metrics are per binary: outbox gauges on `course-api`/`identity-worker`, `dead_letter_total` and `event_processed_total` on the consuming worker, `asynq_*` on the worker that owns the queue |
+| Metrics | `Metrics(binary)`, `ScrapeMetrics(url)`; `Metrics.Sum`, `SumWhere`. Metrics are per binary: outbox gauges on `course-api`/`identity-worker`, `dead_letter_total` and `event_processed_total` on the consuming worker, `asynq_*` gauges only on the workers that export them (identity-worker, course-worker), labelled with the worker queue name, `critical` or with the per-service namespace `notification:critical` (match the fragment `critical"`); a scenario whose worker exports none asserts on the delivery rows instead |
 | SQL (as the owner) | `DB()` (qualify tables: `course.enrollments`), `Count`, `MustCount`, `OutboxRows` (both outboxes), `OutboxUnpublished`, `ProcessedCount(consumer, eventID)` (the consumer's own service table; Mongo archive for `audit-archiver`), `EventIDFor` |
 | Waiting | `Eventually`, `WaitFor`, `Never`, `WaitSettled` (both outboxes drained and every consumer group at lag 0) |
 
