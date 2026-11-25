@@ -20,10 +20,10 @@
 # Base URLs (defaults match docker-compose.yml's host ports):
 #   IDENTITY_URL=http://localhost:8090  COURSE_URL=http://localhost:8091
 #   ANALYTICS_URL=http://localhost:8092
-# Admin used to promote a freshly registered user to instructor (the seeded
-# dev admin by default; tools/seed documents this account and refuses to run
-# outside APP_ENV=development):
-#   VERIFY_ADMIN_EMAIL=admin@smartcourse.dev  VERIFY_ADMIN_PASSWORD=SeedPass123!
+# Admin used to promote a freshly registered user to instructor: the first admin
+# that `make seed` creates with identity-admin (SEED_ADMIN_EMAIL /
+# SEED_ADMIN_PASSWORD, env.example defaults unless you set them):
+#   VERIFY_ADMIN_EMAIL=admin@smartcourse.local  VERIFY_ADMIN_PASSWORD=change-me-admin-password
 # Other: VERIFY_PUBLISH_TIMEOUT_S=90 (wait for a publish to reach ready).
 #
 # What it creates: three users (all with fresh random emails) and one published
@@ -37,8 +37,8 @@ set -uo pipefail
 IDENTITY_URL=${IDENTITY_URL:-http://localhost:8090}
 COURSE_URL=${COURSE_URL:-http://localhost:8091}
 ANALYTICS_URL=${ANALYTICS_URL:-http://localhost:8092}
-ADMIN_EMAIL=${VERIFY_ADMIN_EMAIL:-admin@smartcourse.dev}
-ADMIN_PASSWORD=${VERIFY_ADMIN_PASSWORD:-SeedPass123!}
+ADMIN_EMAIL=${VERIFY_ADMIN_EMAIL:-${SEED_ADMIN_EMAIL:-admin@smartcourse.local}}
+ADMIN_PASSWORD=${VERIFY_ADMIN_PASSWORD:-${SEED_ADMIN_PASSWORD:-change-me-admin-password}}
 PUBLISH_TIMEOUT_S=${VERIFY_PUBLISH_TIMEOUT_S:-90}
 USER_PASSWORD='Verify-Pass-1234'
 RUN_ID="$(date +%s)${RANDOM}"

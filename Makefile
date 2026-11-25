@@ -225,26 +225,24 @@ E2E_RUN ?= TestE2E_
 test-e2e:
 	cd test/e2e && GOWORK=off go test -tags=e2e -count=1 -timeout 40m -v -run '$(E2E_RUN)' ./...
 
-# `make seed` runs on the HOST, not in a container, so it must dial the host-
-# published ports (docker-compose.yml publishes them on 127.0.0.1), never the
-# compose-internal names (temporal:7233, postgres:5432, redis:6379,
-# minio:9000) that the containers use among themselves. A .env copied from
-# docker-compose.yml's environment blocks has the internal names and the seed
-# then fails to connect (Temporal first, as the publish step dials it).
-# TEMPORAL_HOST_PORT is therefore always overridden here, ignoring .env. The
-# other three are rewritten only when they still point at the compose-internal
-# host, so a custom host port or credential in .env is left alone. Override the
-# Temporal address with SEED_TEMPORAL_HOST_PORT=host:port if yours differs.
-SEED_TEMPORAL_HOST_PORT ?= localhost:7233
+# `make seed` has two steps (tools/seed/README.md). First the first admin is
+# created inside the identity-api image with its identity-admin CLI
+# (/usr/local/bin/identity-admin, services/identity/README.md); it is the one
+# account the HTTP API cannot create, and it needs the stack's own database and
+# Redis settings, which is why it runs through `docker compose run` against the
+# identity-api service. Then tools/seed runs on the HOST as a plain HTTP client
+# of the published ports (identity-api 8090, course-api 8091, analytics-api 8092):
+# it touches no database, Redis, MinIO or Temporal itself. Override the admin
+# with SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD and the targets with IDENTITY_URL,
+# COURSE_URL, ANALYTICS_URL (see env.example).
+SEED_ADMIN_EMAIL ?= admin@smartcourse.local
+SEED_ADMIN_PASSWORD ?= change-me-admin-password
 
+# The recipe lines start with @ so make does not echo the admin password.
 seed:
-	@dsn="$${POSTGRES_DSN-}"; redis="$${REDIS_ADDR-}"; minio="$${MINIO_ENDPOINT-}"; \
-	case "$$dsn" in *@postgres:5432/*) dsn="$${dsn/@postgres:5432/@localhost:5433}"; echo "seed: POSTGRES_DSN pointed at the compose-internal postgres:5432; using localhost:5433";; esac; \
-	case "$$redis" in redis:6379) redis="localhost:6380"; echo "seed: REDIS_ADDR pointed at the compose-internal redis:6379; using localhost:6380";; esac; \
-	case "$$minio" in *//minio:9000*) minio="$${minio%%//minio:9000*}//localhost:9002$${minio#*//minio:9000}"; echo "seed: MINIO_ENDPOINT pointed at the compose-internal minio:9000; using localhost:9002";; esac; \
-	POSTGRES_DSN="$$dsn" REDIS_ADDR="$$redis" MINIO_ENDPOINT="$$minio" \
-	TEMPORAL_HOST_PORT="$(SEED_TEMPORAL_HOST_PORT)" \
-	POSTGRES_SEARCH_PATH=identity,course,platform,public go run ./tools/seed
+	@IDENTITY_ADMIN_EMAIL="$(SEED_ADMIN_EMAIL)" IDENTITY_ADMIN_PASSWORD="$(SEED_ADMIN_PASSWORD)" \
+	  docker compose run --rm -T -e IDENTITY_ADMIN_EMAIL -e IDENTITY_ADMIN_PASSWORD identity-api identity-admin
+	@SEED_ADMIN_EMAIL="$(SEED_ADMIN_EMAIL)" SEED_ADMIN_PASSWORD="$(SEED_ADMIN_PASSWORD)" go run ./tools/seed
 
 ## --- Binaries (docs/plans/microservices-split.md) -----------------------
 # One module per service, one or two binaries each. BINARY is <service>/<binary>.

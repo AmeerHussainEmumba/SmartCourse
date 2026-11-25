@@ -69,22 +69,21 @@ make dev-workflow
 #    IDENTITY_ADMIN_PASSWORD are set, creates the first admin.
 make migrate-up
 
-# 4. Populate realistic data — instructors, courses at every lifecycle
-#    state, students with partial progress. Goes through the real
-#    service layer (not raw SQL), so it also proves the core modules
-#    (including the publish workflow) work together. Safe to re-run —
-#    it's a no-op the second time. See tools/seed/README.md.
-#    `make seed` runs on your host, not in a container, so it must reach
-#    everything through the ports compose publishes on 127.0.0.1. The
-#    Makefile guarantees that for Temporal: it always runs the seed with
-#    TEMPORAL_HOST_PORT=localhost:7233, whatever .env says (a .env with the
-#    compose-internal `temporal:7233` used to fail at the publish step), and
-#    it rewrites POSTGRES_DSN / REDIS_ADDR / MINIO_ENDPOINT to localhost:5433 /
-#    localhost:6380 / localhost:9002 only if they still name the
-#    compose-internal postgres:5432 / redis:6379 / minio:9000 (it prints a
-#    line when it does). Use `make seed SEED_TEMPORAL_HOST_PORT=host:port` if
-#    your Temporal is elsewhere. The seed is a no-op once the admin user
-#    exists, so a half-finished run needs the data reset before retrying.
+# 4. Populate realistic data: instructors, courses at every lifecycle
+#    state (draft, published, archived), students with partial progress.
+#    `make seed` first creates the first admin with the identity-admin CLI
+#    (`docker compose run --rm identity-api identity-admin`, from
+#    SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD; the defaults are the
+#    env.example values admin@smartcourse.local / change-me-admin-password),
+#    then runs tools/seed on your host as a plain HTTP client of the
+#    published ports (8090 identity-api, 8091 course-api, 8092 analytics-api).
+#    It registers users, promotes instructors, creates and publishes courses,
+#    enrolls students and marks progress through the real endpoints, so it
+#    also proves the public contracts and the publish workflow. It waits for
+#    the services to be ready and fails with a clear message if one is not.
+#    Safe to re-run (accounts are found by logging in, courses by slug).
+#    A first run can take a few minutes when the register rate limit (5 a
+#    minute per IP) applies; it waits and retries. See tools/seed/README.md.
 make seed
 
 # 5. Nothing left to do — `make dev-workflow` (step 2) already started the
