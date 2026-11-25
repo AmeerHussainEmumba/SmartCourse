@@ -38,6 +38,7 @@ func markers(t *testing.T, db *gorm.DB) int64 {
 // it) is never touched.
 func TestPruneProcessed_RespectsTheRetentionBoundary(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course") // as the consuming service: its processed_events
 	const retention = 24 * time.Hour
 	oldA := addMarker(t, env.DB, "a", retention+time.Minute)
 	oldB := addMarker(t, env.DB, "b", 30*24*time.Hour)
@@ -69,6 +70,7 @@ func TestPruneProcessed_RespectsTheRetentionBoundary(t *testing.T) {
 // rows beside it survive every one of them.
 func TestPruneProcessed_ClearsABacklogInBatches(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course") // as the consuming service: its processed_events
 	for i := 0; i < 23; i++ {
 		addMarker(t, env.DB, "c", 48*time.Hour)
 	}
@@ -90,6 +92,7 @@ func TestPruneProcessed_ClearsABacklogInBatches(t *testing.T) {
 
 func TestPruneProcessed_RefusesANonPositiveRetentionAndBatch(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course") // as the consuming service: its processed_events
 	addMarker(t, env.DB, "d", 365*24*time.Hour)
 	for _, r := range []time.Duration{0, -time.Hour} {
 		if _, err := eventbus.PruneProcessed(context.Background(), env.DB, r); err == nil {
@@ -106,6 +109,7 @@ func TestPruneProcessed_RefusesANonPositiveRetentionAndBatch(t *testing.T) {
 
 func TestPruneProcessed_StopsWhenTheContextIsCancelled(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course") // as the consuming service: its processed_events
 	for i := 0; i < 10; i++ {
 		addMarker(t, env.DB, "e", 48*time.Hour)
 	}

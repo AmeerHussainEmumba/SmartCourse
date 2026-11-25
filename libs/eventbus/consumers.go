@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -77,6 +78,11 @@ func WithMetrics(m *telemetry.Metrics) ConsumerOption {
 	return func(c *consumerSettings) { c.Metrics = m }
 }
 
+// deliverFunc runs one handler for one decoded event and reports whether the
+// event had already been processed (the handler did not run). It is the one
+// thing the two modes differ in.
+type deliverFunc func(ctx context.Context, h relay.Handler, evt relay.DecodedEvent) (duplicate bool, err error)
+
 // Consumers runs one Kafka consumer group per consumer name: the group id is the
 // ConsumerName and it subscribes to the topics of its handlers' event types and
 // to its own retry topic, retry.<ConsumerName> (docs/plans/microservices-split.md
@@ -94,11 +100,15 @@ func WithMetrics(m *telemetry.Metrics) ConsumerOption {
 // Per-aggregate order: the producer keys by aggregate id, a partition is handled
 // by one goroutine one record at a time, and a retried record holds its
 // partition. Bounded in-flight: MaxInFlight handlers per group.
+//
+// Two modes share all of the above (NewConsumers, NewStreamConsumers) and differ
+// only in how a handler is delivered: with a Postgres transaction and the
+// processed_events marker, or plainly (see NewStreamConsumers).
 type Consumers struct {
-	cfg    consumerSettings
-	db     *gorm.DB
-	groups []group
-	log    *slog.Logger
+	cfg     consumerSettings
+	deliver deliverFunc
+	groups  []group
+	log     *slog.Logger
 
 	parkFailures atomic.Int64
 
@@ -122,7 +132,35 @@ type group struct {
 // publishes, passes the handlers directly) and validates that every handler's
 // event types map to a topic. cfg supplies the brokers and the tuning
 // (KAFKA_CONSUMER_*). It starts nothing.
+//
+// Each handler runs through relay.DeliverEvent on db: in one transaction with
+// its processed_events marker, so a redelivery or a replay is absorbed.
 func NewConsumers(cfg config.KafkaConfig, handlers []relay.Handler, db *gorm.DB, opts ...ConsumerOption) (*Consumers, error) {
+	if db == nil {
+		return nil, fmt.Errorf("eventbus: consumers need a database")
+	}
+	return newConsumers(cfg, handlers, func(ctx context.Context, h relay.Handler, evt relay.DecodedEvent) (bool, error) {
+		return relay.DeliverEvent(ctx, db, h, evt)
+	}, opts)
+}
+
+// NewStreamConsumers is NewConsumers for a service with no Postgres, whose
+// idempotency lives elsewhere (the audit archiver dedups by event id in
+// MongoDB). A handler is delivered WITHOUT a transaction and without a
+// processed_events marker: relay.Handler.Handle receives a nil *gorm.DB, so a
+// handler registered here must not use it, and it must be safe to run more than
+// once for one event (Kafka delivers at least once, and a replay through the
+// retry topic redelivers an event that was already handled). A handler panic is
+// recovered and returned as an error. Everything else is identical to
+// NewConsumers: the group per consumer name, the retry topic subscription,
+// bounded in-flight, the retry budget, parking through the sink with one history
+// entry per attempt, the relay.Source in the handler's context, tracing and
+// metrics (the "duplicate" outcome never occurs).
+func NewStreamConsumers(cfg config.KafkaConfig, handlers []relay.Handler, opts ...ConsumerOption) (*Consumers, error) {
+	return newConsumers(cfg, handlers, deliverStream, opts)
+}
+
+func newConsumers(cfg config.KafkaConfig, handlers []relay.Handler, deliver deliverFunc, opts []ConsumerOption) (*Consumers, error) {
 	s := consumerSettings{
 		Brokers: cfg.Brokers, MaxInFlight: cfg.ConsumerMaxInFlight, MaxAttempts: cfg.ConsumerMaxAttempts,
 		BackoffBase: cfg.ConsumerBackoffBase, BackoffMax: cfg.ConsumerBackoffMax, ShutdownTimeout: cfg.ConsumerShutdownTimeout,
@@ -133,11 +171,8 @@ func NewConsumers(cfg config.KafkaConfig, handlers []relay.Handler, db *gorm.DB,
 	if len(s.Brokers) == 0 {
 		return nil, fmt.Errorf("eventbus: consumers need brokers")
 	}
-	if db == nil {
-		return nil, fmt.Errorf("eventbus: consumers need a database")
-	}
 	r := &Consumers{
-		cfg: s, db: db,
+		cfg: s, deliver: deliver,
 		stats: map[string]kafka.Stats{}, live: map[string]*kafka.Consumer{},
 		log: s.Logger,
 	}
@@ -270,13 +305,27 @@ func (r *Consumers) handle(ctx context.Context, g group, rec kafka.Record) (err 
 		if !h.Handles(evt.EventType) {
 			continue
 		}
-		duplicate, err := relay.DeliverEvent(ctx, r.db, h, evt)
+		duplicate, err := r.deliver(ctx, h, evt)
 		r.count(g.name, outcomeOf(duplicate, err))
 		if err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// deliverStream runs h with no transaction (NewStreamConsumers), recovering a
+// panic into an error like relay.DeliverEvent does.
+func deliverStream(ctx context.Context, h relay.Handler, evt relay.DecodedEvent) (duplicate bool, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			logging.FromContext(ctx).Error("event handler panicked",
+				slog.String("consumer", h.ConsumerName), slog.String("event_id", evt.EventID.String()),
+				slog.Any("panic", p), slog.String("stack", string(debug.Stack())))
+			duplicate, err = false, fmt.Errorf("handler panic: %v", p)
+		}
+	}()
+	return false, h.Handle(ctx, nil, evt)
 }
 
 // count records one handler run in event_processed_total, when metrics are on.
@@ -338,6 +387,9 @@ func (r *Consumers) LagGauges(m *telemetry.Metrics) (telemetry.GaugeCollector, f
 // failure: that is the one remaining way an event leaves the stream unparked,
 // and it is loud.
 func (r *Consumers) exhausted(ctx context.Context, g group, rec kafka.Record, cause error) {
+	// The sink sees the record's coordinates as a handler does (the audit sink
+	// stores them with the parked event).
+	ctx = relay.WithSource(ctx, recordSource(rec))
 	d := relay.DeadLetter{Event: stubEvent(rec), Consumer: g.name, Err: cause, History: kafka.AttemptErrors(cause), Attempts: r.attempts()}
 	if r.cfg.Sink == nil {
 		r.log.Error("kafka consumer gave up on a record; no dead-letter sink is configured, the record is dropped",

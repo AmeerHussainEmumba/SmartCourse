@@ -186,6 +186,16 @@ func SourceOf(rec kafka.Record, schemaID uint32) relay.Source {
 	return relay.Source{Topic: rec.Topic, Partition: rec.Partition, Offset: rec.Offset, Key: string(rec.Key), SchemaID: schemaID}
 }
 
+// recordSource is SourceOf for a record whose frame may not decode: the schema
+// id is 0 then.
+func recordSource(rec kafka.Record) relay.Source {
+	var id uint32
+	if f, err := events.Decode(rec.Value); err == nil {
+		id = f.SchemaID
+	}
+	return SourceOf(rec, id)
+}
+
 // decodeFramed is Decode that also returns the schema id from the frame header.
 func decodeFramed(rec kafka.Record) (relay.DecodedEvent, uint32, error) {
 	var env events.Envelope
