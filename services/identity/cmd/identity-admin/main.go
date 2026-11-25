@@ -67,7 +67,7 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 	password := getenv("IDENTITY_ADMIN_PASSWORD")
 	name := strings.TrimSpace(getenv("IDENTITY_ADMIN_NAME"))
 	if email == "" || password == "" {
-		fmt.Fprintln(stderr, "identity-admin: IDENTITY_ADMIN_EMAIL and IDENTITY_ADMIN_PASSWORD are required")
+		_, _ = fmt.Fprintln(stderr, "identity-admin: IDENTITY_ADMIN_EMAIL and IDENTITY_ADMIN_PASSWORD are required")
 		return 2
 	}
 	if name == "" {
@@ -78,24 +78,24 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 	defer cancel()
 	svc, closeAll, err := open(ctx)
 	if err != nil {
-		fmt.Fprintln(stderr, "identity-admin:", err)
+		_, _ = fmt.Fprintln(stderr, "identity-admin:", err)
 		return 1
 	}
 	defer closeAll()
 
 	res, err := svc.BootstrapAdmin(ctx, email, password, name)
 	if err != nil {
-		fmt.Fprintln(stderr, "identity-admin:", err)
+		_, _ = fmt.Fprintln(stderr, "identity-admin:", err)
 		if isInputError(err) {
 			return 2
 		}
 		return 1
 	}
 	if res.Created {
-		fmt.Fprintf(stdout, "identity-admin: created admin %s (user id %s)\n", email, res.UserID)
+		_, _ = fmt.Fprintf(stdout, "identity-admin: created admin %s (user id %s)\n", email, res.UserID)
 		return 0
 	}
-	fmt.Fprintf(stdout, "identity-admin: %s already exists (user id %s, role %s); nothing changed\n", email, res.UserID, res.Role)
+	_, _ = fmt.Fprintf(stdout, "identity-admin: %s already exists (user id %s, role %s); nothing changed\n", email, res.UserID, res.Role)
 	return 0
 }
 
