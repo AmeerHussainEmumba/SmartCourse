@@ -142,19 +142,6 @@ func applyMigrations(dsn string, sets ...string) error {
 	return nil
 }
 
-// migrateSteps applies n migrations of one set (negative n rolls back).
-func migrateSteps(dsn, set string, n int) error {
-	m, err := newMigrator(dsn, set)
-	if err != nil {
-		return err
-	}
-	defer func() { _, _ = m.Close() }()
-	if err := m.Steps(n); err != nil {
-		return fmt.Errorf("%s steps %d: %w", set, n, err)
-	}
-	return nil
-}
-
 func newMigrator(dsn, set string) (*migrate.Migrate, error) {
 	root, err := migrationsRoot()
 	if err != nil {

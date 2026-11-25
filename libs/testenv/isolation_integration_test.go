@@ -138,7 +138,7 @@ func TestRolesCannotReachOtherSchemasByName(t *testing.T) {
 					// on, so the name does not resolve at all ("does not
 					// exist"); either error is a refusal, success is the bug.
 					err := g.Exec(`SELECT * FROM ` + table).Error
-					if err == nil || !(isDenied(err) || strings.Contains(err.Error(), "does not exist")) {
+					if err == nil || (!isDenied(err) && !strings.Contains(err.Error(), "does not exist")) {
 						t.Fatalf("svc_%s read %s.%s through search_path: want an error, got %v", role, target, table, err)
 					}
 				}

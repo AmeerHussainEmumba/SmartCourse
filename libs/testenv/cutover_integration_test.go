@@ -19,6 +19,19 @@ import (
 // the unexported container and migrator helpers to stop BEFORE the cutover
 // migration, seed the old platform tables, and then run it.
 
+// migrateSteps applies n migrations of one set (negative n rolls back).
+func migrateSteps(dsn, set string, n int) error {
+	m, err := newMigrator(dsn, set)
+	if err != nil {
+		return err
+	}
+	defer func() { _, _ = m.Close() }()
+	if err := m.Steps(n); err != nil {
+		return fmt.Errorf("%s steps %d: %w", set, n, err)
+	}
+	return nil
+}
+
 func ownerDB(t *testing.T, dsn string) *gorm.DB {
 	t.Helper()
 	g, err := db.Open(dbConfigFor(dsn))
@@ -78,7 +91,7 @@ func readOutbox(t *testing.T, g *gorm.DB, schema string) []outboxView {
 	if err != nil {
 		t.Fatalf("read %s.outbox: %v", schema, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []outboxView
 	for rows.Next() {
 		var v outboxView
