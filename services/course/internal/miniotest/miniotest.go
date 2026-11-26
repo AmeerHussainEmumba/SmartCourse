@@ -11,6 +11,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -53,8 +54,18 @@ func Setup(t *testing.T) *Env {
 		Credentials:  credentials.NewStaticCredentialsProvider(user, secret, ""),
 		UsePathStyle: true,
 	})
-	if _, err := client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(Bucket)}); err != nil {
-		t.Fatalf("create bucket: %v", err)
+	// The container is up and healthy, but on a busy CI runner the first
+	// connection through Docker's port mapping can time out; retry until it
+	// answers (about 30 s) instead of failing the test on that one dial.
+	var createErr error
+	for attempt := 0; attempt < 15; attempt++ {
+		if _, createErr = client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(Bucket)}); createErr == nil {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if createErr != nil {
+		t.Fatalf("create bucket: %v", createErr)
 	}
 	return &Env{
 		Config: config.MinIOConfig{Endpoint: endpoint, AccessKeyID: user, SecretAccessKey: secret, BucketAssets: Bucket},
