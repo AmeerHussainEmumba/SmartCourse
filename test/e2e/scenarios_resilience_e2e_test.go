@@ -471,6 +471,13 @@ func TestE2E_E06_ConsumerKilledMidFlow(t *testing.T) {
 	s.WaitSettled(t, time.Minute)
 
 	const lockRow = `SELECT 1 FROM analytics.course_stats WHERE course_id = ? FOR UPDATE`
+	// Lag 0 does not mean the aggregator has written the row yet; the lock needs it.
+	harness.Eventually(t, time.Minute, "analytics.course_stats row for the course", func() error {
+		if n := s.MustCount(t, `SELECT count(*) FROM analytics.course_stats WHERE course_id = ?`, course.ID); n != 1 {
+			return harness.Errf("course_stats rows: %d, want 1", n)
+		}
+		return nil
+	})
 	const blockedFragment = "course_stats WHERE course_id"
 	consumers := []string{"analytics-aggregator", "notification-dispatcher", "audit-archiver"}
 
