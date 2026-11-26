@@ -1,4 +1,4 @@
-//go:build e2e && bugrepro
+//go:build e2e
 
 package e2e_test
 
@@ -12,7 +12,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/test/e2e/harness"
 )
 
-// TestAdversarial_MongoOutage_BeyondDefaultRetryBudget_LosesEvents (B-06, B-07)
+// TestAdversarial_MongoOutage_BeyondDefaultRetryBudget_NothingLost (B-06, B-07)
 //
 // ADR-0031: "A parked event is never dropped" and "A MongoDB outage degrades
 // the archiver and the failed-events view only". E13 proves the outage case
@@ -28,8 +28,8 @@ import (
 //	park: a poison event handled while MongoDB is down is lost the same way.
 //
 // Expected: after MongoDB returns, every event is either archived or parked.
-// Run: cd test/e2e && GOWORK=off go test -tags='e2e bugrepro' -count=1 -v -run TestAdversarial_MongoOutage .
-func TestAdversarial_MongoOutage_BeyondDefaultRetryBudget_LosesEvents(t *testing.T) {
+// Run: cd test/e2e && GOWORK=off go test -count=1 -v -run TestAdversarial_MongoOutage .
+func TestAdversarial_MongoOutage_BeyondDefaultRetryBudget_NothingLost(t *testing.T) {
 	s := harness.Start(t, harness.Options{})
 	inst := s.NewInstructor(t)
 	student := s.NewStudent(t)
