@@ -11,8 +11,8 @@ import (
 const EventCertificateIssued = "progress.certificate_issued"
 
 // CertificateIssuedPayload is progress.v1.CertificateIssued (libs/events). The
-// JSON names are the proto field names; a payload contract
-// test (lost in the split, see services/course/progress/README.md) used to keep them in step. There is no verification_code: it is a bearer
+// JSON names are the proto field names; TestPayloadContract_CertificateIssued
+// (libs/events/eventstest) keeps them in step. There is no verification_code: it is a bearer
 // token for the public verification endpoint and stays out of Kafka and the
 // permanent archive.
 type CertificateIssuedPayload struct {

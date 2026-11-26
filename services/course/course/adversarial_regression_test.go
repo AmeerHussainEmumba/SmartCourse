@@ -1,4 +1,4 @@
-//go:build integration && bugrepro
+//go:build integration
 
 // Adversarial security tests for the course module's Week 3 surface (security
 // tester). TestBugrepro_* fail today and reproduce a finding in
@@ -9,8 +9,6 @@
 package course_test
 
 import (
-	"bytes"
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,46 +18,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
 )
-
-// S-09 (the F-03 class on the instructor surface): the course routes use
-// RequireFreshPrivilege(rdb) without a durable source, so after a Redis
-// flush, restart or eviction a demoted or suspended instructor's stale access
-// token is accepted again for every authoring write (create, edit, publish,
-// archive, upload-url) for the rest of its TTL.
-func TestBugrepro_Course_RedisFlush_ResurrectsSuspendedInstructorToken(t *testing.T) {
-	env := testenv.Setup(t)
-	env.DB = env.ServiceDB(t, "course")
-	svc := course.NewService(course.NewRepository(env.DB), env.RDB, nil, "")
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	course.RegisterRoutes(r.Group("/api/v1"), svc, testJWTCfg())
-	instr := seedInstructor(t, env)
-	tok, _ := auth.IssueAccessToken(testJWTCfg(), instr, "instructor", 1)
-	post := func(slug string) *httptest.ResponseRecorder {
-		body := `{"title":"T","slug":"` + slug + `"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/courses", bytes.NewBufferString(body))
-		req.Header.Set("Authorization", "Bearer "+tok)
-		req.Header.Set("Content-Type", "application/json")
-		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, req)
-		return rec
-	}
-	if err := env.RDB.Set(context.Background(), auth.TokenVersionRedisKey(instr.String()), 2, 0).Err(); err != nil {
-		t.Fatal(err)
-	}
-	if rec := post("s09-before"); rec.Code != 401 {
-		t.Fatalf("precondition: stale token must be refused, got %d", rec.Code)
-	}
-	if err := env.RDB.FlushAll(context.Background()).Err(); err != nil {
-		t.Fatal(err)
-	}
-	if rec := post("s09-after"); rec.Code == http.StatusCreated {
-		t.Fatalf("suspended instructor's stale token created a course after a Redis flush (201)")
-	}
-}
 
 // HELD: hostile upload-url requests through the real handler.
 func TestAdversarial_UploadURL_HostileRequests(t *testing.T) {

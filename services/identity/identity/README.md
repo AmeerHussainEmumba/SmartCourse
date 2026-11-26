@@ -33,6 +33,8 @@ Three real bugs were caught reviewing this module against the baseline requireme
 
 `course-api` cannot read `identity.users` (ADR-0024), so it trusts Redis `user:tv:<id>` and reads a missing key as version 1. `RunTokenVersionReseeder` (started by identity-worker, no longer by identity-api) repairs that after a Redis flush: when the `identity:tv:seeded` sentinel is missing it rewrites every `token_version` above 1 with `SET NX` (never overwriting a newer role-change write), then sets the sentinel with a 10-minute TTL. Login and refresh still seed their own user. Not covered: a single key evicted while the sentinel survives is repaired at the next login/refresh or when the sentinel expires.
 
+**Accepted limitation (S-07, S-09; owner decision 2026-11-26).** Until the re-seeder has run (up to about 15 s after a flush, plus Redis and Postgres latency), a suspended instructor's already-issued access token can write in course-api again, because a missing key reads as version 1. After that its writes are refused. Separately, such a token can read its own course analytics in analytics-api until it expires (at most 15 minutes), because those routes do not check the token version. See `libs/auth/README.md` ("Accepted limitation") and `docs/plans/week-3-findings-security.md`.
+
 ## Endpoints
 
 | Method & path | Auth | Notes |

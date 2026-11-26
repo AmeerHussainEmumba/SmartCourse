@@ -10,7 +10,9 @@
 // owns the key, the rest see it in progress (409) or, once it finishes,
 // completed (replay).
 //
-// Only 2xx responses are stored. A rejected request (4xx) made no change, and
+// Only 2xx responses are stored, byte for byte (an empty or non-JSON body
+// included) with their Content-Type and Location headers; a replay is the
+// response the first call returned. A rejected request (4xx) made no change, and
 // a 5xx may have made a partial one; in both cases the key is released so the
 // client's retry runs the handler again, exactly as it would without a key.
 package idempotency
@@ -134,9 +136,7 @@ func Middleware(db *gorm.DB, opts Options) gin.HandlerFunc {
 			case !bytes.Equal(rec.RequestHash, hash):
 				httpx.Fail(c, ErrKeyReused)
 			case rec.State == "completed" && rec.ResponseStatus != nil:
-				c.Header(ReplayedHeader, "true")
-				c.Data(*rec.ResponseStatus, "application/json; charset=utf-8", rec.ResponseBody)
-				c.Abort()
+				replay(c, rec)
 			default:
 				c.Header("Retry-After", "1")
 				httpx.Fail(c, ErrInProgress)
@@ -153,6 +153,39 @@ func Middleware(db *gorm.DB, opts Options) gin.HandlerFunc {
 func PruneExpired(ctx context.Context, db *gorm.DB) (int64, error) {
 	res := db.WithContext(ctx).Exec(`DELETE FROM idempotency_keys WHERE expires_at < now()`)
 	return res.RowsAffected, res.Error
+}
+
+// replayedHeaders are the response headers stored and replayed with the body.
+var replayedHeaders = []string{"Content-Type", "Location"}
+
+// replay writes the stored response. Rows written before response_raw
+// existed have only the JSONB response_body and no headers.
+func replay(c *gin.Context, rec record) {
+	body := rec.ResponseRaw
+	if body == nil {
+		body = rec.ResponseBody
+	}
+	var hdr map[string]string
+	if len(rec.ResponseHeaders) > 0 {
+		_ = json.Unmarshal(rec.ResponseHeaders, &hdr)
+	}
+	if hdr["Content-Type"] == "" && len(body) > 0 {
+		if hdr == nil {
+			hdr = map[string]string{}
+		}
+		hdr["Content-Type"] = "application/json; charset=utf-8"
+	}
+	for k, v := range hdr {
+		c.Header(k, v)
+	}
+	c.Header(ReplayedHeader, "true")
+	c.Status(*rec.ResponseStatus)
+	if len(body) > 0 {
+		_, _ = c.Writer.Write(body)
+	} else {
+		c.Writer.WriteHeaderNow()
+	}
+	c.Abort()
 }
 
 func validKey(k string) bool {
@@ -197,6 +230,7 @@ func (s *store) claim(ctx context.Context, key string, userID uuid.UUID, endpoin
 		ON CONFLICT (key, user_id, endpoint) DO UPDATE
 		   SET request_hash = EXCLUDED.request_hash, state = 'in_progress',
 		       response_status = NULL, response_body = NULL,
+		       response_raw = NULL, response_headers = NULL,
 		       created_at = now(), expires_at = EXCLUDED.expires_at
 		 WHERE idempotency_keys.expires_at < now()
 		    OR (idempotency_keys.state = 'in_progress'
@@ -217,12 +251,16 @@ type record struct {
 	State          string
 	ResponseStatus *int
 	ResponseBody   []byte
+	// ResponseRaw and ResponseHeaders are NULL on rows from before
+	// migration course/000009.
+	ResponseRaw     []byte
+	ResponseHeaders []byte
 }
 
 func (s *store) load(ctx context.Context, key string, userID uuid.UUID, endpoint string) (record, bool, error) {
 	var recs []record
 	err := s.db.WithContext(ctx).Raw(`
-		SELECT request_hash, state, response_status, response_body
+		SELECT request_hash, state, response_status, response_body, response_raw, response_headers
 		  FROM idempotency_keys WHERE key = ? AND user_id = ? AND endpoint = ?`,
 		key, userID, endpoint).Scan(&recs).Error
 	if err != nil {
@@ -257,15 +295,26 @@ func (s *store) run(c *gin.Context, key string, userID uuid.UUID, endpoint strin
 }
 
 func (s *store) storable(r *recorder) bool {
-	return r.Status() >= 200 && r.Status() < 300 && !r.overflow && json.Valid(r.buf.Bytes())
+	return r.Status() >= 200 && r.Status() < 300 && !r.overflow
 }
 
 func (s *store) complete(ctx context.Context, key string, userID uuid.UUID, endpoint string, createdAt time.Time, r *recorder) error {
+	hdr := map[string]string{}
+	for _, k := range replayedHeaders {
+		if v := r.Header().Get(k); v != "" {
+			hdr[k] = v
+		}
+	}
+	hdrJSON, err := json.Marshal(hdr)
+	if err != nil {
+		return err
+	}
+	// A non-nil slice, so an empty body is stored as '' and not NULL.
 	res := s.db.WithContext(ctx).Exec(`
 		UPDATE idempotency_keys
-		   SET state = 'completed', response_status = ?, response_body = ?::jsonb
+		   SET state = 'completed', response_status = ?, response_raw = ?, response_headers = ?::jsonb
 		 WHERE key = ? AND user_id = ? AND endpoint = ? AND state = 'in_progress' AND created_at = ?`,
-		r.Status(), r.buf.String(), key, userID, endpoint, createdAt)
+		r.Status(), append([]byte{}, r.buf.Bytes()...), string(hdrJSON), key, userID, endpoint, createdAt)
 	return res.Error
 }
 
