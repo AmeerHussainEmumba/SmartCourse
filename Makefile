@@ -241,7 +241,7 @@ SEED_ADMIN_PASSWORD ?= change-me-admin-password
 # The recipe lines start with @ so make does not echo the admin password.
 seed:
 	@IDENTITY_ADMIN_EMAIL="$(SEED_ADMIN_EMAIL)" IDENTITY_ADMIN_PASSWORD="$(SEED_ADMIN_PASSWORD)" \
-	  docker compose run --rm -T -e IDENTITY_ADMIN_EMAIL -e IDENTITY_ADMIN_PASSWORD identity-api identity-admin
+	  docker compose run --rm -T --no-deps --entrypoint identity-admin -e IDENTITY_ADMIN_EMAIL -e IDENTITY_ADMIN_PASSWORD identity-api
 	@SEED_ADMIN_EMAIL="$(SEED_ADMIN_EMAIL)" SEED_ADMIN_PASSWORD="$(SEED_ADMIN_PASSWORD)" go run ./tools/seed
 
 ## --- Binaries (docs/plans/microservices-split.md) -----------------------
