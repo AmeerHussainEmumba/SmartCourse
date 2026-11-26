@@ -36,6 +36,15 @@ The admin and instructor tradeoffs differ on purpose: an instructor lockout bloc
 
 Cost of `Strict`: after a flush an admin is refused on those routes until the key returns. Identity's re-seeder (`RunTokenVersionReseeder`, 15 s tick, sentinel TTL 10 min) rewrites every version above 1 within one tick (at most about 15 s after the flush, plus Redis and Postgres latency) and does NOT write version 1 (no key is "version 1" for identity-backed routes). An admin at version 1 therefore stays refused on the strict routes until their key is written: login, refresh, or any call to an identity `/me` or admin route with that token (these use `WithSource`, which writes the key back). Refusal is a clean 401 `token_stale`; the client's normal response is to refresh or log in again. Redis being unreachable (not a miss) answers 503 for all variants.
 
+## Accepted limitation: a suspended instructor's token (S-07, S-09)
+
+Owner decision 2026-11-26: documented, not fixed. A suspended or demoted instructor's already-issued access token (at most 15 minutes of life):
+
+- **cannot write.** Course-api's instructor writes use `RequireFreshPrivilege`, which compares the token's version with Redis and refuses the stale one (401 `token_stale`). The exception is a window of up to about 15 s after a Redis flush: the key is gone, a miss reads as version 1, and the stale token writes until identity-worker's re-seeder (`RunTokenVersionReseeder`, 15 s tick) rewrites every version above 1. Once it has, writes are refused again. This is the price of the first row of the table above (a flush must not lock every instructor out of authoring).
+- **can still read their own course analytics** until the token expires. The per-course analytics routes in analytics-api check signature, expiry and role/ownership, not the token version (only the admin issues route does, with `RequireFreshPrivilegeStrict`).
+
+Pinned by `TestAcceptedLimitation_S09_SuspendedInstructorWriteWindowAfterRedisFlush` (`services/course/course`) and `TestAcceptedLimitation_S07_SuspendedInstructorStillReadsOwnCourseAnalyticsUntilTokenExpiry` (`services/analytics/analytics`). If the decision is reopened, those tests change with it. Reversal trigger: a requirement that a suspended instructor lose analytics read access immediately, or that authoring writes survive no Redis loss at all (use `RequireFreshPrivilegeWithSource` with a durable source, which course-api cannot have under ADR-0024).
+
 ## Bounding argon2 concurrency
 
 `ArgonGate` is a semaphore around `HashPassword`/`VerifyPassword`. Each argon2 call allocates `ARGON2_MEMORY_KIB`, so peak memory is about `ARGON2_MAX_CONCURRENT x ARGON2_MEMORY_KIB` however many logins arrive (16 unbounded concurrent logins pinned about 1 GiB). A caller that cannot get a slot within `ARGON2_QUEUE_TIMEOUT`, or whose context ends first, gets `ErrArgonBusy` or the context error and holds nothing; identity maps both to 503 `temporarily_unavailable`.
