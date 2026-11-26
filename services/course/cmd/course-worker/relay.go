@@ -20,12 +20,12 @@ import (
 // (nil keeps log-and-drop for an event the relay gives up on); tracing adds the
 // relay's per-row span observer.
 func buildRelay(db *gorm.DB, cfg *config.Config, pub relay.Publisher, sink relay.DeadLetterSink, tracing bool) *relay.Relay {
-	opts := []relay.Option{relay.WithWorkerCount(cfg.Relay.Workers), relay.WithPublisher(pub)}
+	opts := []relay.Option{relay.WithWorkerCount(cfg.Relay.Workers)}
 	if tracing {
 		opts = append(opts, relay.WithObserver(eventbus.RelayObserver()))
 	}
 	if sink != nil { // a typed-nil sink must not reach the relay as a non-nil interface
 		opts = append(opts, relay.WithDeadLetterSink(sink))
 	}
-	return relay.New(db, opts...)
+	return relay.New(db, pub, opts...)
 }

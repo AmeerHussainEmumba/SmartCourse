@@ -82,7 +82,7 @@ func TestOutbox_ExistingCallerPath_LeavesTraceAndActorNull(t *testing.T) {
 	}
 }
 
-func TestRelay_HandsTraceAndActorToHandler(t *testing.T) {
+func TestRelay_HandsTraceAndActorToPublisher(t *testing.T) {
 	env := setupCourse(t)
 	actor := uuid.New()
 	writeOne(t, env.DB, outbox.Event{
@@ -95,12 +95,11 @@ func TestRelay_HandsTraceAndActorToHandler(t *testing.T) {
 	})
 
 	got := make(chan relay.DecodedEvent, 2)
-	h := func(ctx context.Context, tx *gorm.DB, evt relay.DecodedEvent) error {
+	pub := publisherFunc(func(_ context.Context, evt relay.DecodedEvent) error {
 		got <- evt
 		return nil
-	}
-	rl := relay.New(env.DB, relay.WithPollInterval(20*time.Millisecond))
-	rl.Register(relay.NewHandler("trace-test", []string{"test.relay.traced", "test.relay.plain"}, h))
+	})
+	rl := relay.New(env.DB, pub, relay.WithPollInterval(20*time.Millisecond))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -109,9 +109,8 @@ func StartProduce(ctx context.Context, topic, eventType, eventID string) (contex
 
 // StartRelay continues the trace carried by traceparent (see TraceparentFromIDs)
 // and starts the span of the outbox relay delivering one row. mode is
-// "publish" (kafka transport) or "process" (in-process handlers). The span is
-// INTERNAL: the produce span (StartProduce) or the handlers' spans are its
-// children.
+// "publish" (relay.ModePublish, the only mode now). The span is INTERNAL: the
+// produce span (StartProduce) is its child.
 func StartRelay(ctx context.Context, traceparent, mode, eventType, eventID string) (context.Context, trace.Span) {
 	ctx = ContinueFromEvent(ctx, traceparent)
 	return tracer().Start(ctx, "outbox relay "+mode,

@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Breaking (internal callers only): `ConsumerConfig.OnExhausted` now returns an `error`. nil keeps the old behaviour (the record is dealt with, the offset advances); a non-nil error leaves the record uncommitted so it is redelivered with a fresh budget instead of being skipped. This lets a dead-letter hook whose store is down hold the record rather than drop it (B-06, B-07; the hook in `libs/eventbus` holds until the sink accepts the record or the consumer stops). `TestKafka/ExhaustedHookErrorLeavesTheRecordUncommitted` covers it.
+
 - README: current users after the split (six worker/audit binaries, via `libs/eventbus`); the old "formerly services/worker" user statement is replaced. No code change.
 
 - `topics`: one retry topic per known consumer, `retry.<consumer-name>` (`Retry`, `IsRetry`, `Consumers`, `RetryTopics`, `Provisioned`, `ProvisionedNames`); `Ensure` creates them with the event topics, `EnsureNamed` creates named topics (a consumer uses it for its own retry topic). The compose test now compares the whole provisioned set, and a second test checks every consumer name declared in `services/` has a retry topic. `All`/`Names` still list only the four event topics.

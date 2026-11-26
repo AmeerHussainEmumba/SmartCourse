@@ -8,7 +8,8 @@
 //   - Consumer: a consumer-group runner. Records of one partition are handled
 //     in order, at most MaxInFlight handlers run at once across partitions, an
 //     offset is committed only after its handler returned nil (at-least-once),
-//     a record that keeps failing is handed to OnExhausted and then skipped so
+//     a record that keeps failing is handed to OnExhausted and then skipped (unless
+//     the hook reports it could not deal with it) so
 //     a poison record never stalls its partition (RFC §6.9), and Run drains
 //     in-flight work on cancellation within a deadline.
 //   - Ping: a broker reachability check shaped for a non-fatal readiness probe.

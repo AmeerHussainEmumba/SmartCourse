@@ -92,8 +92,8 @@ func (s *stack) publisher(produceTimeout time.Duration) *eventbus.Publisher {
 func (s *stack) startRelay(pub relay.Publisher, workers int, opts ...relay.Option) (*relay.Relay, func()) {
 	s.t.Helper()
 	base := []relay.Option{relay.WithWorkerCount(workers), relay.WithPollInterval(10 * time.Millisecond),
-		relay.WithPublishBackoff(100 * time.Millisecond), relay.WithPublisher(pub)}
-	rl := relay.New(s.env.DB, append(base, opts...)...)
+		relay.WithPublishBackoff(100 * time.Millisecond)}
+	rl := relay.New(s.env.DB, pub, append(base, opts...)...)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { rl.Run(ctx); close(done) }()
@@ -127,7 +127,7 @@ func (s *stack) startRunner(cfg runnerCfg, handlers ...relay.Handler) (*eventbus
 	if k.ConsumerShutdownTimeout == 0 {
 		k.ConsumerShutdownTimeout = 5 * time.Second
 	}
-	opts := []eventbus.ConsumerOption{eventbus.WithLogger(quiet)}
+	opts := []eventbus.ConsumerOption{eventbus.WithLogger(quiet), eventbus.WithParkBackoff(50*time.Millisecond, 200*time.Millisecond)}
 	if cfg.Sink != nil {
 		opts = append(opts, eventbus.WithSink(cfg.Sink))
 	}

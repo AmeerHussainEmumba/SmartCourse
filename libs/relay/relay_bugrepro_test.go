@@ -1,9 +1,9 @@
-//go:build integration && bugrepro
+//go:build integration
 
-// Reproducers for behaviour defects found by the second adversarial pass
-// (docs/plans/week-3-findings-behaviour.md). They fail today by design.
+// Regression test for B-09 (docs/plans/week-3-findings-behaviour.md), fixed:
+// it began as a bugrepro reproducer that failed by design.
 //
-//	cd libs/relay && go test -tags='integration bugrepro' -run Bugrepro .
+//	cd libs/relay && go test -tags=integration -run Bugrepro .
 package relay_test
 
 import (
@@ -43,8 +43,8 @@ func TestBugrepro_RowsPublishedAfterATransientFailure_AreNeverPruned(t *testing.
 		}
 		return nil
 	})
-	rl := relay.New(env.DB, relay.WithWorkerCount(2), relay.WithPollInterval(10*time.Millisecond),
-		relay.WithPublishBackoff(50*time.Millisecond), relay.WithPublisher(pub))
+	rl := relay.New(env.DB, pub, relay.WithWorkerCount(2), relay.WithPollInterval(10*time.Millisecond),
+		relay.WithPublishBackoff(50*time.Millisecond))
 	stop := startRelay(rl)
 	defer stop()
 	eventually(t, 15*time.Second, "every row published", func() bool { return unpublished(t, env.DB) == 0 })

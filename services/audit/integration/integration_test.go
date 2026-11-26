@@ -18,6 +18,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"gorm.io/gorm"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
@@ -123,7 +124,16 @@ func (s *stack) count(q string, args ...any) int64 {
 
 // eventOf is a valid event of type tp (an empty payload message is valid).
 func eventOf(tp events.Type, actor *uuid.UUID) relay.DecodedEvent {
-	payload, _ := protojson.Marshal(tp.New())
+	msg := tp.New()
+	// The codec refuses a payload that sets none of the event's fields (B-04), so
+	// give every string field (the ids) a value.
+	fields := msg.ProtoReflect().Descriptor().Fields()
+	for i := 0; i < fields.Len(); i++ {
+		if f := fields.Get(i); f.Kind() == protoreflect.StringKind && !f.IsList() && !f.IsMap() {
+			msg.ProtoReflect().Set(f, protoreflect.ValueOfString(uuid.NewString()))
+		}
+	}
+	payload, _ := protojson.Marshal(msg)
 	return relay.DecodedEvent{
 		EventID: uuid.New(), AggregateType: "agg", AggregateID: uuid.New(), EventType: tp.EventType,
 		Payload: payload, OccurredAt: time.Now().UTC(), TraceID: "trace", ActorID: actor,

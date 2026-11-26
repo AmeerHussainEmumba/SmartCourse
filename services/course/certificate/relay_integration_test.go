@@ -19,6 +19,7 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay/relaytest"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/certificate"
 )
@@ -41,10 +42,7 @@ func writeCompleted(t *testing.T, db *gorm.DB, enrollmentID, studentID uuid.UUID
 // outbox row is published, or fails the test after 10s.
 func runRelayUntilDrained(t *testing.T, db *gorm.DB, workers int) {
 	t.Helper()
-	rl := relay.New(db, relay.WithWorkerCount(workers), relay.WithPollInterval(20*time.Millisecond), relay.WithMaxAttempts(2))
-	for _, h := range certificate.Handlers() {
-		rl.Register(h)
-	}
+	rl := relay.New(db, relaytest.DeliverTo(db, certificate.Handlers()...), relay.WithWorkerCount(workers), relay.WithPollInterval(20*time.Millisecond), relay.WithMaxAttempts(2))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { rl.Run(ctx); close(done) }()

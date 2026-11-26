@@ -20,8 +20,9 @@ const pruneBatch = 1000
 // whatever its age: that row is still owed to its consumers. It also keeps any
 // row with a last_error. The relay marks a row it gave up on as published with
 // its last_error set, and until a dead-letter store exists (relay.recordFailure)
-// that row is the only record of the failure; a row that failed and later
-// succeeded keeps its last_error too, so those stay as well. Both are rare.
+// that row is the only record of the failure, so those stay. A row that failed
+// and later succeeded does not keep a last_error: the relay clears it on
+// success (B-09), so such a row is pruned like any other.
 //
 // olderThan must be positive: zero would delete every published row.
 func Prune(ctx context.Context, db *gorm.DB, olderThan time.Duration) (int64, error) {

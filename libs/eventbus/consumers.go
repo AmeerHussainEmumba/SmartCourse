@@ -27,13 +27,14 @@ import (
 
 const (
 	// handleTimeout bounds one handler call (decode, transaction, handler), the
-	// same 30 s the in-process relay gives a row. A handler stuck past it fails
+	// same 30 s the relay gives a row. A handler stuck past it fails
 	// the attempt instead of holding its partition forever.
 	handleTimeout = 30 * time.Second
-	// parkTries is how often OnExhausted tries the sink before it gives up and
-	// logs the event: the kafka runner advances the offset whatever the hook
-	// does (libs/kafka README), so the retries are all the protection there is.
-	parkTries = 3
+	// parkBackoffBase and parkBackoffMax bound the pause between two tries of a
+	// sink that refuses a record (doubling from the base up to the cap): the hold
+	// polls a downed sink at a bounded rate, not in a hot loop.
+	parkBackoffBase = 200 * time.Millisecond
+	parkBackoffMax  = 30 * time.Second
 	// restartBackoff separates restarts of a consumer whose Run returned an error.
 	restartBackoff = 2 * time.Second
 )
@@ -51,6 +52,9 @@ type consumerSettings struct {
 	BackoffMax      time.Duration
 	ShutdownTimeout time.Duration
 	Sink            relay.DeadLetterSink
+	// ParkBackoffBase and ParkBackoffMax override the sink retry pause (tests).
+	ParkBackoffBase time.Duration
+	ParkBackoffMax  time.Duration
 	Logger          *slog.Logger
 	Tracing         bool
 	Metrics         *telemetry.Metrics
@@ -59,10 +63,19 @@ type consumerSettings struct {
 // ConsumerOption tunes NewConsumers.
 type ConsumerOption func(*consumerSettings)
 
-// WithSink sets where a record whose handler used its budget is parked. Without
-// one the record is logged and dropped, which is the documented gap
+// WithSink sets where a record whose handler used its budget is parked. A sink
+// that refuses the record makes the consumer HOLD it (retrying with backoff, the
+// offset not advanced) until the sink accepts it or the consumer stops, so an
+// outage of the sink delays events and never loses them (see Consumers). Without
+// a sink the record is logged and dropped, which is the documented gap
 // (relay.DeadLetterSink).
 func WithSink(s relay.DeadLetterSink) ConsumerOption { return func(c *consumerSettings) { c.Sink = s } }
+
+// WithParkBackoff sets the pause between two tries of a sink that refuses a
+// held record: it starts at base and doubles up to max (defaults 200ms and 30s).
+func WithParkBackoff(base, max time.Duration) ConsumerOption {
+	return func(c *consumerSettings) { c.ParkBackoffBase, c.ParkBackoffMax = base, max }
+}
 
 // WithLogger sets the logger (default slog.Default()).
 func WithLogger(l *slog.Logger) ConsumerOption { return func(c *consumerSettings) { c.Logger = l } }
@@ -91,7 +104,7 @@ type deliverFunc func(ctx context.Context, h relay.Handler, evt relay.DecodedEve
 // offset commit, so a replay that was already applied is absorbed by
 // processed_events.
 // Each record is decoded to a relay.DecodedEvent and given to
-// relay.Deliver, the code the in-process relay uses, so the handler runs in a
+// relay.Deliver, so the handler runs in a
 // transaction that also writes processed_events, and only when that commits does
 // libs/kafka commit the offset. A handler that fails past MaxAttempts is parked
 // through the sink and the offset advances, so a poison record never stalls its
@@ -111,6 +124,9 @@ type Consumers struct {
 	log     *slog.Logger
 
 	parkFailures atomic.Int64
+	// held is the number of records currently held because the sink refuses
+	// them (see exhausted).
+	held atomic.Int64
 
 	mu    sync.Mutex
 	stats map[string]kafka.Stats
@@ -242,7 +258,7 @@ func (r *Consumers) runGroup(ctx context.Context, g group) {
 			Topics:          g.topics,
 			ClientID:        "smartcourse-" + g.name,
 			Handler:         func(ctx context.Context, rec kafka.Record) error { return r.handle(ctx, g, rec) },
-			OnExhausted:     func(ctx context.Context, rec kafka.Record, err error) { r.exhausted(ctx, g, rec, err) },
+			OnExhausted:     func(ctx context.Context, rec kafka.Record, err error) error { return r.exhausted(ctx, g, rec, err) },
 			MaxInFlight:     r.cfg.MaxInFlight,
 			MaxAttempts:     r.cfg.MaxAttempts,
 			Backoff:         kafka.BackoffConfig{Base: r.cfg.BackoffBase, Max: r.cfg.BackoffMax, Jitter: kafka.DefaultBackoff.Jitter},
@@ -280,7 +296,7 @@ func (r *Consumers) runGroup(ctx context.Context, g group) {
 
 // handle is the kafka.Handler for one consumer group: decode, then run every
 // handler of the group that registered for the event type through
-// relay.Deliver (as the in-process relay does; a record whose type no handler of
+// relay.Deliver (a record whose type no handler of
 // the group registered for is skipped, since the topic carries other types). One
 // handler's failure does not stop the others for this record; a retry re-runs
 // them all, and Deliver's processed_events check makes the finished ones no-ops.
@@ -381,12 +397,27 @@ func (r *Consumers) LagGauges(m *telemetry.Metrics) (telemetry.GaugeCollector, f
 	}), lr.Close, nil
 }
 
-// exhausted parks a record whose handler used its budget. The offset advances
-// when it returns whatever happens (libs/kafka), so it retries the sink a few
-// times and, if the sink stays down, logs the event in full and counts the
-// failure: that is the one remaining way an event leaves the stream unparked,
-// and it is loud.
-func (r *Consumers) exhausted(ctx context.Context, g group, rec kafka.Record, cause error) {
+// exhausted parks a record whose handler used its budget, and does not let the
+// record go until it is parked.
+//
+// When the sink refuses the record (the dead-letter store is down, for example
+// MongoDB during an outage: B-06, B-07) the record is HELD: this partition's
+// worker keeps retrying the sink with a doubling pause (parkBackoffBase up to
+// parkBackoffMax) and the offset does not advance, so the event is neither
+// committed past nor dropped, and the records behind it on the partition wait
+// (order is kept). The hold ends when the sink accepts the record, or when ctx is
+// done (the consumer is stopping): then exhausted returns an error, libs/kafka
+// leaves the record uncommitted and the next consumer of the group gets it again
+// with a fresh retry budget. Memory is bounded (one record per held partition);
+// the rate of sink calls and of log lines is bounded by the backoff cap.
+//
+// Observable: every refusal is counted (ParkFailures) and logged at ERROR with
+// the elapsed hold time and the record's coordinates; HeldRecords is the number
+// of records held right now, which is non-zero exactly while a sink outage is
+// stalling partitions; the consumer's lag grows meanwhile (kafka_consumer_lag).
+//
+// With no sink the record is logged in full and dropped: the documented gap.
+func (r *Consumers) exhausted(ctx context.Context, g group, rec kafka.Record, cause error) error {
 	// The sink sees the record's coordinates as a handler does (the audit sink
 	// stores them with the parked event).
 	ctx = relay.WithSource(ctx, recordSource(rec))
@@ -395,29 +426,59 @@ func (r *Consumers) exhausted(ctx context.Context, g group, rec kafka.Record, ca
 		r.log.Error("kafka consumer gave up on a record; no dead-letter sink is configured, the record is dropped",
 			slog.String("consumer", g.name), slog.String("topic", rec.Topic), slog.Int("partition", int(rec.Partition)),
 			slog.Int64("offset", rec.Offset), slog.String("event_id", d.Event.EventID.String()), slog.Any("error", cause))
-		return
+		return nil
 	}
-	var err error
-	for i := 0; i < parkTries; i++ {
-		if err = parkSafely(ctx, r.cfg.Sink, d); err == nil {
+	base, maxPause := r.cfg.ParkBackoffBase, r.cfg.ParkBackoffMax
+	if base <= 0 {
+		base = parkBackoffBase
+	}
+	if maxPause <= 0 {
+		maxPause = parkBackoffMax
+	}
+	start := time.Now()
+	pause := base
+	holding := false
+	defer func() {
+		if holding {
+			r.held.Add(-1)
+		}
+	}()
+	for {
+		err := parkSafely(ctx, r.cfg.Sink, d)
+		if err == nil {
 			r.count(g.name, telemetry.OutcomeDeadLetter)
+			if holding {
+				r.log.Warn("kafka consumer parked a held record after the dead-letter sink recovered",
+					slog.String("consumer", g.name), slog.String("event_id", d.Event.EventID.String()),
+					slog.Duration("held_for", time.Since(start)))
+			}
 			r.log.Warn("kafka consumer parked a record in the dead-letter sink",
 				slog.String("consumer", g.name), slog.String("event_id", d.Event.EventID.String()),
 				slog.String("event_type", d.Event.EventType), slog.Any("error", cause))
-			return
+			return nil
 		}
+		r.parkFailures.Add(1)
+		if !holding {
+			holding = true
+			r.held.Add(1)
+		}
+		r.log.Error("kafka consumer cannot park a record; holding it (offset not advanced) until the dead-letter sink accepts it",
+			slog.String("consumer", g.name), slog.String("topic", rec.Topic), slog.Int("partition", int(rec.Partition)),
+			slog.Int64("offset", rec.Offset), slog.String("event_id", d.Event.EventID.String()),
+			slog.String("event_type", d.Event.EventType), slog.Duration("held_for", time.Since(start)),
+			slog.Duration("next_try_in", pause), slog.Any("handler_error", cause), slog.Any("park_error", err))
+		t := time.NewTimer(pause)
 		select {
 		case <-ctx.Done():
-			i = parkTries
-		case <-time.After(time.Duration(i+1) * 200 * time.Millisecond):
+			t.Stop()
+			r.log.Error("kafka consumer stopped while holding a record the dead-letter sink refused; it stays uncommitted and is redelivered",
+				slog.String("consumer", g.name), slog.String("topic", rec.Topic), slog.Int("partition", int(rec.Partition)),
+				slog.Int64("offset", rec.Offset), slog.String("event_id", d.Event.EventID.String()))
+			return fmt.Errorf("dead-letter sink refused the record and the consumer is stopping: %w", err)
+		case <-t.C:
 		}
+		pause = min(pause*2, maxPause)
 	}
-	r.parkFailures.Add(1)
-	r.log.Error("kafka consumer could not park a record; it is skipped and only this log keeps it",
-		slog.String("consumer", g.name), slog.String("topic", rec.Topic), slog.Int("partition", int(rec.Partition)),
-		slog.Int64("offset", rec.Offset), slog.String("event_id", d.Event.EventID.String()),
-		slog.String("event_type", d.Event.EventType), slog.String("payload", string(d.Event.Payload)),
-		slog.Any("handler_error", cause), slog.Any("park_error", err))
 }
 
 func (r *Consumers) attempts() int {
@@ -467,8 +528,12 @@ func stubEvent(rec kafka.Record) relay.DecodedEvent {
 	return evt
 }
 
-// ParkFailures counts records the sink refused on every try.
+// ParkFailures counts the times the sink refused a record (each refused try).
 func (r *Consumers) ParkFailures() int64 { return r.parkFailures.Load() }
+
+// HeldRecords is the number of records held right now because the dead-letter
+// sink refuses them: each stalls its partition until the sink recovers.
+func (r *Consumers) HeldRecords() int64 { return r.held.Load() }
 
 // Stats returns each consumer's counters (the last run's, once it has stopped).
 func (r *Consumers) Stats() map[string]kafka.Stats {

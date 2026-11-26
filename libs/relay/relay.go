@@ -1,21 +1,13 @@
-// Package relay is the bounded worker pool that drains
-// libs/outbox and dispatches each event to every registered
-// handler (RFC §6.3, ADR-0006) — the piece that turns "an event was
-// recorded" into "an event was acted on." It's where SmartCourse.md §7's
-// worker-pool requirements (fixed-size pool, job queue, graceful shutdown,
-// retry, backpressure) are demonstrated against real, useful work, not a
-// synthetic example: without this package, every outbox row written by
-// identity/course/enrollment/progress just accumulates, unread.
+// Package relay is the publish-only outbox relay (ADR-0029, ADR-0033): a
+// bounded worker pool that drains a service's outbox and hands each row to a
+// Publisher, marking it published only once the Publisher returned nil. The
+// handlers that act on events run elsewhere, in Kafka consumers
+// (libs/eventbus), through Deliver. This package imports no Kafka client: the
+// Publisher is the seam, implemented by libs/eventbus.
 //
-// In the per-service topology (ADR-0033) every relay is built WithPublisher
-// (ADR-0029): the per-row step is "hand the row to a Publisher and mark it
-// published only once the Publisher returned nil", and the handlers are run by
-// Kafka consumers in libs/eventbus, through Deliver. This package imports no
-// Kafka client: the Publisher is the seam, implemented by libs/eventbus.
-//
-// A Relay built without WithPublisher still runs registered handlers
-// in-process (the original ADR-0021 behaviour, superseded by ADR-0033). No
-// service uses that path; it remains only in this library and its tests.
+// There is no in-process mode. The original ADR-0021 design, in which the relay
+// ran registered handlers inside its claim transaction, was superseded by
+// ADR-0033 and removed; New requires a Publisher.
 package relay
 
 import (
@@ -63,9 +55,9 @@ type HandlerFunc func(ctx context.Context, tx *gorm.DB, evt DecodedEvent) error
 
 // Handler is one named consumer's reaction to a set of event types.
 // Multiple Handlers can register for the same event type — RFC §6.5's
-// consumer table shows real events read by several consumers each (e.g.
-// StudentEnrolled read by analytics, search, and notifications); this is
-// the fan-out that makes that true here too.
+// consumer table shows real events read by several consumers each. The relay
+// does not run them: libs/eventbus builds one Kafka consumer group per
+// ConsumerName and runs the handler through Deliver.
 type Handler struct {
 	ConsumerName string
 	EventTypes   map[string]bool
@@ -87,10 +79,7 @@ type Relay struct {
 	workerCount  int
 	maxAttempts  int
 
-	handlers []Handler
-
-	// publisher, when set, switches the relay to publish mode (ADR-0029): the
-	// per-row step publishes instead of running handlers.
+	// publisher receives each claimed row (ADR-0029). Always set.
 	publisher Publisher
 	// publishBackoff is how long a row whose publish failed for a transient
 	// reason (broker down) is left alone by this instance.
@@ -98,10 +87,8 @@ type Relay struct {
 	// sink receives events the relay gives up on, before they are dropped.
 	// Nil keeps the log-and-drop behaviour (see DeadLetterSink).
 	sink DeadLetterSink
-	// observer and handlerHook are the observability seams (see Observer);
-	// nil means none.
-	observer    Observer
-	handlerHook HandlerHook
+	// observer is the observability seam (see Observer); nil means none.
+	observer Observer
 
 	// cooldown is process-local (RFC §10.3): rows THIS instance just failed
 	// to deliver and when it may retry them, so a failing row is not
@@ -123,11 +110,6 @@ func WithBatchSize(n int) Option              { return func(r *Relay) { r.batchS
 func WithWorkerCount(n int) Option            { return func(r *Relay) { r.workerCount = n } }
 func WithMaxAttempts(n int) Option            { return func(r *Relay) { r.maxAttempts = n } }
 
-// WithPublisher switches the relay to publish mode (ADR-0029). Registered
-// handlers are then not run by the relay: consumers run them from the broker.
-// A nil publisher keeps the legacy in-process delivery (unused by any service).
-func WithPublisher(p Publisher) Option { return func(r *Relay) { r.publisher = p } }
-
 // WithPublishBackoff sets how long a row that failed to publish for a
 // transient reason is left alone by this instance (default 1s).
 func WithPublishBackoff(d time.Duration) Option { return func(r *Relay) { r.publishBackoff = d } }
@@ -139,16 +121,19 @@ func WithDeadLetterSink(s DeadLetterSink) Option { return func(r *Relay) { r.sin
 // WithObserver installs the per-row delivery observer (see Observer).
 func WithObserver(o Observer) Option { return func(r *Relay) { r.observer = o } }
 
-// WithHandlerHook installs the per-handler outcome hook (see HandlerHook).
-func WithHandlerHook(h HandlerHook) Option { return func(r *Relay) { r.handlerHook = h } }
-
-// New builds a Relay. Defaults match RFC §6.3 (200ms poll interval) and
+// New builds a Relay that publishes through pub. A nil pub is a
+// programming error and panics with a message that says so: there is no mode in
+// which the relay runs without a Publisher. Defaults match RFC §6.3 (200ms poll interval) and
 // §10.2 (pool sizes bounded by the database connection budget, not CPU —
 // 4 workers is conservative for a single relay instance sharing a pool
 // with the API).
-func New(db *gorm.DB, opts ...Option) *Relay {
+func New(db *gorm.DB, pub Publisher, opts ...Option) *Relay {
+	if pub == nil {
+		panic("relay.New: a nil Publisher; the relay only publishes (ADR-0033), there is no in-process mode")
+	}
 	r := &Relay{
 		db:           db,
+		publisher:    pub,
 		pollInterval: 200 * time.Millisecond,
 		batchSize:    100,
 		workerCount:  4,
@@ -162,19 +147,6 @@ func New(db *gorm.DB, opts ...Option) *Relay {
 	}
 	return r
 }
-
-func (r *Relay) Register(h Handler) {
-	r.handlers = append(r.handlers, h)
-}
-
-// Handlers returns the registered handlers. In publish mode the
-// service's consumers (libs/eventbus) are built from these handlers.
-func (r *Relay) Handlers() []Handler {
-	return append([]Handler(nil), r.handlers...)
-}
-
-// Publishing reports whether the relay is in publish mode.
-func (r *Relay) Publishing() bool { return r.publisher != nil }
 
 // ParkFailures counts the times the dead-letter sink refused an event; the
 // event's row stays unpublished each time.
@@ -196,7 +168,8 @@ func (r *Relay) Stats() (processed, failed, givenUp int64) {
 // Shutdown is graceful (§7 — "Graceful worker shutdown"): on cancellation,
 // workers stop claiming new rows and a sync.WaitGroup blocks Run's return
 // until every worker finishes the event it is on. A kill mid-job is still
-// safe (at-least-once delivery + idempotent handlers), just wasteful.
+// safe (at-least-once publishing, consumers dedupe through processed_events),
+// just wasteful.
 func (r *Relay) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 	for i := 0; i < r.workerCount; i++ {
@@ -214,12 +187,11 @@ func (r *Relay) Run(ctx context.Context) {
 
 // worker claims ONE unpublished row at a time inside its own transaction and
 // keeps that transaction (and so the FOR UPDATE row lock) open until the
-// handlers have run and the row is marked published (or its attempt count
+// Publisher has returned and the row is marked published (or its attempt count
 // and last_error recorded). This is what makes SKIP LOCKED actually protect
 // processing across replicas (ADR-0006, F-04): a second replica skips the
-// row for as long as the first is handling it. The pool is bounded by
-// workerCount (each worker holds one connection for the claim plus the
-// handlers' own transactions), and backpressure is structural: a worker
+// row for as long as the first is publishing it. The pool is bounded by
+// workerCount (each worker holds one connection for the claim), and backpressure is structural: a worker
 // takes no new row until it finishes the current one.
 //
 // Graceful shutdown: ctx only stops a worker from claiming NEW rows. Once a
@@ -287,15 +259,13 @@ func (r *Relay) claimAndProcess(ctx context.Context) (claimed bool, err error) {
 		q += ` AND id NOT IN ?`
 		args = append(args, skip)
 	}
-	if r.publisher != nil {
-		// Publish mode keeps per-aggregate order (ADR-0029): a row is only
-		// claimable while no earlier row of its aggregate is unpublished. An
-		// earlier row that another worker holds (not yet acknowledged), one
-		// in cooldown, or one that failed all keep their successors back, so
-		// two workers never produce the same key concurrently and a retry
-		// cannot be overtaken. Other aggregates are not held up.
-		q += ` AND NOT EXISTS (SELECT 1 FROM outbox e WHERE e.aggregate_id = o.aggregate_id AND e.published_at IS NULL AND e.id < o.id)`
-	}
+	// Per-aggregate order (ADR-0029): a row is only claimable while no earlier
+	// row of its aggregate is unpublished. An earlier row that another worker
+	// holds (not yet acknowledged), one in cooldown, or one that failed all keep
+	// their successors back, so two workers never produce the same key
+	// concurrently and a retry cannot be overtaken. Other aggregates are not
+	// held up.
+	q += ` AND NOT EXISTS (SELECT 1 FROM outbox e WHERE e.aggregate_id = o.aggregate_id AND e.published_at IS NULL AND e.id < o.id)`
 	q += ` ORDER BY id LIMIT 1 FOR UPDATE OF o SKIP LOCKED`
 	var rows []outboxRow
 	if err := tx.Raw(q, args...).Scan(&rows).Error; err != nil {
@@ -315,17 +285,8 @@ func (r *Relay) claimAndProcess(ctx context.Context) (claimed bool, err error) {
 	// dctx is workCtx with whatever the observer attached (a span continuing
 	// the row's trace); everything that runs "for" the event uses it, while the
 	// claim transaction keeps workCtx.
-	mode := ModeProcess
-	if r.publisher != nil {
-		mode = ModePublish
-	}
-	dctx, finish := r.observe(workCtx, evt, mode)
-	var failures []consumerFailure
-	if r.publisher != nil {
-		failures = r.publish(dctx, evt)
-	} else {
-		failures = r.process(dctx, evt)
-	}
+	dctx, finish := r.observe(workCtx, evt, ModePublish)
+	failures := r.publish(dctx, evt)
 	if len(failures) > 0 {
 		errs := make([]error, len(failures))
 		for i, f := range failures {
@@ -335,7 +296,10 @@ func (r *Relay) claimAndProcess(ctx context.Context) (claimed bool, err error) {
 		err = r.recordFailure(dctx, tx, evt, failures)
 	} else {
 		finish(nil)
-		err = tx.Exec(`UPDATE outbox SET published_at = ? WHERE id = ?`, time.Now().UTC(), evt.OutboxID).Error
+		// last_error is cleared: it describes a failure the row got past, and a
+		// stale one would make outbox.Prune keep the row forever (B-09). A row the
+		// relay gave up on keeps its last_error (see recordFailure).
+		err = tx.Exec(`UPDATE outbox SET published_at = ?, last_error = NULL WHERE id = ?`, time.Now().UTC(), evt.OutboxID).Error
 		if err == nil {
 			r.processed.Add(1)
 		}
@@ -386,28 +350,6 @@ func (r *Relay) publish(ctx context.Context, evt DecodedEvent) (failures []consu
 		return []consumerFailure{{RelayConsumer, err}}
 	}
 	return nil
-}
-
-// process runs every registered handler for evt.EventType and returns the
-// failures. One handler's failure doesn't block another's (RFC §4.6): each
-// runs in its own transaction with its own idempotency check.
-func (r *Relay) process(ctx context.Context, evt DecodedEvent) []consumerFailure {
-	var failures []consumerFailure
-	for _, h := range r.handlers {
-		if !h.EventTypes[evt.EventType] {
-			continue
-		}
-		duplicate, err := DeliverEvent(ctx, r.db, h, evt)
-		r.hook(h.ConsumerName, duplicate, err)
-		if err != nil {
-			failures = append(failures, consumerFailure{h.ConsumerName, err})
-			r.failed.Add(1)
-			eventLog(ctx, evt).Error("relay handler failed",
-				slog.String("consumer", h.ConsumerName), slog.String("event_type", evt.EventType),
-				slog.Int64("outbox_id", evt.OutboxID), slog.Any("error", err))
-		}
-	}
-	return failures
 }
 
 const maxLastErrorLen = 2000
@@ -515,20 +457,6 @@ func (r *Relay) observe(ctx context.Context, evt DecodedEvent, mode string) (oct
 		}()
 		fin(err)
 	}
-}
-
-// hook reports one handler's outcome to the HandlerHook, shielding the relay
-// from a panic in it.
-func (r *Relay) hook(consumer string, duplicate bool, err error) {
-	if r.handlerHook == nil {
-		return
-	}
-	defer func() {
-		if p := recover(); p != nil {
-			slog.Error("relay handler hook panicked", slog.Any("panic", p))
-		}
-	}()
-	r.handlerHook(consumer, duplicate, err)
 }
 
 func deref(s *string) string {
