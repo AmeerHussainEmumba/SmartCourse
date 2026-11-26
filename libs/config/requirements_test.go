@@ -89,7 +89,7 @@ func TestLoadWith_UnrequestedGroupIsNotValidated(t *testing.T) {
 	for want, need := range map[string]Requirements{
 		"JWT_SIGNING_KEY must be at least 32 bytes": {JWT: true},
 		"ARGON2_ITERATIONS must be between":         {Argon: true},
-		"POSTGRES_MAX_OPEN_CONNS":                   {Postgres: true},
+		"POSTGRES_MAX_OPEN_CONNS":                   {Postgres: true, Relay: true},
 	} {
 		_, err := LoadWith(need)
 		if err == nil || !strings.Contains(err.Error(), want) {

@@ -58,3 +58,17 @@ func TestLoad_RelayWorkers_RangeAndDefault(t *testing.T) {
 		}
 	}
 }
+
+// A binary that runs no relay (an API, the identity-admin CLI) is not held to
+// the 2 x RELAY_WORKERS floor: a small pool there is valid.
+func TestLoadWith_NoRelay_SmallPoolIsAccepted(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("POSTGRES_MAX_OPEN_CONNS", "2")
+	t.Setenv("RELAY_WORKERS", "4")
+	if _, err := LoadWith(Requirements{Postgres: true, Redis: true, Argon: true}); err != nil {
+		t.Fatalf("a binary without a relay was held to the relay pool floor: %v", err)
+	}
+	if _, err := LoadWith(Requirements{Postgres: true, Redis: true, Argon: true, Relay: true}); err == nil || !strings.Contains(err.Error(), "ADR-0027") {
+		t.Fatalf("a relay binary with a pool of 2 for 4 workers must be rejected, got %v", err)
+	}
+}

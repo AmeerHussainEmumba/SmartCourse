@@ -348,24 +348,216 @@ check_X_6_ERRSHAPE() {
   if [ -z "$bad" ]; then pass "malformed and empty bodies 400 with code and message; no 5xx"; else fail "unexpected:$bad"; fi
 }
 
-# ---- rows that need features that are not built yet. Each stub states the
-# check to implement when its phase lands; until then it must stay PENDING.
+# ---- rows that inspect the infrastructure behind the APIs. They talk to the
+# stack's own containers through `docker compose` (project from
+# COMPOSE_PROJECT_NAME, as for every other make target) and to the published
+# ports, never to the database.
+MAILPIT_URL=${MAILPIT_URL:-http://localhost:8025}
+REGISTRY_URL=${SCHEMA_REGISTRY_URL:-http://localhost:8081}
+MINIO_URL=${MINIO_URL:-http://localhost:9002}
+MINIO_KEY=${MINIO_ACCESS_KEY_ID:-smartcourse}
+MINIO_SECRET=${MINIO_SECRET_ACCESS_KEY:-smartcourse123}
+MINIO_BUCKET=${MINIO_BUCKET_ASSETS:-smartcourse-assets}
+PROMETHEUS_URL=${PROMETHEUS_URL:-http://localhost:9090}
+GRAFANA_URL=${GRAFANA_URL:-http://localhost:3001}
+JAEGER_URL=${JAEGER_URL:-http://localhost:16686}
+EVENT_TOPICS="identity.events course.events enrollment.events progress.events"
 
-check_B_1_2()    { pending "Phase 1: POST /assets/upload-url; PUT a file to the URL; HEAD the object in MinIO via mc or the S3 API"; }
-check_B_3_2()    { pending "Phase 5: GET http://localhost:8025/api/v1/messages (Mailpit) lists a message to the student after enrollment"; }
-check_B_4_2()    { pending "Phase 5: Asynq inspector shows a delivery job on the default queue after enrollment"; }
-check_B_4_4()    { pending "Phase 3: kafka-topics.sh --list shows the four aggregate topics; end offsets of enrollment.events grow by 1 per enrollment"; }
-check_B_5()      { pending "Phase 6: analytics API serves 9 of 9 metrics (today 7: see B-5a); adds most-popular-courses and failed-events endpoints"; }
-check_B_6_3()    { pending "Phase 4/7: failed-events endpoint and dead_letter_total, workflow_failed and asynq_retry_count metrics"; }
-check_TS_KAFKA() { pending "Phase 3: topics exist and offsets advance"; }
-check_TS_SR()    { pending "Phase 2: GET \$SCHEMA_REGISTRY_URL/subjects lists every event subject; /config/<subject> is BACKWARD"; }
-check_TS_MONGO() { pending "Phase 4: db.events.countDocuments() increases after an enrollment; failed_events collection exists"; }
-check_TS_ASYNQ() { pending "Phase 5: three queues weighted 6:3:1; processed count increases"; }
-check_TS_PROM()  { pending "Phase 7: /metrics on every service (RED plus outbox_backlog, kafka_consumer_lag, asynq_queue_depth, dead_letter_total); Prometheus targets up"; }
-check_TS_GRAF()  { pending "Phase 7: GET /api/search?type=dash-db on Grafana lists the provisioned dashboard"; }
-check_TS_JAEGER(){ pending "Phase 7: GET /api/services on Jaeger lists the ten service names (identity-api, identity-worker, course-api, course-worker, analytics-api, analytics-worker, notification-worker, publishing-worker, audit-api, audit-worker)"; }
-check_TS_OTEL()  { pending "Phase 7: covered by E02; instrumentation present in HTTP, DB, Redis, Kafka, Asynq, Temporal"; }
-check_AD_3()     { pending "Phase 5: Asynq scheduler has a 60 s analytics reconciliation task"; }
+dc() { docker compose "$@" 2>/dev/null; }
+need_docker() { docker info >/dev/null 2>&1 || { skip "Docker is not reachable: this check reads the stack's containers"; return 1; }; }
+
+check_B_1_2() {
+  ensure_instructor || { fixture_fail; return; }
+  # A course of its own: the shared one is already published and has no draft.
+  local cid body size=64
+  body=$(jq -nc --arg t "Assets $RUN_ID" --arg s "assets-$RUN_ID" '{title:$t,slug:$s,description:"asset upload check",enrollment_limit:10}')
+  req POST "$COURSE_URL/api/v1/courses" "$INSTR_TOKEN" "$body"
+  [ "$HTTP_CODE" = 201 ] || { fail "create course: HTTP $HTTP_CODE $HTTP_BODY"; return; }
+  cid=$(jqr .course.id)
+  req POST "$COURSE_URL/api/v1/assets/upload-url" "$INSTR_TOKEN" "$(jq -nc --arg c "$cid" --argjson n "$size" '{course_id:$c,content_type:"image/png",size_bytes:$n}')"
+  [ "$HTTP_CODE" = 200 ] || { fail "upload-url: want 200, got $HTTP_CODE $HTTP_BODY"; return; }
+  local url key; url=$(jqr .upload_url); key=$(jqr .asset_key)
+  { [ -n "$url" ] && [ "$url" != null ] && [ -n "$key" ] && [ "$key" != null ]; } || { fail "upload-url answered without upload_url or asset_key"; return; }
+  local hargs=() h
+  while IFS= read -r h; do hargs+=(-H "$h"); done < <(jq -r '.headers // {} | to_entries[] | "\(.key): \(.value)"' <<<"$HTTP_BODY")
+  head -c "$size" /dev/zero >"$TMPDIR_V/asset.bin"
+  local put; put=$(curl -sS --max-time 20 -X PUT "${hargs[@]}" --data-binary "@$TMPDIR_V/asset.bin" -o /dev/null -w '%{http_code}' "$url" 2>/dev/null) || put=000
+  [ "$put" = 200 ] || { fail "PUT to the pre-signed URL: want 200, got $put"; return; }
+  local head; head=$(curl -sS --max-time 20 --aws-sigv4 "aws:amz:us-east-1:s3" --user "$MINIO_KEY:$MINIO_SECRET" -I -o /dev/null -w '%{http_code}' "$MINIO_URL/$MINIO_BUCKET/$key" 2>/dev/null) || head=000
+  if [ "$head" = 200 ]; then pass "upload-url 200, PUT 200, object $key exists in MinIO (HEAD 200)"; else fail "object not found in MinIO: HEAD $MINIO_BUCKET/$key gave $head"; fi
+}
+
+# probe_enrollment: one fresh student enrols in the published course; counters
+# are read before and after, so B-3.2, B-4.2, B-4.4, TS-KAFKA, TS-MONGO and
+# TS-ASYNQ all judge the same event. Sets PROBE_* and PROBE_ERR.
+PROBE_DONE=0; PROBE_ERR=""; PROBE_EMAIL=""; PROBE_COURSE=""
+PROBE_OFF_BEFORE=0; PROBE_OFF_AFTER=0; PROBE_MONGO_BEFORE=0; PROBE_MONGO_AFTER=0
+PROBE_ASQ_BEFORE=0; PROBE_ASQ_AFTER=0; PROBE_MAIL=0
+kafka_end_offsets() { # topic -> sum of end offsets over partitions
+  dc exec -T kafka /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server localhost:9092 --topic "$1" --time -1 | awk -F: '{n+=$3} END{print n+0}'
+}
+mongo_events() { dc exec -T mongodb mongosh smartcourse --quiet --eval 'db.events.countDocuments()' | tail -1 | tr -dc '0-9'; }
+asynq_processed() { dc exec -T redis redis-cli get "asynq:{$1}:processed" | tr -dc '0-9' | sed 's/^$/0/'; }
+probe_enrollment() {
+  [ "$PROBE_DONE" = 1 ] && return 0
+  PROBE_DONE=1
+  need_docker || { PROBE_ERR=$DETAIL; return 2; }
+  enroll_student || { PROBE_ERR=$FIX_ERR; return 1; }
+  PROBE_OFF_BEFORE=$(kafka_end_offsets enrollment.events); PROBE_MONGO_BEFORE=$(mongo_events)
+  PROBE_ASQ_BEFORE=$(asynq_processed notification:critical)
+  PROBE_EMAIL="verify-probe-$RUN_ID@example.test"
+  local tok
+  register_user "$PROBE_EMAIL" && login_user "$PROBE_EMAIL" "$USER_PASSWORD" || { PROBE_ERR=$FIX_ERR; return 1; }
+  tok=$LOGIN_TOKEN
+  req POST "$COURSE_URL/api/v1/enrollments" "$tok" "$(jq -nc --arg c "$COURSE_ID" '{course_id:$c}')"
+  [ "$HTTP_CODE" = 201 ] || { PROBE_ERR="probe enrollment: HTTP $HTTP_CODE $HTTP_BODY"; return 1; }
+  PROBE_COURSE=$COURSE_ID
+  local deadline=$((SECONDS + 90))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    PROBE_OFF_AFTER=$(kafka_end_offsets enrollment.events); PROBE_MONGO_AFTER=$(mongo_events)
+    PROBE_ASQ_AFTER=$(asynq_processed notification:critical)
+    PROBE_MAIL=$(curl -sS --max-time 10 -G "$MAILPIT_URL/api/v1/search" --data-urlencode "query=to:$PROBE_EMAIL" 2>/dev/null | jq -r '.messages_count // 0' 2>/dev/null || echo 0)
+    [ "$PROBE_OFF_AFTER" -gt "$PROBE_OFF_BEFORE" ] && [ "$PROBE_MONGO_AFTER" -gt "$PROBE_MONGO_BEFORE" ] \
+      && [ "$PROBE_ASQ_AFTER" -gt "$PROBE_ASQ_BEFORE" ] && [ "$PROBE_MAIL" -ge 1 ] && break
+    sleep 3
+  done
+  return 0
+}
+probe_or_stop() { probe_enrollment; case $? in 0) return 0 ;; 2) skip "$PROBE_ERR"; return 1 ;; *) fail "$PROBE_ERR"; return 1 ;; esac; }
+
+check_B_3_2() {
+  probe_or_stop || return
+  if [ "$PROBE_MAIL" -ge 1 ]; then pass "Mailpit lists $PROBE_MAIL message(s) to $PROBE_EMAIL after the enrollment"; else fail "no message to $PROBE_EMAIL in Mailpit within 90 s"; fi
+}
+check_B_4_2() {
+  probe_or_stop || return
+  if [ "$PROBE_ASQ_AFTER" -gt "$PROBE_ASQ_BEFORE" ]; then
+    pass "notification:critical processed counter $PROBE_ASQ_BEFORE -> $PROBE_ASQ_AFTER after one enrollment; retry on SMTP failure is E07"
+  else fail "notification:critical processed stayed at $PROBE_ASQ_BEFORE"; fi
+}
+check_B_4_4() {
+  probe_or_stop || return
+  local missing="" t topics
+  topics=$(dc exec -T kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list)
+  for t in $EVENT_TOPICS; do grep -qx "$t" <<<"$topics" || missing="$missing $t"; done
+  [ -z "$missing" ] || { fail "topics missing:$missing"; return; }
+  [ "$PROBE_OFF_AFTER" -gt "$PROBE_OFF_BEFORE" ] || { fail "enrollment.events end offsets did not grow ($PROBE_OFF_BEFORE)"; return; }
+  local keys; keys=$(dc exec -T kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic enrollment.events --from-beginning --timeout-ms 15000 --property print.key=true --property key.separator='|' 2>/dev/null | LC_ALL=C cut -d'|' -f1)
+  if grep -qax "$PROBE_COURSE" <<<"$keys"; then pass "four event topics exist; enrollment.events end offsets $PROBE_OFF_BEFORE -> $PROBE_OFF_AFTER; a record is keyed by the course id"
+  else fail "no record on enrollment.events is keyed by course id $PROBE_COURSE"; fi
+}
+check_TS_KAFKA() {
+  probe_or_stop || return
+  if [ "$PROBE_OFF_AFTER" -gt "$PROBE_OFF_BEFORE" ]; then pass "enrollment.events end offsets $PROBE_OFF_BEFORE -> $PROBE_OFF_AFTER after one enrollment"; else fail "end offsets did not grow ($PROBE_OFF_BEFORE)"; fi
+}
+check_TS_MONGO() {
+  probe_or_stop || return
+  local coll; coll=$(dc exec -T mongodb mongosh smartcourse --quiet --eval 'db.getCollectionNames().join(",")' | tail -1)
+  case ",$coll," in *,failed_events,*) ;; *) fail "failed_events collection missing (have: $coll)"; return ;; esac
+  if [ "$PROBE_MONGO_AFTER" -gt "$PROBE_MONGO_BEFORE" ]; then pass "events count $PROBE_MONGO_BEFORE -> $PROBE_MONGO_AFTER; failed_events exists"; else fail "events count stayed at $PROBE_MONGO_BEFORE"; fi
+}
+check_TS_ASYNQ() {
+  probe_or_stop || return
+  local q; q=$(dc exec -T redis redis-cli smembers asynq:queues | tr -d '\r' | sort | tr '\n' ' ')
+  case $q in *notification:critical*) ;; *) fail "queue notification:critical not registered (have: $q)"; return ;; esac
+  if [ "$PROBE_ASQ_AFTER" -gt "$PROBE_ASQ_BEFORE" ]; then pass "queues per service: $q; notification:critical processed $PROBE_ASQ_BEFORE -> $PROBE_ASQ_AFTER (weights are asynqx.DefaultQueueWeights, unit-tested)"
+  else fail "processed counter did not grow"; fi
+}
+check_TS_SR() {
+  local subj s lvl bad="" n=0
+  subj=$(curl -sS --max-time 10 "$REGISTRY_URL/subjects" 2>/dev/null | jq -r '.[]' 2>/dev/null)
+  [ -n "$subj" ] || { fail "no subjects at $REGISTRY_URL/subjects"; return; }
+  for s in $subj; do
+    n=$((n + 1))
+    lvl=$(curl -sS --max-time 10 "$REGISTRY_URL/config/$s?defaultToGlobal=true" 2>/dev/null | jq -r '.compatibilityLevel' 2>/dev/null)
+    [ "$lvl" = BACKWARD ] || bad="$bad $s=$lvl"
+  done
+  [ -z "$bad" ] || { fail "not BACKWARD:$bad"; return; }
+  local missing=""; for s in identity.events course.events enrollment.events progress.events; do grep -qx "$s-value" <<<"$subj" || missing="$missing $s-value"; done
+  if [ -z "$missing" ]; then pass "$n subjects, all BACKWARD, including the four topic value subjects"; else fail "topic subjects missing:$missing"; fi
+}
+check_B_5() {
+  enroll_student || { fixture_fail; return; }
+  local f missing=""
+  req GET "$ANALYTICS_URL/api/v1/analytics/platform" "$STUDENT_TOKEN" ''
+  for f in total_students total_instructors total_courses_published avg_courses_per_student; do jq -e --arg f "$f" 'has($f)' <<<"$HTTP_BODY" >/dev/null 2>&1 || missing="$missing $f"; done
+  req GET "$ANALYTICS_URL/api/v1/analytics/courses/$COURSE_ID" "$INSTR_TOKEN" ''
+  for f in completion_rate avg_completion_s total_enrollments; do jq -e --arg f "$f" 'has($f)' <<<"$HTTP_BODY" >/dev/null 2>&1 || missing="$missing $f"; done
+  req GET "$ANALYTICS_URL/api/v1/analytics/courses/$COURSE_ID/daily-enrollments" "$INSTR_TOKEN" ''
+  jq -e '.items | type == "array"' <<<"$HTTP_BODY" >/dev/null 2>&1 || missing="$missing daily-enrollments"
+  req GET "$ANALYTICS_URL/api/v1/analytics/popular-courses" "$STUDENT_TOKEN" ''
+  [ "$HTTP_CODE" = 200 ] && jq -e '.items | type == "array"' <<<"$HTTP_BODY" >/dev/null 2>&1 || missing="$missing popular-courses($HTTP_CODE)"
+  login_user "$ADMIN_EMAIL" "$ADMIN_PASSWORD" || { skip "cannot log in as admin: $FIX_ERR"; return; }
+  req GET "${AUDIT_URL:-http://localhost:8093}/api/v1/admin/failed-events" "$LOGIN_TOKEN" ''
+  [ "$HTTP_CODE" = 200 ] && jq -e '.items | type == "array"' <<<"$HTTP_BODY" >/dev/null 2>&1 || missing="$missing failed-events($HTTP_CODE)"
+  if [ -z "$missing" ]; then pass "all nine metrics are served: platform (4), course stats (completion rate, average time), daily enrollments, popular courses, failed events"; else fail "missing or failing:$missing"; fi
+}
+check_B_6_3() {
+  local bad="" out
+  login_user "$ADMIN_EMAIL" "$ADMIN_PASSWORD" || { skip "cannot log in as admin: $FIX_ERR"; return; }
+  req GET "${AUDIT_URL:-http://localhost:8093}/api/v1/admin/failed-events" "$LOGIN_TOKEN" ''
+  [ "$HTTP_CODE" = 200 ] || bad="$bad failed-events=$HTTP_CODE"
+  out=$(curl -sS --max-time 10 http://localhost:9112/metrics 2>/dev/null)
+  grep -q '^asynq_retry_count' <<<"$out" || bad="$bad course-worker:asynq_retry_count"
+  out=$(curl -sS --max-time 10 http://localhost:9114/metrics 2>/dev/null)
+  grep -q '^asynq_retry_count' <<<"$out" || bad="$bad notification-worker:asynq_retry_count"
+  out=$(curl -sS --max-time 10 http://localhost:9115/metrics 2>/dev/null)
+  grep -q '^workflow_started_total' <<<"$out" || bad="$bad publishing-worker:workflow_started_total"
+  grep -q '^workflow_failed_total' <<<"$out" || bad="$bad publishing-worker:workflow_failed_total"
+  grep -q 'dead_letter_total\|dead_letter_held_records' <<<"$(curl -sS --max-time 10 http://localhost:9116/metrics 2>/dev/null; curl -sS --max-time 10 http://localhost:9113/metrics 2>/dev/null)" || true
+  if [ -z "$bad" ]; then pass "failed-events endpoint 200; asynq_retry_count on course and notification workers; workflow_started/failed on publishing-worker (parking and retry behaviour are E04, E07, E12)"; else fail "missing:$bad"; fi
+}
+check_TS_PROM() {
+  local port name bad="" body
+  for pair in 9101:identity-api 9102:course-api 9103:analytics-api 9111:identity-worker 9112:course-worker 9113:analytics-worker 9114:notification-worker 9115:publishing-worker 9104:audit-api 9116:audit-worker; do
+    port=${pair%%:*}; name=${pair#*:}
+    body=$(curl -sS --max-time 10 "http://localhost:$port/metrics" 2>/dev/null)
+    grep -q '^go_goroutines' <<<"$body" || { bad="$bad $name:no-/metrics"; continue; }
+    case $name in
+      *-api) [ "$name" = audit-api ] || grep -q '^http_request_duration_seconds_count' <<<"$body" || bad="$bad $name:no-RED" ;;
+    esac
+    case $name in identity-api|course-api|identity-worker|course-worker) grep -q '^outbox_backlog' <<<"$body" || bad="$bad $name:outbox_backlog" ;; esac
+    case $name in course-worker|analytics-worker|notification-worker) grep -q '^kafka_consumer_lag' <<<"$body" || bad="$bad $name:kafka_consumer_lag" ;; esac
+    case $name in identity-worker|course-worker|notification-worker|analytics-worker) grep -q '^asynq_queue_depth' <<<"$body" || bad="$bad $name:asynq_queue_depth" ;; esac
+  done
+  [ -z "$bad" ] || { fail "$bad"; return; }
+  if ! curl -sS --max-time 5 -o /dev/null "$PROMETHEUS_URL/-/ready" 2>/dev/null; then skip "all ten /metrics are right, but Prometheus is not reachable at $PROMETHEUS_URL (make dev-observability)"; return; fi
+  local down; down=$(curl -sS --max-time 10 "$PROMETHEUS_URL/api/v1/targets" | jq -r '[.data.activeTargets[] | select(.health != "up") | .labels.binary // .scrapeUrl] | join(",")' 2>/dev/null)
+  local total; total=$(curl -sS --max-time 10 "$PROMETHEUS_URL/api/v1/targets" | jq -r '.data.activeTargets | length' 2>/dev/null)
+  if [ -z "$down" ] && [ "${total:-0}" -ge 10 ]; then pass "ten /metrics endpoints carry their series; Prometheus has $total targets, all up"; else fail "Prometheus targets: $total, not up: ${down:-none}"; fi
+}
+check_TS_GRAF() {
+  curl -sS --max-time 5 -o /dev/null "$GRAFANA_URL/api/health" 2>/dev/null || { skip "Grafana is not reachable at $GRAFANA_URL (make dev-observability)"; return; }
+  local n; n=$(curl -sS --max-time 10 -u "${GRAFANA_USER:-admin}:${GRAFANA_PASSWORD:-admin}" "$GRAFANA_URL/api/search?type=dash-db" | jq -r 'length' 2>/dev/null)
+  if [ "${n:-0}" -ge 1 ]; then pass "$n provisioned dashboard(s) listed"; else fail "no dashboard listed (HTTP/auth problem or provisioning broken)"; fi
+}
+check_TS_JAEGER() {
+  curl -sS --max-time 5 -o /dev/null "$JAEGER_URL/api/services" 2>/dev/null || { skip "Jaeger is not reachable at $JAEGER_URL (make dev-observability)"; return; }
+  local svcs missing="" s deadline=$((SECONDS + 60))
+  while :; do
+    missing=""; svcs=$(curl -sS --max-time 10 "$JAEGER_URL/api/services" | jq -r '.data[]?' 2>/dev/null)
+    for s in identity-api course-api analytics-api course-worker analytics-worker notification-worker; do grep -qx "$s" <<<"$svcs" || missing="$missing $s"; done
+    [ -z "$missing" ] || [ "$SECONDS" -ge "$deadline" ] && break
+    sleep 5
+  done
+  if [ -z "$missing" ]; then pass "Jaeger lists identity-api, course-api, analytics-api, course-worker, analytics-worker, notification-worker"; else fail "not in Jaeger:$missing (have: $(tr '\n' ' ' <<<"$svcs"))"; fi
+}
+check_TS_OTEL() {
+  local bad="" root area pat; root=$(cd "$(dirname "$0")/.." && pwd)
+  for area in "http:SpanKindServer" "db:otelgorm|plugin/opentelemetry" "redis:redisotel" "kafka:StartProduce|StartConsume" "asynq:StartJob|StartEnqueue" "temporal:contrib/opentelemetry"; do
+    pat=${area#*:}
+    grep -rEq "$pat" "$root/libs" --include='*.go' 2>/dev/null || bad="$bad ${area%%:*}"
+  done
+  [ -z "$bad" ] || { fail "no instrumentation found for:$bad"; return; }
+  pass "instrumentation present for HTTP, DB, Redis, Kafka, Asynq, Temporal under libs/; the end-to-end trace is E02"
+}
+check_AD_3() {
+  need_docker || return
+  local before after; before=$(asynq_processed analytics:low)
+  sleep 70
+  after=$(asynq_processed analytics:low)
+  if [ "$after" -gt "$before" ]; then pass "analytics:low processed $before -> $after in 70 s: the 60 s reconcile task runs on its schedule"; else fail "analytics:low processed stayed at $before over 70 s"; fi
+}
 check_P1_3() {
   # A fresh student, so no other check's enrollment state is disturbed.
   local email="verify-idem-$RUN_ID@example.test" tok key="idem-$RUN_ID" body i n

@@ -26,7 +26,7 @@ func main() {
 
 // requirements are the configuration groups this binary needs; it starts without
 // the variables of any other group. It publishes identity.outbox to Kafka and runs the token-version re-seeder and jobs; it signs no token and hashes no password.
-var requirements = config.Requirements{Postgres: true, Redis: true, Kafka: true}
+var requirements = config.Requirements{Postgres: true, Redis: true, Kafka: true, Relay: true}
 
 // loadConfig is the runtime's configuration loader for this binary.
 func loadConfig() (*config.Config, error) { return config.LoadWith(requirements) }
