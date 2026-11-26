@@ -1,4 +1,4 @@
-//go:build integration && bugrepro
+//go:build integration
 
 // Adversarial security tests for the analytics routes (security tester, Week 3).
 // TestBugrepro_* fail today and reproduce a finding in

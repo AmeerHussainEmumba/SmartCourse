@@ -1,4 +1,4 @@
-//go:build integration && bugrepro
+//go:build integration
 
 // Adversarial security tests for certificates (security tester, Week 3).
 // TestAdversarial_* passed when written (attack HELD); TestBugrepro_* fail

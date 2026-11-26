@@ -1,4 +1,4 @@
-//go:build integration && bugrepro
+//go:build integration
 
 // Adversarial security tests for the course module's Week 3 surface (security
 // tester). TestBugrepro_* fail today and reproduce a finding in
