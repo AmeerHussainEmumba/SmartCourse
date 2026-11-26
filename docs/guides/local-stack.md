@@ -88,6 +88,20 @@ A disposable project (`COMPOSE_PROJECT_NAME=sc-split`, fresh volumes, removed wi
 
 Not verified: a cold run including image builds and the Go module download; Windows or Linux hosts; Docker VMs smaller than 8 GB; behaviour under load; Kafka or MongoDB outages on this stack; `make stack-up` with `STACK_PROFILE=core`; the e2e harness.
 
+## Redis persistence
+
+The `redis` service is plain `redis:7-alpine` with no command, config or named volume. Tested 2026-11-27 on Redis 7.4.12 in a throwaway Compose project (one key written, then each action below, then read back):
+
+| Action | Key survives? |
+|---|---|
+| `docker compose restart redis`, or `stop` then `start` (graceful) | yes |
+| `docker compose down` (no `-v`), then `up` | **no** |
+| `docker compose down -v`, then `up` | no |
+| `kill` (SIGKILL), then `up`, key saved with `SAVE` before | yes |
+| same, key written after the last snapshot | no |
+
+Redis runs with its defaults: snapshots at `save 3600 1 300 100 60 10000`, `appendonly no`, data in `/data`, which is an anonymous volume. A graceful stop snapshots, so a restart keeps the data. `down` removes the container and Compose creates a new anonymous volume on the next `up`, so the old one is orphaned (`docker volume ls` shows them; `docker volume prune` removes them): data is lost even without `-v`. Treat Redis as disposable: everything in it is rebuildable from Postgres (RFC section 5; ADR-0013 amendment for the Asynq queues). Not tested: production Redis, which this repository does not describe.
+
 ## Object store image
 
 `minio` runs `pgsty/minio:RELEASE.2026-08-04T00-00-00Z` and `minio-init` runs `pgsty/mc:RELEASE.2026-11-12T00-00-00Z` (both pinned by tag and digest in `docker-compose.yml`): a third-party community fork of MinIO, AGPLv3, used because the official `minio/minio` and `minio/mc` images can no longer be pulled on a fresh machine. Same ports (9002 S3, 9003 console), same `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`, same `/minio/health/live`. Verified 2026-11-25 on a disposable project (`sc-minio`): bucket created by `minio-init`, pre-signed PUT, a lesson referencing the asset, publish to `ready`, and a missing or wrong asset failing the publish. Risk and revert steps: ADR-0019 amendment.
