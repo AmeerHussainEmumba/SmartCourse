@@ -22,7 +22,7 @@ require (
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/cache v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/db v0.0.0 // indirect
-	github.com/AmeerHussainEmumba/SmartCourse/libs/events v0.0.0 // indirect
+	github.com/AmeerHussainEmumba/SmartCourse/libs/events v0.0.0
 	github.com/AmeerHussainEmumba/SmartCourse/libs/idempotency v0.0.0 // indirect
 	github.com/AmeerHussainEmumba/SmartCourse/libs/logging v0.0.0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect

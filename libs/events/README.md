@@ -32,6 +32,7 @@ The topic follows the event type's prefix, not the outbox `aggregate_type` (whic
 - `catalog.go`, `envelope.go` - `Types()`, `Subjects()`, `NewEnvelope`, `OpenPayload`.
 - `registry/` - REST client: `Register`, `SetCompatibility`, `Compatibility`, `IsCompatible`, `SchemaByID`, `LatestVersion`.
 - `cmd/register-schemas/` - idempotent bootstrap.
+- `eventstest/` - the producer payload-contract check for tests (`Check`, `RequireConforms`): a producing service's test hands it the JSON it wrote to the outbox and the event type, and it fails if the keys are not exactly the proto field names or protojson rejects the values. Imports `testing`; production code must not use it. Used by the producer tests in `services/identity` and `services/course` (a `_test` import is not linked into a binary, so the link budgets do not change).
 - `testdata/golden/` - the compatibility guard (below).
 
 ## Wire format

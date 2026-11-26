@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Added `eventstest` (`Check`, `RequireConforms`): the producer payload-contract check, restoring the test lost with `services/worker`. Test-support package, additive.
+
 - README: states which service binaries use the module (microservices split). No code change.
 
 - Module created (Week 3 plan, ADR-0026).
