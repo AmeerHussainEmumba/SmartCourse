@@ -65,6 +65,9 @@ func TestAdversarial_Verify_RateLimitNotBypassedBySpoofedHeaders(t *testing.T) {
 		})
 		if rec.Code == http.StatusTooManyRequests {
 			limited++
+			if ra := rec.Header().Get("Retry-After"); ra == "" || ra == "0" {
+				t.Fatalf("429 without a usable Retry-After header (got %q)", ra)
+			}
 		}
 	}
 	if limited < 40 {

@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- `Middleware` now sets `Retry-After` (whole seconds, at least 1) on the 429 it returns, taken from the limiter's own retry time. Calls made through `Allow` directly (per-account limits) are unchanged. Test: `TestAdversarial_Verify_RateLimitNotBypassedBySpoofedHeaders` asserts it.
+
 - README: states which service binaries use the module (microservices split). No code change.
 
 - Security: bumped indirect dependencies to clear govulncheck findings reachable from this module's code (golang.org/x/net v0.58.0 to v0.60.0 and github.com/quic-go/quic-go v0.59.0 to v0.59.1 where present; github.com/moby/go-archive v0.2.0 to v0.3.0, github.com/klauspost/compress v1.18.6 to v1.20.2 and github.com/moby/sys/user v0.4.0 to v0.4.1 where present, test-only via testcontainers). No API change.
