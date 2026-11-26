@@ -1,5 +1,9 @@
 SHELL := /bin/bash
-MIGRATE := go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+# Pinned to the version every module's go.mod (libs/testenv directly) already
+# resolves, so CI, `make migrate-up` and the integration tests apply migrations
+# with the same tool. Bump together with libs/testenv's go.mod.
+MIGRATE_VERSION := v4.20.1
+MIGRATE := go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@$(MIGRATE_VERSION)
 
 # Load .env into every recipe's environment, if it exists — plain Go has no
 # built-in dotenv support (that's a Node/Python convention, not a Go or Make
@@ -30,7 +34,7 @@ MIGRATION_SERVICES_REVERSED := cutover notification analytics course identity pl
 .PHONY: dev-core dev-workflow dev-events dev-observability dev-full dev-down stack-up register-schemas \
         migrate-up migrate-down migrate-down-all migrate-create db-roles \
         build run \
-        lint check-link-graph check-module-graph check-dockerfile-modules check-module-hygiene check-dev-defaults check-http-hardening check-pending-e2e test-guards verify-deliverables test test-race test-integration test-e2e seed fmt
+        lint check-link-graph check-module-graph check-dockerfile-modules check-module-hygiene check-dev-defaults check-http-hardening check-pending-e2e check-e2e-map test-ci-select test-guards verify-deliverables test test-race test-integration test-e2e seed fmt
 
 ## --- Local environment (ADR-0018, docs/guides/local-stack.md) -----------
 #
@@ -198,6 +202,15 @@ check-http-hardening:
 check-pending-e2e:
 	scripts/check-pending-e2e.sh
 
+# Every e2e-tagged Test function has an entry in test/e2e/scenario-map.json
+# (scenario -> services) and the map names no missing test.
+check-e2e-map:
+	scripts/check-e2e-map.sh
+
+# Unit tests of the CI selection logic (scripts/ci-select.sh, ci-e2e-gate.sh).
+test-ci-select:
+	scripts/test-ci-select.sh
+
 # Mutation test of the guards themselves: injects violations into a copy of
 # the tree and checks the right guard fails (slow; copies the repo).
 test-guards:
@@ -241,7 +254,7 @@ SEED_ADMIN_PASSWORD ?= change-me-admin-password
 # The recipe lines start with @ so make does not echo the admin password.
 seed:
 	@IDENTITY_ADMIN_EMAIL="$(SEED_ADMIN_EMAIL)" IDENTITY_ADMIN_PASSWORD="$(SEED_ADMIN_PASSWORD)" \
-	  docker compose run --rm -T -e IDENTITY_ADMIN_EMAIL -e IDENTITY_ADMIN_PASSWORD identity-api identity-admin
+	  docker compose run --rm -T --no-deps --entrypoint identity-admin -e IDENTITY_ADMIN_EMAIL -e IDENTITY_ADMIN_PASSWORD identity-api
 	@SEED_ADMIN_EMAIL="$(SEED_ADMIN_EMAIL)" SEED_ADMIN_PASSWORD="$(SEED_ADMIN_PASSWORD)" go run ./tools/seed
 
 ## --- Binaries (docs/plans/microservices-split.md) -----------------------

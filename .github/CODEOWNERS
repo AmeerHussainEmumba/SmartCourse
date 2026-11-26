@@ -31,4 +31,12 @@
 /scripts/check-module-graph.sh  @AmeerHussainEmumba
 /scripts/release-module.sh      @AmeerHussainEmumba
 /.golangci.yml                  @AmeerHussainEmumba
+
+# CI policy: what runs on a PR, who may waive E2E (docs/guides/ci.md). The
+# skip-e2e gate trusts .github/e2e-skip-owners and CODEOWNERS as they are on the
+# PR's base branch, so changes here need an owner's review.
+/.github/                       @AmeerHussainEmumba
+/scripts/ci-select.sh           @AmeerHussainEmumba
+/scripts/ci-e2e-gate.sh         @AmeerHussainEmumba
+/test/e2e/scenario-map.json     @AmeerHussainEmumba
 /docs/adr/                      @AmeerHussainEmumba
