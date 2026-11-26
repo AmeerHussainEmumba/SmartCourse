@@ -58,7 +58,7 @@ To change who may skip: edit `.github/e2e-skip-owners` (one GitHub login per lin
 
 - Docs-only PRs into `main` run no E2E (rule 1 says docs-only runs only the cheap guards; rule 2 says E2E on every PR into main). If you want E2E there too, change `docs_only` handling in `scripts/ci-select.sh` to return `all`.
 - `tools/seed` and `tools/guardcheck` changes run their own modules (and dependents) but no E2E.
-- The three `TestAdversarial_*` tests (certificate mirror stall, MongoDB outage, two replicas) are in the map but are not run by `make test-e2e` today (its default filter is `TestE2E_`), so CI never runs them. Widening the default filter is a separate decision.
+- The three `TestAdversarial_*` tests (certificate mirror stall, MongoDB outage, two replicas killed in turn) are slow and outage-shaped, so they run only on pushes to `main`, in the `e2e-adversarial` job (`make test-e2e-adversarial`), not on pull requests. A failure there is a regression on `main`. They are still not part of `make test-e2e` (its default filter is `TestE2E_`).
 
 ## Testing the workflow
 

@@ -11,6 +11,9 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/kafka"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/telemetry"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // B-06 / B-07: when the dead-letter sink is down (MongoDB outage) a consumer
@@ -107,5 +110,56 @@ func TestExhausted_NoSink_LogsAndDrops(t *testing.T) {
 	c := holdConsumers(nil)
 	if err := c.exhausted(context.Background(), group{name: "g"}, poisonRecord, errors.New("x")); err != nil {
 		t.Fatalf("exhausted = %v, want nil (the record is dropped, loudly)", err)
+	}
+}
+
+// The held-record gauge is non-zero while the sink refuses a record, counts each
+// refusal, and returns to zero once the record is parked.
+func TestExhausted_SinkDown_ExportsHeldGaugeAndParkFailures(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m, err := telemetry.NewMetrics(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &flakySink{failures: 3}
+	c := holdConsumers(sink)
+	c.cfg.Metrics = m
+	g := group{name: "g"}
+
+	done := make(chan error, 1)
+	go func() { done <- c.exhausted(context.Background(), g, poisonRecord, errors.New("handler failed")) }()
+	if err := <-done; err != nil {
+		t.Fatalf("exhausted = %v", err)
+	}
+	if got := testutil.ToFloat64(m.DeadLetterHeld.WithLabelValues("g")); got != 0 {
+		t.Errorf("held gauge after the hold ended = %v, want 0", got)
+	}
+	if got := testutil.ToFloat64(m.DeadLetterParkFailures.WithLabelValues("g")); got != 3 {
+		t.Errorf("park failures = %v, want 3", got)
+	}
+}
+
+func TestExhausted_SinkDown_HeldGaugeIsOneWhileHolding(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m, _ := telemetry.NewMetrics(reg)
+	sink := &flakySink{failures: 1 << 30}
+	c := holdConsumers(sink)
+	c.cfg.Metrics = m
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.exhausted(ctx, group{name: "g"}, poisonRecord, errors.New("handler failed")) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for testutil.ToFloat64(m.DeadLetterHeld.WithLabelValues("g")) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("held gauge never reached 1")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("exhausted returned nil while the sink was still refusing")
+	}
+	if got := testutil.ToFloat64(m.DeadLetterHeld.WithLabelValues("g")); got != 0 {
+		t.Errorf("held gauge after stopping = %v, want 0", got)
 	}
 }

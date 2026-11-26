@@ -441,6 +441,9 @@ func (r *Consumers) exhausted(ctx context.Context, g group, rec kafka.Record, ca
 	defer func() {
 		if holding {
 			r.held.Add(-1)
+			if r.cfg.Metrics != nil {
+				r.cfg.Metrics.HeldDelta(g.name, -1)
+			}
 		}
 	}()
 	for {
@@ -458,9 +461,15 @@ func (r *Consumers) exhausted(ctx context.Context, g group, rec kafka.Record, ca
 			return nil
 		}
 		r.parkFailures.Add(1)
+		if r.cfg.Metrics != nil {
+			r.cfg.Metrics.ParkFailed(g.name)
+		}
 		if !holding {
 			holding = true
 			r.held.Add(1)
+			if r.cfg.Metrics != nil {
+				r.cfg.Metrics.HeldDelta(g.name, 1)
+			}
 		}
 		r.log.Error("kafka consumer cannot park a record; holding it (offset not advanced) until the dead-letter sink accepts it",
 			slog.String("consumer", g.name), slog.String("topic", rec.Topic), slog.Int("partition", int(rec.Partition)),
