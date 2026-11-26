@@ -437,16 +437,17 @@ func TestNewTableMigrationsHaveWorkingDownPaths(t *testing.T) {
 	cases := []struct {
 		set    string
 		tables []string
+		steps  int // migrations from the one that creates the tables to the set's latest
 	}{
-		{"identity", []string{"identity.outbox"}},
-		{"course", []string{"course.outbox", "course.processed_events", "course.idempotency_keys"}},
-		{"analytics", []string{"analytics.processed_events"}},
-		{"notification", []string{"notification.processed_events"}},
+		{"identity", []string{"identity.outbox"}, 1},
+		// course/000009 (idempotency_keys.response_raw and response_headers) sits on top of 000008.
+		{"course", []string{"course.outbox", "course.processed_events", "course.idempotency_keys"}, 2},
+		{"analytics", []string{"analytics.processed_events"}, 1},
+		{"notification", []string{"notification.processed_events"}, 1},
 	}
-	// Migrations after the new one in each set? None: each is the set's latest.
 	for _, c := range cases {
 		t.Run(c.set, func(t *testing.T) {
-			if err := migrateSteps(pg.dsn, c.set, -1); err != nil {
+			if err := migrateSteps(pg.dsn, c.set, -c.steps); err != nil {
 				t.Fatalf("down: %v", err)
 			}
 			for _, q := range c.tables {
@@ -454,7 +455,7 @@ func TestNewTableMigrationsHaveWorkingDownPaths(t *testing.T) {
 					t.Fatalf("%s still exists after down", q)
 				}
 			}
-			if err := migrateSteps(pg.dsn, c.set, 1); err != nil {
+			if err := migrateSteps(pg.dsn, c.set, c.steps); err != nil {
 				t.Fatalf("up again: %v", err)
 			}
 			for _, q := range c.tables {
