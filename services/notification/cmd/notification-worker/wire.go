@@ -29,6 +29,9 @@ import (
 // queue gauges must all use it.
 const asynqNamespace = "notification"
 
+// queueGaugeInterval is how often the Asynq queue gauges read Redis.
+const queueGaugeInterval = 15 * time.Second
+
 // lagGaugeInterval is how often the consumer lag gauges query the brokers, so
 // the broker load does not depend on how often Prometheus scrapes.
 const lagGaugeInterval = 15 * time.Second
@@ -92,6 +95,20 @@ func wire(p *runtime.Process) error {
 	}
 	p.Go("asynq", servers.Run)
 	p.Go("scheduler", scheduler.Run)
+
+	// Queue depth and retry gauges (asynq_queue_depth, asynq_retry_count): the
+	// pools are this binary's, so it reports them, as identity-worker and
+	// course-worker do.
+	if m := p.Obs.Metrics; m != nil {
+		p.Go("queue-gauges", func(ctx context.Context) error {
+			inspector := asynqx.NewInspector(asynqx.RedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB), asynqx.WithNamespace(asynqNamespace))
+			defer func() { _ = inspector.Close() }()
+			stop := telemetry.StartPoller(ctx, queueGaugeInterval, inspector.Gauges(m))
+			<-ctx.Done()
+			stop()
+			return nil
+		})
+	}
 
 	if registered {
 		client := asynqx.NewClient(asynqx.RedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB), asynqx.WithNamespace(asynqNamespace))

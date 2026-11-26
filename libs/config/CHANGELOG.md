@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Added `Requirements.Relay`. The startup check that `POSTGRES_MAX_OPEN_CONNS` is at least 2 x `RELAY_WORKERS` now applies only to a binary that runs a relay (`Load`/`AllRequirements`, identity-worker, course-worker). Before, every binary with Postgres was held to it, so a small pool on an API or the identity-admin CLI was rejected for a relay it does not run. Test: `TestLoadWith_NoRelay_SmallPoolIsAccepted`.
+
 - README and comments: stale `services/worker`, shared-worker and API-port `/metrics` statements corrected for the split (per-service `search_path` and role, `METRICS_HTTP_ADDR` is every binary's internal listener, Temporal users, `LoadWith(Requirements{})` for publishing-worker). No code change.
 
 - **Breaking.** Kafka is the only event transport. Removed `EVENT_TRANSPORT`, `KafkaConfig.Transport`, `KafkaConfig.KafkaEnabled()`, `TransportInProcess` and `TransportKafka`; a stale `EVENT_TRANSPORT` is ignored. Removed `Config.Admin`, `AdminConfig` and `ADMIN_HTTP_ADDR` (the admin surface is audit-api now).

@@ -194,13 +194,17 @@ type Requirements struct {
 	KafkaBrokers bool
 	// Mongo requires MONGO_URI. Its shape and the timeouts are validated whenever set.
 	Mongo bool
+	// Relay says the binary runs an outbox relay, so POSTGRES_MAX_OPEN_CONNS must
+	// be at least 2 x RELAY_WORKERS (ADR-0027). A binary with no relay (an API,
+	// the identity-admin CLI) is not held to it: a small pool there is fine.
+	Relay bool
 }
 
 // AllRequirements is what Load asks for: Postgres, Redis, MinIO, JWT and Argon.
 // Kafka and Mongo stay optional there, as before (a binary that needs them asks
 // through LoadWith).
 func AllRequirements() Requirements {
-	return Requirements{Postgres: true, Redis: true, MinIO: true, JWT: true, Argon: true}
+	return Requirements{Postgres: true, Redis: true, MinIO: true, JWT: true, Argon: true, Relay: true}
 }
 
 // LoadWith is Load for a binary that needs only some groups, e.g. the
@@ -344,7 +348,7 @@ func LoadWith(need Requirements) (*Config, error) {
 
 	cfg.Relay.Workers = optInt("RELAY_WORKERS", defaultRelayWorkers)
 	inRange("RELAY_WORKERS", cfg.Relay.Workers, 1, maxRelayWorkers)
-	if msg := relayPoolError(cfg.Postgres.MaxOpenConns, cfg.Relay.Workers); need.Postgres && msg != "" {
+	if msg := relayPoolError(cfg.Postgres.MaxOpenConns, cfg.Relay.Workers); need.Postgres && need.Relay && msg != "" {
 		errs = append(errs, msg)
 	}
 

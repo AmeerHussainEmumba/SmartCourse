@@ -30,7 +30,7 @@ func main() {
 
 // requirements are the configuration groups this binary needs; it starts without
 // the variables of any other group. It relays course.outbox, consumes Kafka and runs the Temporal activities that write to the object store; MONGO_URI stays optional (dead-letter parking).
-var requirements = config.Requirements{Postgres: true, Redis: true, MinIO: true, Kafka: true}
+var requirements = config.Requirements{Postgres: true, Redis: true, MinIO: true, Kafka: true, Relay: true}
 
 // loadConfig is the runtime's configuration loader for this binary.
 func loadConfig() (*config.Config, error) { return config.LoadWith(requirements) }

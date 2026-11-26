@@ -30,6 +30,9 @@ import (
 // queue gauges must all use it.
 const asynqNamespace = "analytics"
 
+// queueGaugeInterval is how often the Asynq queue gauges read Redis.
+const queueGaugeInterval = 15 * time.Second
+
 const (
 	// TypeReconcile is the reconciler's task type and scheduler entry name: the
 	// same string on every replica (it was jobs.TypeAnalyticsReconcile).
@@ -113,6 +116,20 @@ func wireWith(p *runtime.Process, prepare prepareFunc) error {
 		servers.Shutdown()
 		return nil
 	})
+
+	// Queue depth and retry gauges (asynq_queue_depth, asynq_retry_count): the
+	// pools are this binary's, so it reports them, as identity-worker and
+	// course-worker do.
+	if m := p.Obs.Metrics; m != nil {
+		p.Go("queue-gauges", func(ctx context.Context) error {
+			inspector := asynqx.NewInspector(asynqx.RedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB), asynqx.WithNamespace(asynqNamespace))
+			defer func() { _ = inspector.Close() }()
+			stop := telemetry.StartPoller(ctx, queueGaugeInterval, inspector.Gauges(m))
+			<-ctx.Done()
+			stop()
+			return nil
+		})
+	}
 	return nil
 }
 
