@@ -1,15 +1,15 @@
 # Week 3 acceptance matrix
 
-**Status:** scaffolding, every row `pending` unless it names an existing check that was run and passed · **Date:** 2026-11-18 · **Source:** `docs/plans/week-3.md` section 7 (and section 5 for E01 to E14) · **Companions:** `scripts/verify-deliverables.sh`, `test/e2e/`
+**Status:** being closed row by row; a row is `pending` unless its Evidence column records a run (last update 2026-11-26) · **Date:** 2026-11-18 · **Source:** `docs/plans/week-3.md` section 7 (and section 5 for E01 to E14) · **Companions:** `scripts/verify-deliverables.sh`, `test/e2e/`
 
 > **Superseded in part by the microservices split (ADR-0033..0035, `docs/plans/microservices-split.md`), 2026-11-26.** The matrix was written on 2026-11-18 against the four-binary topology and has been updated since for the E rows. Where a row still says `worker`, `services/worker`, `EVENT_TRANSPORT` or the in-process transport, read it as: the shared worker is now `course-worker`, `analytics-worker`, `notification-worker`, `identity-worker`, `publishing-worker` and `audit-worker` (plus `audit-api`); there is no in-process transport; `/metrics` is on each binary's internal listener (host 9101 to 9104 for the APIs, 9111 to 9116 for the workers), not on the public API port. Rows edited for this are marked *(updated 2026-11-26)*; the `Evidence` column is not edited and is dated. `scripts/verify-deliverables.sh` has no `AUDIT_URL` and its `check_TS_JAEGER` text still lists `worker`; that script is outside this document and was not changed here.
 
 ## How to read this
 
 - One row per item to be proven. A row is closed only when the command in "How it is proven" has been run by someone other than the author and its output matches "Expected result". The output goes in "Evidence" (command, date, commit, result). Evidence is blank until then.
-- **Status values:** `pending` (not yet proven), `proven (existing): <check>` (an automated check that already exists in the repo was run and passed; the check is named), `proven`, `failed`, `not built (reason)`. Do not write `proven` without evidence.
+- **Status values:** `pending` (not yet proven), `proven (existing): <check>` (an automated check that already exists in the repo was run and passed; the check is named), `proven`, `partial` (part of the proof was run and passed, the evidence says which part is missing), `failed`, `not built (reason)`. Do not write `proven` without evidence.
 - `V` below means `scripts/verify-deliverables.sh --only`. It needs a running stack (`make dev-core` and `make dev-workflow`, with `make migrate-up` and `make seed` done once); base URLs come from `IDENTITY_URL`, `COURSE_URL`, `ANALYTICS_URL` (defaults `http://localhost:8090`, `8091`, `8092`). `V <id>` prints `PASS`, `FAIL` or `PENDING` for that row. `V` rows for features that are not built yet print `PENDING` with the phase that delivers them; they become real checks as the phase lands.
-- `E2E <Name>` means `cd test/e2e && GOWORK=off go test -race -tags=integration -count=1 -v -run '<Name>' ./...`. The specs for E01 to E14 exist as skipped tests (`t.Skip("pending: Phase N - ...")`); a test reported SKIP is not proof.
+- `E2E <Name>` means `cd test/e2e && GOWORK=off go test -tags=e2e -count=1 -timeout 60m -v -run '<Name>' ./...` (the scenarios carry the `e2e` tag and start containers; `-tags=integration` builds none of them) *(updated 2026-11-26)*. The scenarios E01 to E14 are implemented on the ten-binary harness; a test reported SKIP is not proof.
 - `GUARD <name>` means `scripts/<name>.sh` from the repo root (exit 0 expected).
 - Standards, clauses and numbers quoted from the baseline documents are quoted from `docs/baseline/`; ratings of "Met" in `module-split-assessment.md` are that document's own reading and are re-proven here, not inherited.
 - The 32 baseline rows are ids `B-*` in the same order as `module-split-assessment.md` section A.
@@ -17,7 +17,7 @@
 ## Known state when this file was written (2026-11-18, branch `week3/plan` + this scaffolding)
 
 - Existing checks that were run and passed on this branch: `GUARD check-link-graph`, `check-module-graph`, `check-dockerfile-modules`, `check-dev-defaults`, `check-http-hardening`, `test-guards` (18 passed, 0 failed), and `TestE2E_InstructorAfterRedisRestart_LoginReseedsAndCourseAPIWorks` (PASS, with `-race`).
-- `GUARD check-module-hygiene` **fails** on this branch: `go mod tidy` would change `go.sum` in the skeleton modules `libs/asynqx`, `libs/events`, `libs/mongostore`, `libs/telemetry`. Not in this file's ownership; the row stays `pending` until fixed.
+- `GUARD check-module-hygiene` failed on 2026-11-18 for four skeleton modules; on 2026-11-26 (commit f7e9927) it exits 0 (33 modules). `GUARD test-guards` now reports 44 passed, 0 failed, 1 skipped (it was 18 passed on 2026-11-18).
 - The live-stack rows (`V ...`) were not run when this table was written unless the script's own report says so; they are `pending` until someone records evidence.
 
 ## 1. Execution Guidelines, Week 3 deliverables (`docs/baseline/Execution Guidelines.md` section 5, Week 3)
