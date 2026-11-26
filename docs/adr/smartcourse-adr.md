@@ -213,6 +213,10 @@ Option C is defensible and was seriously considered. It loses on two counts: eve
 
 Audit ceasing to be a requirement, or observed event volume low enough that a partitioned PostgreSQL table demonstrably suffices.
 
+### Amendment 2026-11-27 — the read path
+
+"Write-only from the application's perspective, no synchronous user-facing request path reads from it" is not literally true of the built system. `audit-api` (admin role only) reads `failed_events` and the archive for the failed-events list, inspect and replay (ADR-0034), and `analytics-api` reads `failed_events` to serve the Failed Events metric. Both are admin or metrics paths, not paths a student or instructor request takes, and the decision stands in that sense: no learner-facing request depends on MongoDB, and an outage degrades the archiver, the failed-events view and that one metric. The constraint should be read as "no learner-facing path", not "no reads".
+
 ---
 
 ## ADR-0005 — UUIDv7 for primary keys
@@ -554,6 +558,12 @@ Option C fails because Kafka has no delayed delivery, no scheduling, and no per-
 ### Reversal trigger
 
 Non-Go services needing to consume the same jobs, or routing requirements exceeding Asynq's model.
+
+### Amendment 2026-11-27 — what a Redis wipe costs
+
+Verified by reading the code and a local test of the container's persistence (see `docs/guides/local-stack.md`, "Redis persistence"); a Redis wipe has not been run against a live stack with the workers watching the recovery.
+
+The Negative consequence above ("a Redis loss now costs queued jobs") is true for the queue but not for what the jobs protect. Notification deliveries are recorded in Postgres first, and `notification.EnqueuePending` re-enqueues any row still pending after five minutes, so a flush delays notifications and does not lose them. Periodic jobs (the reconciler, cleanups, the token-version re-seeder) are enqueued again by the next tick of the Asynq scheduler loop, so at most one run is lost. Asynq's uniqueness keys also live in Redis, so after a wipe a job can run twice; the jobs are meant to be idempotent, but I have not checked each one. Not audited: every other enqueue site.
 
 ---
 
@@ -1402,6 +1412,12 @@ If the archive's only users are replay and the failed-events metric, and operati
 - **Replay is audited.** Each replay attempt appends an `audit_log` entry per consumer outcome (`failed_event_replayed`: admin id from the verified token, event id, consumer, outcome); entries are per attempt (no `event_id`, so the unique partial index does not collapse them). A failed audit write is logged and counted and does not undo the replay.
 - **Archive carries its source.** Over Kafka the archive document stores the frame's registry schema id as `schema_id` and the record's topic, key, partition and offset, carried to the handler in the context (`relay.Source`). In-process delivery stores `schema_id` 0 (header `schema_id_source: none`) and no coordinates. `schema_id` is the topic's envelope schema, as the frame header carries it, not a per-event-type payload schema.
 - **Audit set follows the RFC table:** role change, publish, publish failure, archive, certificate issuance.
+
+### Amendment 2026-11-27 — a refused park holds the partition
+
+"A parked event is never dropped and never blocks the stream" holds only while MongoDB accepts the park. When the dead-letter sink refuses a record (MongoDB down, or the payload refused), `libs/eventbus` does not skip it and does not drop it: it holds that record, retries, and the partition stalls behind it. This was decided on 2026-11-26 (owner): skipping would lose the event, and a stall is visible and recoverable. There is no time limit on a hold.
+
+The stall is made visible, not prevented: `dead_letter_held_records{consumer}` (gauge), `dead_letter_park_failures_total{consumer}` (counter) and the alert `DeadLetterRecordHeld` (held for 5 minutes, severity page). Unit tests cover the counters; a real MongoDB outage has not been exercised against a live Prometheus. The earlier open question in the implementation notes ("what a consumer does when parking itself fails because MongoDB is down") is answered by this amendment: keep the event, hold, alert.
 
 ---
 
