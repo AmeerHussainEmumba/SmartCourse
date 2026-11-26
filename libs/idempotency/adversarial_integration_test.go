@@ -1,11 +1,10 @@
-//go:build integration && bugrepro
+//go:build integration
 
 // Adversarial security tests for libs/idempotency (security tester, Week 3).
-// TestBugrepro_* fail today and reproduce a finding in
-// docs/plans/week-3-findings-security.md; TestAdversarial_* passed when
-// written (attack HELD). Run:
-//
-//	cd libs/idempotency && go test -tags='integration bugrepro' ./...
+// The S-03, S-04 and S-05 tests were reproducers in
+// docs/plans/week-3-findings-security.md and are regression tests now that
+// responses are stored byte for byte (migration course/000009);
+// TestAdversarial_* passed when written (attack HELD).
 package idempotency_test
 
 import (
@@ -27,7 +26,7 @@ import (
 // route that echoes user-controlled text into its 2xx body without NUL
 // filtering gives a way to force double execution of a non-idempotent write
 // (double charge / double create) on client retry.
-func TestBugrepro_ResponseWithNULEscape_ReleasesKey_HandlerRunsTwice(t *testing.T) {
+func TestS03_ResponseWithNULEscape_IsStoredHandlerRunsOnce(t *testing.T) {
 	h := newHarness(t)
 	h.next = func(c *gin.Context, n int32) {
 		c.Data(http.StatusCreated, "application/json", []byte(`{"title":"a\u0000b"}`))
@@ -43,7 +42,7 @@ func TestBugrepro_ResponseWithNULEscape_ReleasesKey_HandlerRunsTwice(t *testing.
 // key order, duplicate keys and number formatting are normalised: a client
 // (or a signature check over the body) that compares the retry to the
 // original sees a different document.
-func TestBugrepro_ReplayIsNotByteIdentical(t *testing.T) {
+func TestS04_ReplayIsByteIdentical(t *testing.T) {
 	h := newHarness(t)
 	orig := `{"b":1,"a":2.50,"a":3}`
 	h.next = func(c *gin.Context, n int32) { c.Data(http.StatusCreated, "application/json", []byte(orig)) }
@@ -60,7 +59,7 @@ func TestBugrepro_ReplayIsNotByteIdentical(t *testing.T) {
 // S-05: a 2xx with an empty body (204, or 202 with no body) is never stored,
 // so the key is released and every retry re-executes. Latent: no current
 // Idempotency-Key route answers 204.
-func TestBugrepro_EmptyBody2xx_IsNotIdempotent(t *testing.T) {
+func TestS05_EmptyBody2xx_IsIdempotent(t *testing.T) {
 	h := newHarness(t)
 	h.next = func(c *gin.Context, n int32) { c.Status(http.StatusNoContent) }
 	h.do(userA, "empty-1", `{}`)

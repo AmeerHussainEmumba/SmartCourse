@@ -17,6 +17,8 @@
 > | S-06, S-07, S-09, O-6, all others | `services/{analytics,course,identity}/...`, `libs/...` | unchanged paths |
 > | Run commands below | `services/worker` (admin, notification) | `services/audit` (`./admin/`), `services/notification` (`./notification/`); the E2E tier now runs the ten-binary topology, and the older adversarial E2E files are in `test/e2e/legacy/` |
 
+> **Status update, 2026-11-26 (libs/idempotency).** **S-03, S-04, S-05 are fixed** together with behaviour B-02/B-03: the response is stored byte for byte (`response_raw`, `response_headers`; migration `course/000009`). Regression tests: `TestS03_ResponseWithNULEscape_IsStoredHandlerRunsOnce`, `TestS04_ReplayIsByteIdentical`, `TestS05_EmptyBody2xx_IsIdempotent` in `libs/idempotency`. The register rows below are kept as written.
+
 ## Purpose and rules of engagement
 
 A security-minded tester (malicious student, malicious instructor, admin with a stale token, network attacker) tried to break the finished Week 3 layer: worker admin HTTP surface, `/metrics`, certificates, analytics, `libs/idempotency`, asset upload, notification templates and SMTP, the dead-letter store and replay, compose exposure, JWT handling and token staleness, trace and request-id headers, error bodies, dependencies, config defaults, Dockerfiles, the E2E harness, and the project's own guard scripts. Authorised review of our own system on disposable local infrastructure only (testcontainers and the container harness). **No production code was changed.**
