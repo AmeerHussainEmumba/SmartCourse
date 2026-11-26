@@ -83,6 +83,8 @@ func TestMetricCatalogue(t *testing.T) {
 	m.DeadLettered("c")
 	m.EventProcessed("c", OutcomeProcessed)
 	m.WorkflowStartedTotal.Inc()
+	m.HeldDelta("c", 1)
+	m.ParkFailed("c")
 
 	got := seriesByFamily(t, reg)
 	want := []string{
@@ -91,13 +93,14 @@ func TestMetricCatalogue(t *testing.T) {
 		"asynq_retry_count", "dead_letter_total", "workflow_started_total",
 		"workflow_completed_total", "workflow_failed_total", "db_connections_in_use",
 		"db_connections_max", "event_processed_total",
+		"dead_letter_held_records", "dead_letter_park_failures_total",
 	}
 	for _, name := range want {
 		if _, ok := got[name]; !ok {
 			t.Errorf("metric %s missing", name)
 		}
 	}
-	// Nothing else in our namespace: only the 14 plus runtime/process families.
+	// Nothing else in our namespace: only the 16 plus runtime/process families.
 	for name := range got {
 		if strings.HasPrefix(name, "go_") || strings.HasPrefix(name, "process_") {
 			continue

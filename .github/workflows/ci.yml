@@ -373,6 +373,26 @@ jobs:
             make test-e2e E2E_RUN="$E2E_RUN"
           fi
 
+  # The three outage-shaped scenarios (TestAdversarial_*: certificate mirror
+  # stall, MongoDB outage, two replicas killed in turn) are slow, so they run
+  # after a merge, not on every PR. A failure here is a regression on main.
+  e2e-adversarial:
+    needs: [select]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.11"
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - name: Adversarial E2E scenarios (make test-e2e-adversarial)
+        run: make test-e2e-adversarial
+
   # Visible record when E2E did not run on a PR into main.
   e2e-skipped:
     name: E2E skipped
@@ -401,7 +421,7 @@ jobs:
   # was cancelled; skipped jobs (nothing selected, E2E waived) count as fine.
   ci-ok:
     if: always() && needs.select.result != 'skipped'
-    needs: [select, guards, module, migrations, docker-images, compose-config, e2e-gate, e2e, e2e-skipped]
+    needs: [select, guards, module, migrations, docker-images, compose-config, e2e-gate, e2e, e2e-adversarial, e2e-skipped]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed or was legitimately skipped

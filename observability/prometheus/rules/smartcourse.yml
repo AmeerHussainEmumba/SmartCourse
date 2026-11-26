@@ -36,6 +36,20 @@ groups:
           summary: "Sustained dead-lettering by {{ $labels.consumer }} ({{ $labels.service }})"
           description: "More than 0.05 dead letters/s (~3/min) for 10m. An occasional poison message is expected; a sustained rate is an incident."
 
+      # A consumer holds a record when the dead-letter sink (MongoDB) refuses it:
+      # the offset does not advance and the partition stalls, but nothing is lost
+      # (ADR-0030, libs/eventbus). There is deliberately no time limit after
+      # which the record is skipped, so this alert is how the stall is noticed.
+      # PLACEHOLDER 5m: a short MongoDB blip should not page; a stall this long
+      # is delaying events behind the held record.
+      - alert: DeadLetterRecordHeld
+        expr: max by (service, consumer) (dead_letter_held_records) > 0
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $labels.consumer }} ({{ $labels.service }}) is holding a record the dead-letter store refused"
+          description: "A partition has been stalled for over 5m because the dead-letter sink (MongoDB) refuses writes. No event is lost; the backlog drains when the sink recovers. Check MongoDB."
+
       # PLACEHOLDER 300s: the relay polls about once a second, so a real
       # healthy age is seconds; 5 minutes is a guess at "clearly stuck". A row
       # the relay gave up on (last_error set) stays unpublished and keeps this

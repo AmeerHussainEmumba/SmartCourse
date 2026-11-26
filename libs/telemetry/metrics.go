@@ -29,6 +29,8 @@ const (
 	MetricDBConnectionsInUse     = "db_connections_in_use"
 	MetricDBConnectionsMax       = "db_connections_max"
 	MetricEventProcessedTotal    = "event_processed_total"
+	MetricDeadLetterHeld         = "dead_letter_held_records"
+	MetricDeadLetterParkFailures = "dead_letter_park_failures_total"
 )
 
 // Outcome is the bounded value set of the event_processed_total outcome label.
@@ -63,6 +65,8 @@ type Metrics struct {
 	WorkflowCompletedTotal prometheus.Counter
 	WorkflowFailedTotal    prometheus.Counter
 	EventProcessedTotal    *prometheus.CounterVec // consumer, outcome
+	DeadLetterHeld         *prometheus.GaugeVec   // consumer
+	DeadLetterParkFailures *prometheus.CounterVec // consumer
 
 }
 
@@ -149,6 +153,16 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		Help: "Events handled per consumer and outcome.",
 	}, []string{"consumer", "outcome"}))
 	add(err)
+	m.DeadLetterHeld, err = registerOrGet(reg, prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: MetricDeadLetterHeld,
+		Help: "Records a consumer is holding right now because the dead-letter sink refused them; non-zero means a partition is stalled.",
+	}, []string{"consumer"}))
+	add(err)
+	m.DeadLetterParkFailures, err = registerOrGet(reg, prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: MetricDeadLetterParkFailures,
+		Help: "Times the dead-letter sink refused a record, per consumer.",
+	}, []string{"consumer"}))
+	add(err)
 
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
@@ -170,6 +184,17 @@ func (m *Metrics) EventProcessed(consumer string, outcome Outcome) {
 // DeadLettered counts one event sent to a dead-letter topic by consumer.
 func (m *Metrics) DeadLettered(consumer string) {
 	m.DeadLetterTotal.WithLabelValues(consumer).Inc()
+}
+
+// HeldDelta adds delta (+1 when a record starts being held, -1 when the
+// hold ends) to the consumer's held-record gauge.
+func (m *Metrics) HeldDelta(consumer string, delta float64) {
+	m.DeadLetterHeld.WithLabelValues(consumer).Add(delta)
+}
+
+// ParkFailed counts one refusal by the dead-letter sink.
+func (m *Metrics) ParkFailed(consumer string) {
+	m.DeadLetterParkFailures.WithLabelValues(consumer).Inc()
 }
 
 // registerOrGet registers c, or returns the collector already registered under

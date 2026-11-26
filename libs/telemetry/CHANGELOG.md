@@ -4,6 +4,8 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- Added `dead_letter_held_records{consumer}` (gauge) and `dead_letter_park_failures_total{consumer}` (counter), with `Metrics.HeldDelta` and `Metrics.ParkFailed`; fed by `libs/eventbus` while the dead-letter sink refuses a record. Sixteen metric families now.
+
 - README corrected for the split: wiring through `libs/runtime`, per-service outbox gauges, `/metrics` only on the internal listener (`RegisterMetricsRoute` removed), the cross-binary trace test status. No code change.
 
 - README: the internal listener (`libs/runtime`) that serves `/metrics`, `/health/live` and `/health/ready` on `METRICS_HTTP_ADDR` for every binary. No code change.

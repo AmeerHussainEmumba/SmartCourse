@@ -34,7 +34,7 @@ MIGRATION_SERVICES_REVERSED := cutover notification analytics course identity pl
 .PHONY: dev-core dev-workflow dev-events dev-observability dev-full dev-down stack-up register-schemas \
         migrate-up migrate-down migrate-down-all migrate-create db-roles \
         build run \
-        lint check-link-graph check-module-graph check-dockerfile-modules check-module-hygiene check-dev-defaults check-http-hardening check-pending-e2e check-e2e-map test-ci-select test-guards verify-deliverables test test-race test-integration test-e2e seed fmt
+        lint check-link-graph check-module-graph check-dockerfile-modules check-module-hygiene check-dev-defaults check-http-hardening check-pending-e2e check-e2e-map test-ci-select test-guards verify-deliverables test test-race test-integration test-e2e test-e2e-adversarial seed fmt
 
 ## --- Local environment (ADR-0018, docs/guides/local-stack.md) -----------
 #
@@ -237,6 +237,12 @@ test-integration:
 E2E_RUN ?= TestE2E_
 test-e2e:
 	cd test/e2e && GOWORK=off go test -tags=e2e -count=1 -timeout 40m -v -run '$(E2E_RUN)' ./...
+
+# The adversarial scenarios (certificate mirror stall, MongoDB outage, two
+# replicas killed in turn) are slow and outage-shaped, so CI runs them on pushes
+# to main only (docs/guides/ci.md), not on every PR.
+test-e2e-adversarial:
+	cd test/e2e && GOWORK=off go test -tags=e2e -count=1 -timeout 60m -v -run '^TestAdversarial_' ./...
 
 # `make seed` has two steps (tools/seed/README.md). First the first admin is
 # created inside the identity-api image with its identity-admin CLI

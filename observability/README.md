@@ -42,6 +42,7 @@ Observed on 2026-11-25 against the live ten-binary stack after one registration 
 | `event_processed_total{consumer,outcome}` | the workers' consumers | yes: analytics-aggregator, audit-archiver, course-instructor-mirror, notification-dispatcher |
 | `asynq_queue_depth`, `asynq_retry_count` | the workers that run Asynq | yes: course and identity queues seen (queue labels critical, default, low) |
 | `workflow_started/completed/failed_total` | the Temporal workers | yes: `service="publishing"` after one publish |
+| `dead_letter_held_records{consumer}`, `dead_letter_park_failures_total{consumer}` | the consumers, while the dead-letter sink (MongoDB) refuses a record | zero until the sink fails; alert `DeadLetterRecordHeld` |
 | `dead_letter_total{consumer}` | the consumers' dead-letter sinks | no series until an event is parked (none was) |
 
 ## Exposure of `/metrics`
