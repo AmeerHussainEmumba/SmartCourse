@@ -125,7 +125,7 @@ All nine metrics the brief names, each with a stated store and freshness target 
 - Monitoring and logging across all key flows.
 - Ability to diagnose failures in publishing, enrollment, and background tasks specifically — not just "something went wrong somewhere."
 - High consistency and accuracy across all data models.
-- **Acceptance criteria:** covered by UC-6; a single trace ID must be traceable from an HTTP request through the outbox, Kafka, and any resulting Asynq job (RFC §12.2) — verified manually in Jaeger during M4, and is the specific capability that makes this requirement checkable rather than aspirational.
+- **Acceptance criteria:** covered by UC-6; a single trace ID must be traceable from an HTTP request through the outbox, Kafka, and any resulting Asynq job (RFC §12.2) — verified in Jaeger and asserted by the E2E scenario `TestE2E_E02_OneTraceAcrossPipeline`, and is the specific capability that makes this requirement checkable rather than aspirational.
 
 ### FR-7 — Concurrent processing & high-performance backend
 

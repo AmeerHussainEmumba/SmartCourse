@@ -1781,9 +1781,9 @@ Bugs found and fixed *during* this build, kept here because they're the kind of 
 
 **M2 — Workflows.** Temporal publishing workflow, activities running concurrently where the graph allows, blue-green version promotion, failure handling, workflow tests, publish-status endpoint.
 
-**M3 — Events.** Protobuf schemas and registry. Outbox relay. Kafka topics and consumers: search indexer, analytics aggregator, notification dispatcher, audit archiver, cache invalidator. Asynq pools, scheduled reconciliation, dead-letter handling. Certificates.
+**M3 — Events.** *(Status 2026-11-26: built in Week 3, except that the search indexer and cache invalidator stay inside the publish workflow, DR-018; §21.0 lists what is built.)* Protobuf schemas and registry. Outbox relay. Kafka topics and consumers: search indexer, analytics aggregator, notification dispatcher, audit archiver, cache invalidator. Asynq pools, scheduled reconciliation, dead-letter handling. Certificates.
 
-**M4 — Observability and hardening.** OpenTelemetry with trace context through the event envelope. Prometheus metrics, Grafana dashboards as code, Jaeger. Rate limiting. Admin and audit endpoints. Onboarding guide and final documentation.
+**M4 — Observability and hardening.** *(Status 2026-11-26: tracing, metrics, dashboards, rate limiting and the admin and audit endpoints are built; the onboarding guide and final documentation are not finished, see the acceptance matrix; §21.0 lists what is built.)* OpenTelemetry with trace context through the event envelope. Prometheus metrics, Grafana dashboards as code, Jaeger. Rate limiting. Admin and audit endpoints. Onboarding guide and final documentation.
 
 ### 21.1 Mapping to the assignment's weekly checkpoints
 

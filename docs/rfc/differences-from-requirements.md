@@ -38,8 +38,10 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-013](#dr-013--schema-per-service-reverses-dr-010s-shared-schema-position) | Schema-per-service reverses DR-010's shared-schema position | Interpretation | Accepted |
 | [DR-014](#dr-014--search-indexing-and-course-detail-caching-pulled-forward-into-m2) | Search indexing and course-detail caching pulled forward into M2 | Addition | Accepted |
 | [DR-015](#dr-015--dr-008s-existing-asynq-notification-path-was-inaccurate) | DR-008's "existing Asynq notification path" was inaccurate | Correction | Accepted |
-| [DR-016](#dr-016--syncrwmutex-required-by-the-tech-stack-not-used-not-previously-logged) | sync.RWMutex: required by the tech stack, not used, not previously logged | Interpretation | Accepted |
+| [DR-016](#dr-016--syncrwmutex-required-by-the-tech-stack-not-used-not-previously-logged) | sync.RWMutex: required by the tech stack, not used, not previously logged | Interpretation | Accepted; use added 2026-11-26 |
 | [DR-017](#dr-017--course_stats-and-daily_enrollments-were-computed-but-unreadable) | course_stats and daily_enrollments were computed but unreadable | Correction | Accepted |
+| [DR-018](#dr-018--search-indexer-and-cache-invalidator-stay-inside-the-publish-workflow-not-rehomed-as-kafka-consumers) | search-indexer and cache-invalidator stay inside the publish workflow | Interpretation | Accepted |
+| [DR-019](#dr-019--observability-stays-m4-week-3s-literal-ask-notwithstanding) | Observability stays M4, Week 3's literal ask notwithstanding | Interpretation | Superseded by ADR-0032 |
 | [DR-020](#dr-020--one-go-module-per-service-and-per-shared-library-beyond-the-baselines-clear-moduleservice-separation) | One Go module per service and per shared library, beyond the baseline's "clear module/service separation" | Interpretation | Accepted |
 | [DR-021](#dr-021--the-analytics-metric-count-is-nine-not-ten) | The analytics metric count is nine, not ten | Correction | Accepted |
 | [DR-022](#dr-022--limits-and-behaviours-chosen-during-the-bug-fix-pass-confirmed) | Limits and behaviours chosen during the bug-fix pass, confirmed | Clarification | Accepted |
@@ -362,6 +364,10 @@ Not applicable — this entry itself is the correction, the same way DR-007 is. 
 
 RFC §21.0 already states this plainly in its own status prose: "`sync.RWMutex` has no forced-fit use — the one candidate pattern RFC §10.3 names (a read-heavy/write-rare in-process config cache) doesn't exist as a real need yet, and adding one only to use the primitive would be exactly the anti-pattern ADR-0021 was written to avoid." That's a defensible reading of an ambiguous instruction — "demonstrate practical usage" read as "use it where a real need exists," not "manufacture one" — but it was never logged in this register the way every other baseline departure was, so a reviewer checking this register specifically for unmet tech-stack items wouldn't find it. Logged now for exactly that reason: the gap itself isn't new; its absence from this document was.
 
+### Update (2026-11-26)
+
+The statement above that `sync.RWMutex` has zero production uses was true when written and is no longer. It now guards read-heavy, write-rare shared state in three places: the producer in `libs/kafka` (`producer.go`), the process-wide observability settings in `libs/temporal` (`observability.go`) and the connected-client state in `publishing-worker` (`cmd/publishing-worker/wire.go`). The original text is left as written.
+
 ### If this turns out to be wrong
 
 If a genuine read-heavy/write-rare shared-state need emerges (the in-process config cache RFC §10.3 names is still the most likely candidate), this is superseded by a new entry recording where `sync.RWMutex` was added and why that specific case earned it. If the reviewer intends literal, forced demonstration of every named primitive regardless of organic need, this entry is superseded and one is added for its own sake, with that tradeoff stated plainly rather than hidden.
@@ -383,6 +389,52 @@ Same category as DR-007/DR-015: a correction to our own status claims, not a bas
 ### If this turns out to be wrong
 
 Not applicable — this closes a gap between documentation and reality rather than making a bet.
+
+---
+
+## DR-018 — search-indexer and cache-invalidator stay inside the publish workflow, not rehomed as Kafka consumers
+
+**Category:** Interpretation · **Date:** 2026-11-06 · **Related:** RFC §6.5, ADR-0025, M3 planning
+
+### What differs
+
+RFC §6.5's consumer table lists `search-indexer` (subscribes `course.events`, upserts/removes `course_search_index`) and `cache-invalidator` (subscribes `course.events`, swaps the outline pointer, evicts stale keys) as standalone Kafka consumers, alongside `analytics-aggregator`, `notification-dispatcher`, and `audit-archiver`. Both pieces of functionality already exist — `IndexSearch` and `WarmCache`, activities inside `internal/workflows.PublishCourseWorkflow` (ADR-0025) — but as synchronous steps in the publish workflow, not as independent event-driven consumers reacting to a `CoursePublished` message on a topic.
+
+### Why
+
+As M3 (Kafka, the remaining consumers) was being scoped, rebuilding these two as literal Kafka consumers would be rework on something that already works correctly, and would weaken a property the current design deliberately has: `WarmCache` runs as the second-to-last activity in the workflow, before `PromoteAndPublish`, specifically so the cache is already warm the instant a course goes live (ADR-0025's own reasoning). Moving it behind a Kafka hop reintroduces exactly the staleness window — a published course briefly uncached — the current design avoids by construction. The same logic applies to `IndexSearch`. Both stay where they are; M3's Kafka-migration effort goes to the two consumers that are genuinely unbuilt — `notification-dispatcher` and `audit-archiver` — plus cutting `analytics-aggregator` (and the relay's other existing in-process handlers) over to real Kafka consumption per ADR-0021's already-committed migration path.
+
+### Status (2026-11-26)
+
+Restored to the register: this entry was written on 2026-11-06 and was missing from the file. Still in force. `IndexSearch` and `WarmCache` remain activities of the publish workflow (Week 3 plan decision D8).
+
+### If this turns out to be wrong
+
+If a real need emerges for `course.events` to be consumed by something other than the publish workflow itself (e.g. a downstream system this project doesn't yet know about), `IndexSearch`/`WarmCache` are rebuilt as Kafka consumers at that point — this entry is superseded, not the workflow's existing activities broken apart speculatively now.
+
+---
+
+## DR-019 — Observability stays M4, Week 3's literal ask notwithstanding
+
+**Category:** Interpretation · **Date:** 2026-11-06 · **Status:** Superseded by ADR-0032 (2026-11-26) · **Related:** DR-006, RFC §21, ADR-0032
+
+### What differs
+
+The Execution Guidelines' Week 3 scope lists "Observability setup (logs, tracing, metrics)" alongside Kafka integration and background workers. RFC §21 scopes OpenTelemetry, Prometheus, Grafana, and Jaeger entirely to M4, after events (M3). M3 work proceeds without pulling tracing/metrics forward.
+
+### Why
+
+Same precedent as DR-006: the weekly plan is a review cadence, not a hard technical gate on build order, and this project's actual delivery plan has never matched it week-for-week — Week 1 already included the full schema and enrollment, Week 2 already pulled search/caching forward from M3 (DR-014). Structured JSON logging (`internal/platform/logging`) has existed since M0 and already satisfies "logs" in Week 3's literal list; full distributed tracing through the Kafka event envelope is a materially larger piece of work than "basic... tracing" suggests, and RFC §6.4's event envelope already reserves `trace_id`/`span_id` fields for exactly this, so nothing about doing it in M4 instead requires a schema change later. Logged explicitly, rather than silently deferred, so a reviewer checking Week 3's checklist against this register finds the reasoning rather than an unexplained gap.
+
+### Superseded
+
+The condition below came true: the Week 3 plan (decision D1) put observability in Week 3, and ADR-0032 records the decision (OpenTelemetry tracing across the Kafka envelope, Prometheus, Grafana, Jaeger). The text above is the original entry and is left as written. Restored to the register on 2026-11-26; it was missing from the file.
+
+### If this turns out to be wrong
+
+If the reviewer intends Week 3's observability line as a hard requirement rather than a checkpoint goal, this entry is superseded and a thin tracing slice (trace context propagation through the new Kafka consumers specifically, not the full M4 stack) is pulled forward instead.
+
+---
 
 ---
 

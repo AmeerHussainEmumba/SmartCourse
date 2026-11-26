@@ -73,6 +73,37 @@ The S3-compatible object store is `pgsty/minio` (a community fork of MinIO with 
 
 PostgreSQL is the system of record (everything a user can assert as fact about their own account — enrolled, completed, certified — is strongly consistent, enforced by database constraints, not application code that can race). Redis and MongoDB hold only derived, rebuildable data. State changes are recorded and their side effects (search indexing, analytics, notifications, caching) happen asynchronously via a transactional outbox, so a crash mid-request never silently loses work or desyncs a dashboard from reality. The system is split into services that share no code but the libraries in `libs/*` (the plan is `docs/plans/microservices-split.md`): `identity`, `course`, `analytics`, `notification`, `publishing` and `audit`, built as eleven binaries (an `-api` and a `-worker` per service where it has both; `publishing-worker` runs the Temporal publish workflow, `notification-worker` has no API, and `identity-admin` is a CLI). Each service owns its Postgres schema, its own outbox (where it produces events) and its own idempotency tables, and connects with its own Postgres role (`svc_identity`, `svc_course`, `svc_analytics`, `svc_notification`; `publishing` has no database and `audit` uses MongoDB only), so a query across a service boundary fails with `permission denied` instead of silently working ([ADR-0024](docs/adr/smartcourse-adr.md#adr-0024--schema-per-service-within-one-shared-database), [ADR-0033](docs/adr/smartcourse-adr.md#adr-0033--independent-services-per-service-outbox-and-idempotency-tables-kafka-only-integration-per-service-roles); the shared `platform` schema no longer exists). Services talk through Kafka events (Protobuf, Schema Registry); where one needs another's data it keeps an event-fed copy rather than reaching across. Each service's worker relays its own outbox to Kafka; consumers are idempotent through a `processed_events` marker written in the same transaction as the effect. The audit service archives every event in MongoDB and replays failed ones by republishing to a per-consumer retry topic ([ADR-0034](docs/adr/smartcourse-adr.md#adr-0034--the-audit-service-archive-dead-letter-store-and-replay-as-republish)); the publish workflow lives in `publishing`, its activities in `course-worker` ([ADR-0035](docs/adr/smartcourse-adr.md#adr-0035--the-publishing-service-workflows-and-activities-on-separate-task-queues)). Every binary serves `/metrics` and `/health/*` on an internal listener that is never on a public port. The RFC has not been fully revised for this topology yet (the ADRs and `docs/plans/microservices-split.md` are current; where the RFC disagrees, they win).
 
+
+```mermaid
+flowchart LR
+    client([Client]) --> idapi[identity-api]
+    client --> capi[course-api]
+    client --> aapi[analytics-api]
+    client --> auapi[audit-api]
+    idapi --> pg[(PostgreSQL<br/>schema and role per service)]
+    capi --> pg
+    capi --> redis[(Redis<br/>cache, rate limits, Asynq)]
+    capi --> minio[(MinIO)]
+    capi -- starts publish workflow --> temporal[Temporal]
+    temporal --> pub[publishing-worker<br/>workflow]
+    pub -- activities --> cw[course-worker]
+    idw[identity-worker<br/>outbox relay] --> kafka{{Kafka<br/>Protobuf, Schema Registry}}
+    cw -- outbox relay --> kafka
+    pg -. per-service outbox .-> idw
+    pg -. per-service outbox .-> cw
+    kafka --> aw[analytics-worker]
+    kafka --> nw[notification-worker<br/>Asynq to SMTP]
+    kafka --> cw
+    kafka --> auw[audit-worker]
+    aw --> pg
+    auw --> mongo[(MongoDB<br/>archive, failed_events)]
+    auapi --> mongo
+    auapi -- replay: republish --> kafka
+    aapi --> pg
+```
+
+The diagram shows the main paths only. Every binary also serves `/metrics` and `/health/*` on an internal port (Prometheus, Grafana and Jaeger run in the `observability` profile). The authoritative description is the ADRs ([ADR-0033](docs/adr/smartcourse-adr.md#adr-0033--independent-services-per-service-outbox-and-idempotency-tables-kafka-only-integration-per-service-roles) to ADR-0035) and `docs/plans/microservices-split.md`.
+
 ## Repository layout
 
 ```
