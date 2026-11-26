@@ -10,12 +10,14 @@
 | [`prd/`](prd/) | The product requirements: use cases, functional/non-functional requirements, traceability | Living — revised as scope is clarified |
 | [`rfc/`](rfc/) | The architecture: `smartcourse-rfc.md` (the design, in full) and `differences-from-requirements.md` (every place the design adds to or reinterprets the frozen baseline, and why) | Living |
 | [`adr/`](adr/) | Every individual architecture decision, recorded as a point-in-time event with its context intact — including decisions that were later reconsidered | Append-only — a reversed decision gets a new entry marked `Superseded`, the old one is never deleted |
-| [`plans/`](plans/) | Working plans for multi-step changes (e.g. `module-split.md`: splitting the build graph into per-service and per-library Go modules), with a progress log | Living — updated as phases land |
-| [`guides/`](guides/) | How-to references, e.g. `testing.md` (what's tested, why, how to run it) | Living |
+| [`plans/`](plans/) | Working plans for multi-step changes (e.g. `module-split.md`: per-service and per-library Go modules; `microservices-split.md`: the approved split into six independent services with per-service outbox, roles and Kafka-only integration), with a progress log | Living — updated as phases land |
+| [`guides/`](guides/) | How-to references: `local-stack.md` (the compose stack, ports, roles), `testing.md` (what's tested, why, how to run it), `versioning.md` | Living |
 | [`for-the-devs/`](for-the-devs/) | Onboarding — the thing to read before any of the above | Living |
 
 ## How these relate to each other
 
 `baseline/` is what we're judged against. `prd/` and `rfc/` describe, respectively, *what* we're building and *how* — both derived from and consistent with `baseline/`, elaborating it without contradicting it. `differences-from-requirements.md` is the honesty mechanism: anywhere the design adds something the baseline didn't ask for, or reads an ambiguous section a particular way, that choice is logged there with its reasoning, rather than silently blended in as if the baseline had said it all along. `adr/` is the *history* of how the RFC got to look the way it does — the RFC describes the system as it stands today, the ADRs describe how it came to stand that way and what else was considered.
 
-If you're trying to understand *why* something is built a certain way: check the relevant module's own README first (e.g. `internal/enrollment/README.md`), then the ADR it links to, then the RFC section for full context.
+If you're trying to understand *why* something is built a certain way: check the relevant module's own README first (e.g. `services/course/enrollment/README.md`), then the ADR it links to, then the RFC section for full context.
+
+**Currency note.** The RFC has not been fully revised for the six-service split (ADR-0033 to ADR-0035, `plans/microservices-split.md`); where it still describes a shared worker, the `platform` schema or an in-process transport, the ADRs and the plan are current. The ADR index marks which older decisions are superseded in part.

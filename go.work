@@ -1,24 +1,37 @@
 go 1.26.5
 
 use (
+	./libs/asynqx
 	./libs/auth
 	./libs/cache
 	./libs/config
+	./libs/contracts/publishing
 	./libs/db
+	./libs/eventbus
 	./libs/errors
+	./libs/events
 	./libs/httpx
+	./libs/idempotency
 	./libs/infra
+	./libs/jobs
+	./libs/kafka
 	./libs/logging
+	./libs/mongostore
 	./libs/outbox
 	./libs/ratelimit
 	./libs/relay
+	./libs/runtime
 	./libs/router
+	./libs/telemetry
 	./libs/temporal
 	./libs/testenv
 	./services/analytics
+	./services/audit
 	./services/course
 	./services/identity
-	./services/worker
+	./services/publishing
+	./services/notification
 	./test/e2e
+	./tools/guardcheck
 	./tools/seed
 )

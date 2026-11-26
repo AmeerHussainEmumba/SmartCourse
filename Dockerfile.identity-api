@@ -1,35 +1,51 @@
-# The identity-api service (ADR-0023, extending ADR-0022) — one of four
-# independently built images (identity-api, course-api, analytics-api,
-# worker). Each service is its own Go module (docs/plans/module-split.md),
-# so this image is built from that module plus only the library modules it
-# depends on; nothing else in the repo is copied in. Keep the COPY list in
-# step with the module's go.mod `replace` directives — GOWORK=off below means
-# a missing module fails this build instead of being papered over by go.work.
+# The identity-api image (ADR-0023; docs/plans/microservices-split.md §6). One
+# image per binary: identity-worker has Dockerfile.identity-worker. This image
+# also carries the identity-admin CLI (first-admin bootstrap), so it can run
+# beside the API: docker compose run --rm identity-api identity-admin
+# (IDENTITY_ADMIN_EMAIL / IDENTITY_ADMIN_PASSWORD, optional IDENTITY_ADMIN_NAME).
+#
+# services/identity is one Go module for all three binaries, so the COPY list is
+# the module's go.mod replace set (the same in both identity images; what each
+# binary actually links is budgeted by scripts/check-link-graph.sh: identity-api
+# must not link Kafka, Asynq, Temporal or Mongo). Keep it in step with go.mod:
+# GOWORK=off below means a missing module fails this build instead of being
+# papered over by go.work. scripts/check-dockerfile-modules.sh checks it.
 # Build context is the repo root: docker build -f Dockerfile.identity-api .
-FROM golang:1.26.5-alpine AS build
+FROM golang:1.26.11-alpine AS build
 ENV GOWORK=off CGO_ENABLED=0
 WORKDIR /src
+COPY libs/asynqx ./libs/asynqx
 COPY libs/auth ./libs/auth
 COPY libs/cache ./libs/cache
 COPY libs/config ./libs/config
 COPY libs/db ./libs/db
 COPY libs/errors ./libs/errors
+COPY libs/eventbus ./libs/eventbus
+COPY libs/events ./libs/events
 COPY libs/httpx ./libs/httpx
+COPY libs/idempotency ./libs/idempotency
 COPY libs/infra ./libs/infra
+COPY libs/jobs ./libs/jobs
+COPY libs/kafka ./libs/kafka
 COPY libs/logging ./libs/logging
 COPY libs/outbox ./libs/outbox
 COPY libs/ratelimit ./libs/ratelimit
+COPY libs/relay ./libs/relay
 COPY libs/router ./libs/router
+COPY libs/runtime ./libs/runtime
+COPY libs/telemetry ./libs/telemetry
 COPY libs/testenv ./libs/testenv
 COPY services/identity ./services/identity
 WORKDIR /src/services/identity
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    go build -trimpath -o /out/identity-api ./cmd/identity-api
+    go build -trimpath -o /out/identity-api ./cmd/identity-api && \
+    go build -trimpath -o /out/identity-admin ./cmd/identity-admin
 
 FROM alpine:3.20
 # Run as an unprivileged user: a compromise of the service should not be root in the container.
 RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 app
 USER app
 COPY --from=build /out/identity-api /usr/local/bin/identity-api
+COPY --from=build /out/identity-admin /usr/local/bin/identity-admin
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/identity-api"]

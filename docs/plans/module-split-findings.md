@@ -2,6 +2,17 @@
 
 > **Status update (2026-11-17, later the same day): all 36 findings are fixed** on branch `refactor/module-split-fixes`, by four fixing sessions with non-overlapping directory ownership, merged and verified (full suite green; every reproducer now passes and is a regular regression test with its original name). The register below is kept as the record of what was found. Read the section "How each was fixed, and what is still imperfect" at the end for the design choices and the trade-offs that remain. The original text, which says nothing is fixed, describes the state when the register was written.
 
+> **Superseded in part by the microservices split (ADR-0033..0035, `docs/plans/microservices-split.md`), 2026-11-26.** The register below describes the code as of 2026-11-17 and is kept as written. Some file paths and process names have moved; most `services/course`, `services/identity` and `services/analytics` domain paths are unchanged. Where the finding names the old shared worker, the in-process relay handlers or the shared `platform.outbox`, read it with this mapping (verified against the tree on 2026-11-26; line numbers are not re-checked):
+>
+> | Finding | Old location or process | Now |
+> |---|---|---|
+> | F-04 (claim released before handlers), F-05 (handler panic kills the worker), F-28 (`outbox.last_error`, give-up path) | `libs/relay/relay.go` running handlers in the shared `services/worker` (relay and Temporal worker in one process) | `libs/relay/relay.go` is now publish-only (the claim and the publish path stay there); handlers run as Kafka consumers in `libs/eventbus/consumers.go`, inside each service's own worker (`course-worker`, `analytics-worker`, `notification-worker`); the Temporal worker is `publishing-worker`, a separate process; the outbox is `identity.outbox` / `course.outbox` |
+> | F-09 (`enrollment_mirror` ordering, "4-worker pool") | analytics handlers run by the relay pool in the shared worker | `analytics-aggregator` consumer in `services/analytics/cmd/analytics-worker` (Kafka, per-partition order; the fix itself is unchanged in `services/analytics/analytics`) |
+> | F-16 (`http.Server` timeouts and body cap) | `services/*/cmd/*/main.go` | per-binary `services/<service>/cmd/<binary>/{main,wire}.go` over `libs/runtime/server.go` and `libs/router` |
+> | F-19 (seed passwords) | `tools/seed/main.go` | same path; the seed now drives the HTTP APIs (`identity-admin` creates the first admin) |
+> | F-37 (publish state before the workflow) | `services/course/course` and the worker's workflow | claim stays in `services/course/course`; the workflow is `services/publishing/publish`, the activities `services/course/activities` run in `course-worker` |
+> | all others | `services/{identity,course,analytics}/...`, `libs/...` | unchanged paths |
+
 **Date:** 2026-11-17 · **Companion to:** `docs/plans/module-split.md` (phase 5), `docs/plans/module-split-assessment.md`
 
 ## Purpose
@@ -86,11 +97,11 @@ Two separate testing sessions, one on behaviour and concurrency and one on secur
 
 ## Observations that are not defects
 
-- Events with no registered handler are marked published immediately, so a consumer deployed later never sees earlier events (pinned by a characterization test). Relevant to M3.
+- Events with no registered handler are marked published immediately, so a consumer deployed later never sees earlier events (pinned by a characterization test). Relevant to M3. *(2026-11-26: no longer applies; the relay publishes every row to Kafka and each consumer group reads from the log, ADR-0033.)*
 - `handleCourseArchived` withdraws enrollments without emitting `student_withdrawn`, so the analytics `enrollment_mirror` keeps them `active` until reconciliation; the handler's own comment says so.
 - `course_mirror.published` is never cleared on archive; documented as "ever published".
 - The rate limiter fails open when Redis is down; `RequireFreshPrivilege` fails closed with a 503. Pinned by a test. Worth stating as policy.
-- Normal shutdown logs `relay poll failed: context canceled` at ERROR level, which is log noise.
+- Normal shutdown logs `relay poll failed: context canceled` at ERROR level, which is log noise. *(Not re-checked after the split.)*
 
 ## What held up
 

@@ -1,0 +1,30 @@
+// The envelope every event travels in (RFC §6.4). Only payload is type
+// specific: it holds the Protobuf encoding of the message named by
+// event_type (see the events.proto files next to this one).
+syntax = "proto3";
+
+package smartcourse.events.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/AmeerHussainEmumba/SmartCourse/libs/events/gen/smartcourse/events/v1;eventsv1";
+
+message Envelope {
+  // Deduplication key (processed_events, RFC §6.6).
+  string event_id = 1;
+  // e.g. "enrollment.student_enrolled".
+  string event_type = 2;
+  // Registry version of the payload's subject (see libs/events README).
+  int32 schema_version = 3;
+  string aggregate_type = 4;
+  // Partition key.
+  string aggregate_id = 5;
+  // When the state change committed, not when it was published.
+  google.protobuf.Timestamp occurred_at = 6;
+  // W3C trace context (RFC §12.2); empty until the outbox carries it (ADR-0032).
+  string trace_id = 7;
+  string span_id = 8;
+  // Who caused it, for audit; empty for system-initiated events.
+  string actor_id = 9;
+  bytes payload = 10;
+}

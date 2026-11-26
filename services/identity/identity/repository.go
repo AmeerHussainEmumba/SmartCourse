@@ -128,6 +128,24 @@ func (r *Repository) CurrentTokenVersion(ctx context.Context, id uuid.UUID) (int
 	return u.TokenVersion, nil
 }
 
+// TokenVersionEntry is one user whose token_version is above the implicit
+// default of 1 (the only users a cache miss misrepresents, see reseed.go).
+type TokenVersionEntry struct {
+	ID           uuid.UUID
+	TokenVersion int16
+}
+
+// ListTokenVersionsAbove1 pages (keyset on id) through users whose
+// token_version is above 1.
+func (r *Repository) ListTokenVersionsAbove1(ctx context.Context, afterID uuid.UUID, limit int) ([]TokenVersionEntry, error) {
+	var rows []TokenVersionEntry
+	err := r.db.WithContext(ctx).Model(&User{}).
+		Select("id", "token_version").
+		Where("token_version > 1 AND id > ?", afterID).
+		Order("id").Limit(limit).Find(&rows).Error
+	return rows, err
+}
+
 // InvalidateUnusedPasswordResetTokens marks every unused reset token of the
 // user as used, so only the newest outstanding token is ever valid.
 func (r *Repository) InvalidateUnusedPasswordResetTokens(ctx context.Context, userID uuid.UUID) error {

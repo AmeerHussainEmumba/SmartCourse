@@ -2,7 +2,7 @@
 
 // Adversarial publish / blue-green / cache tests (ADR-0010, ADR-0025). They
 // drive the real activities against real Postgres and Redis; the Temporal
-// orchestration side is attacked in services/course/workflows.
+// orchestration side is attacked in services/publishing and services/course/activities.
 package course_test
 
 import (
@@ -82,6 +82,7 @@ func count(t *testing.T, env *testenv.Env, q string, args ...any) int64 {
 // v2, no draft). Anything else is a half-published read.
 func TestAdvPublish_BlueGreen_ReadersNeverSeeHalfPublishedVersion(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
@@ -213,6 +214,7 @@ func TestAdvPublish_BlueGreen_ReadersNeverSeeHalfPublishedVersion(t *testing.T) 
 // cached payload itself looks perfectly valid.
 func TestAdvPublish_ArchivedCourseNotServedFromWarmCache(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
@@ -237,6 +239,7 @@ func TestAdvPublish_ArchivedCourseNotServedFromWarmCache(t *testing.T) {
 // Redis being wiped or unavailable must degrade to Postgres, not fail reads.
 func TestAdvPublish_RedisFlushedOrCorrupt_FallsBackToPostgres(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
@@ -271,6 +274,7 @@ func TestAdvPublish_RedisFlushedOrCorrupt_FallsBackToPostgres(t *testing.T) {
 // returned 202, so a client could not tell a duplicate from a fresh publish.)
 func TestAdvPublish_ConcurrentPublishRequests_OneWinsRestGet409(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	ctx := context.Background()
 	var mu sync.Mutex
@@ -325,6 +329,7 @@ func TestAdvPublish_ConcurrentPublishRequests_OneWinsRestGet409(t *testing.T) {
 // whose draft pointer is cleared must all be refused without calling Temporal.
 func TestAdvPublish_RefusedWithoutStartingWorkflow(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr, other := seedInstructor(t, env), seedInstructor(t, env)
 	var calls atomic.Int32
 	fake := &fakeTemporalClient{executeWorkflow: func(_ context.Context, o temporalclient.StartWorkflowOptions, _ any, _ ...any) (temporalclient.WorkflowRun, error) {
@@ -353,6 +358,7 @@ func TestAdvPublish_RefusedWithoutStartingWorkflow(t *testing.T) {
 // ValidateMetadata/VerifyAssets edge cases: empty title, oversized content.
 func TestAdvPublish_ValidationEdges(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
@@ -381,6 +387,7 @@ func TestAdvPublish_ValidationEdges(t *testing.T) {
 // live course untouched: run everything but PromoteAndPublish and check.
 func TestAdvPublish_PartialPipelineLeavesLiveVersionUntouched(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
@@ -410,7 +417,7 @@ func TestAdvPublish_PartialPipelineLeavesLiveVersionUntouched(t *testing.T) {
 		t.Fatalf("course_published events before the second promote: %d", n)
 	}
 	// MarkPublishFailed then leaves the draft retryable.
-	if err := svc.MarkPublishFailed(ctx, v2, "boom"); err != nil {
+	if err := svc.MarkPublishFailed(ctx, v2, "boom", "BuildOutline"); err != nil {
 		t.Fatal(err)
 	}
 	st, _ := svc.GetPublishStatus(ctx, courseID, instr)

@@ -17,6 +17,7 @@ import (
 	temporalclient "go.temporal.io/sdk/client"
 	"gorm.io/gorm"
 
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/contracts/publishing"
 	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/httpx"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
@@ -67,6 +68,11 @@ type Service struct {
 	rdb       *redis.Client
 	temporal  temporalclient.Client
 	taskQueue string
+	// activityQueue is the queue the workflow schedules its activities on,
+	// passed in publishing.PublishWorkflowInput.ActivityQueue; empty means the
+	// contract default.
+	activityQueue string
+	assets        AssetStore // nil until WithAssetStore; see assets.go
 }
 
 // temporal and taskQueue are nil/empty-safe for callers that never publish
@@ -74,6 +80,14 @@ type Service struct {
 // Service.Publish dereferences temporal, and only when actually called.
 func NewService(repo *Repository, rdb *redis.Client, temporal temporalclient.Client, taskQueue string) *Service {
 	return &Service{repo: repo, rdb: rdb, temporal: temporal, taskQueue: taskQueue}
+}
+
+// WithActivityQueue sets the task queue the publish workflow schedules its
+// activities on (cfg.Temporal.ActivityQueue); taskQueue (NewService) is the
+// queue the workflow itself starts on. Returns s for chaining.
+func (s *Service) WithActivityQueue(queue string) *Service {
+	s.activityQueue = queue
+	return s
 }
 
 // --- course & draft lifecycle ------------------------------------------------
@@ -318,6 +332,11 @@ func (s *Service) AddLesson(ctx context.Context, courseID, instructorID, moduleI
 	if c.DraftVersionID == nil {
 		return nil, errNoDraft
 	}
+	if req.AssetKey != nil && *req.AssetKey != "" {
+		if err := validateAssetKeyForCourse(*req.AssetKey, courseID); err != nil {
+			return nil, err
+		}
+	}
 	mod, err := s.repo.GetModuleByID(ctx, moduleID)
 	if errors.Is(err, ErrNotFound) {
 		return nil, apperrors.ErrNotFound
@@ -446,14 +465,14 @@ func (s *Service) DeleteLesson(ctx context.Context, courseID, instructorID, less
 // --- publish -----------------------------------------------------------------
 //
 // M2 implements RFC §7.4's full activity graph as a Temporal workflow
-// (services/course/workflows.PublishCourseWorkflow, ADR-0009/0025):
+// (services/publishing's PublishCourseWorkflow, ADR-0009/0025):
 //
 //	ValidateMetadata -> {VerifyAssets, ComputeMetadata} -> BuildOutline -> {IndexSearch, WarmCache} -> PromoteVersion
 //
 // Every exported method below this comment up to PromoteAndPublish is one
 // node in that graph — plain, Temporal-agnostic Go methods on Service, each
 // independently retryable because Temporal calls them as separate
-// activities (services/course/workflows.Activities just forwards to these; the
+// activities (services/course/activities.Activities just forwards to these; the
 // Temporal SDK import stays out of this package entirely, matching RFC
 // §4.4's module-boundary discipline extended to the new package). This
 // replaces M1's runPublishChecks/validateMetadata/validateLessonContent,
@@ -517,8 +536,8 @@ func (s *Service) Publish(ctx context.Context, courseID, instructorID uuid.UUID)
 	_, err = s.temporal.ExecuteWorkflow(ctx, temporalclient.StartWorkflowOptions{
 		ID:        workflowID,
 		TaskQueue: s.taskQueue,
-	}, PublishWorkflowName, PublishWorkflowInput{
-		CourseID: courseID, VersionID: draft.ID, OldVersionID: c.PublishedVersionID, Title: draft.Title,
+	}, publishing.WorkflowName, publishing.PublishWorkflowInput{
+		CourseID: courseID, VersionID: draft.ID, OldVersionID: c.PublishedVersionID, Title: draft.Title, ActivityQueue: s.activityQueue,
 	})
 	if err != nil {
 		// The workflow did not start, so nothing will ever move this version
@@ -575,39 +594,48 @@ func (s *Service) ValidateMetadata(ctx context.Context, versionID uuid.UUID) err
 		return apperrors.ErrInternal.Wrap(err)
 	}
 	if v.Title == "" {
-		return apperrors.ErrValidation.Wrap(fmt.Errorf("title is required to publish"))
+		return apperrors.ErrValidation.Wrap(reasonTitleRequired)
 	}
 	mods, err := s.repo.ListModules(ctx, v.ID)
 	if err != nil {
 		return apperrors.ErrInternal.Wrap(err)
 	}
 	if len(mods) == 0 {
-		return apperrors.ErrValidation.Wrap(fmt.Errorf("at least one module is required to publish"))
+		return apperrors.ErrValidation.Wrap(reasonNoModules)
 	}
 	lessons, err := s.repo.CountLessons(ctx, v.ID)
 	if err != nil {
 		return apperrors.ErrInternal.Wrap(err)
 	}
 	if lessons == 0 {
-		return apperrors.ErrValidation.Wrap(fmt.Errorf("at least one lesson is required to publish"))
+		return apperrors.ErrValidation.Wrap(reasonNoLessons)
 	}
 	return nil
 }
 
-// VerifyAssets stands in for the RFC §7.4 activity of the same name: no
-// asset-upload endpoint exists yet (RFC §21.0), so there's nothing to
-// HeadObject against. What runs instead is a genuine, independent scan of
-// every lesson's actual content in the draft — not a placeholder, just a
-// narrower real check in the same graph position, concurrent with
-// ComputeMetadata. Defense in depth beyond the DB's own CHECK constraint on
-// content size: this fails as a clean 400-equivalent before publish,
-// rather than a raw constraint violation if the application-level check at
-// write time is ever bypassed.
+// VerifyAssets is the RFC §7.4 activity of the same name. Two independent
+// checks run over the draft's lessons, concurrent with ComputeMetadata:
+//
+//  1. Every lesson's actual content is scanned for size. Defense in depth
+//     beyond the DB's own CHECK constraint: this fails as a clean 400-equivalent
+//     before publish, rather than a raw constraint violation if the
+//     application-level check at write time is ever bypassed.
+//  2. Every asset key a lesson references (asset_key) must be a key this service
+//     issued for THIS course, must exist in object storage (StatObject), and
+//     must match the allowed type and size (RFC §7.4 A2: existence, content
+//     type and size, never the content itself). A missing or invalid asset
+//     fails the publish before PromoteAndPublish, so the live version is never
+//     touched. Lessons that reference no asset are not affected.
 func (s *Service) VerifyAssets(ctx context.Context, versionID uuid.UUID) error {
+	v, err := s.repo.GetVersionByID(ctx, versionID)
+	if err != nil {
+		return apperrors.ErrInternal.Wrap(err)
+	}
 	mods, err := s.repo.ListModules(ctx, versionID)
 	if err != nil {
 		return apperrors.ErrInternal.Wrap(err)
 	}
+	refs := map[string]string{} // asset key -> title of a lesson referencing it
 	for _, m := range mods {
 		lessons, err := s.repo.ListLessons(ctx, m.ID)
 		if err != nil {
@@ -615,11 +643,16 @@ func (s *Service) VerifyAssets(ctx context.Context, versionID uuid.UUID) error {
 		}
 		for _, l := range lessons {
 			if len(l.Content) >= maxLessonContentBytes {
-				return errContentTooLarge
+				return errContentTooLarge.Wrap(reasonContentTooLarge)
+			}
+			if l.AssetKey != nil && *l.AssetKey != "" {
+				if _, seen := refs[*l.AssetKey]; !seen {
+					refs[*l.AssetKey] = l.Title
+				}
 			}
 		}
 	}
-	return nil
+	return s.verifyLessonAssets(ctx, v.CourseID, refs)
 }
 
 // ComputeMetadata is the ComputeMetadata activity — lesson count and total
@@ -636,7 +669,7 @@ func (s *Service) ComputeMetadata(ctx context.Context, versionID uuid.UUID) erro
 // IndexSearch and WarmCache need in one pass (one set of DB reads, not two)
 // and pre-marshals the course detail payload WarmCache writes to Redis
 // verbatim, so a cache hit never re-serializes anything.
-func (s *Service) BuildOutline(ctx context.Context, courseID, versionID uuid.UUID) (*PublishOutline, error) {
+func (s *Service) BuildOutline(ctx context.Context, courseID, versionID uuid.UUID) (*publishing.PublishOutline, error) {
 	c, err := s.repo.GetCourseByID(ctx, courseID)
 	if err != nil {
 		return nil, apperrors.ErrInternal.Wrap(err)
@@ -676,7 +709,7 @@ func (s *Service) BuildOutline(ctx context.Context, courseID, versionID uuid.UUI
 	if err != nil {
 		return nil, apperrors.ErrInternal.Wrap(err)
 	}
-	return &PublishOutline{
+	return &publishing.PublishOutline{
 		CourseID: c.ID, VersionID: v.ID, VersionNumber: v.VersionNumber, Slug: c.Slug,
 		Title: v.Title, Description: v.Description, InstructorName: instructorName,
 		Category: v.Category, Level: v.Level, Tags: []string(v.Tags),
@@ -687,7 +720,7 @@ func (s *Service) BuildOutline(ctx context.Context, courseID, versionID uuid.UUI
 // IndexSearch is the IndexSearch activity (RFC §7.4, pulled forward from
 // M3 per ADR-0025 rather than left as a no-op stand-in — GET
 // /courses/search is live, not just this write side of it).
-func (s *Service) IndexSearch(ctx context.Context, o *PublishOutline) error {
+func (s *Service) IndexSearch(ctx context.Context, o *publishing.PublishOutline) error {
 	if err := s.repo.UpsertSearchIndex(ctx, o); err != nil {
 		return apperrors.ErrInternal.Wrap(err)
 	}
@@ -698,7 +731,7 @@ func (s *Service) IndexSearch(ctx context.Context, o *PublishOutline) error {
 // IndexSearch) — writes the version-scoped Redis key GetPublishedDetail
 // reads through. See cacheTTL's comment for why there's no explicit
 // invalidation step: each version gets its own key.
-func (s *Service) WarmCache(ctx context.Context, o *PublishOutline) error {
+func (s *Service) WarmCache(ctx context.Context, o *publishing.PublishOutline) error {
 	key := cacheKeyForVersion(o.CourseID, o.VersionNumber)
 	if err := s.rdb.Set(ctx, key, o.DetailJSON, cacheTTL).Err(); err != nil {
 		return apperrors.ErrInternal.Wrap(err)
@@ -746,7 +779,11 @@ func (s *Service) PromoteAndPublish(ctx context.Context, courseID, versionID uui
 			AggregateID:   courseID,
 			EventType:     "course.course_published",
 			SchemaVersion: 1,
-			Payload:       map[string]any{"course_id": courseID, "version_id": versionID, "title": title},
+			// instructor_id is additive: consumers decode only the fields
+			// they need (analytics ignores it today). It lets a consumer
+			// attribute the course to its owner without reading course's
+			// schema (ADR-0024).
+			Payload: map[string]any{"course_id": courseID, "version_id": versionID, "title": title, "instructor_id": c.InstructorID},
 		})
 	})
 	if err != nil {
@@ -765,8 +802,24 @@ func (s *Service) PromoteAndPublish(ctx context.Context, courseID, versionID uui
 // oversight"). Called by the workflow with the triggering activity's error
 // message; never from the HTTP path, which only ever starts a publish, not
 // fails one.
-func (s *Service) MarkPublishFailed(ctx context.Context, versionID uuid.UUID, reason string) error {
-	if err := s.repo.UpdateVersionState(ctx, versionID, StatePublishFailed, &reason); err != nil {
+//
+// It writes course.publish_failed in the same transaction as the transition,
+// and only when the version was not already publish_failed: Temporal retries
+// this activity (retry5x), and a retry after a committed first attempt must
+// not emit a second event. failedActivity names the workflow activity whose
+// final failure ended the publish.
+func (s *Service) MarkPublishFailed(ctx context.Context, versionID uuid.UUID, reason, failedActivity string) error {
+	// Postgres text rejects invalid UTF-8 and NUL; an activity error that
+	// carried either would otherwise fail this step on every retry.
+	reason = strings.ReplaceAll(strings.ToValidUTF8(reason, ""), "\x00", "")
+	err := s.repo.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		changed, err := s.repo.WithTx(tx).FailVersion(ctx, versionID, reason)
+		if err != nil || !changed {
+			return err
+		}
+		return s.writePublishFailed(ctx, tx, versionID, failedActivity, reason)
+	})
+	if err != nil {
 		return apperrors.ErrInternal.Wrap(err)
 	}
 	return nil

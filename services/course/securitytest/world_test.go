@@ -82,8 +82,9 @@ type world struct {
 func newWorld(t *testing.T) *world {
 	t.Helper()
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	w := &world{t: t, env: env}
-	w.svc = course.NewService(course.NewRepository(env.DB), env.RDB, fakeTemporal{}, "q")
+	w.svc = course.NewService(course.NewRepository(env.DB), env.RDB, fakeTemporal{}, "q").WithAssetStore(stubAssetStore{})
 	w.esvc = enrollment.NewService(enrollment.NewRepository(env.DB))
 	w.psvc = progress.NewService(progress.NewRepository(env.DB))
 	gin.SetMode(gin.TestMode)
@@ -102,10 +103,6 @@ func newWorld(t *testing.T) *world {
 		a := actor{name: spec.name, role: spec.role}
 		if spec.role != "" {
 			a.id = uuid.Must(uuid.NewV7())
-			if err := env.DB.Exec(`INSERT INTO users (id, email, password_hash, full_name, role, status) VALUES (?, ?, 'x', ?, ?::user_role, 'active')`,
-				a.id, a.id.String()+"@example.com", spec.name, spec.role).Error; err != nil {
-				t.Fatalf("seed %s: %v", spec.name, err)
-			}
 			if spec.role == "instructor" {
 				if err := env.DB.Exec(`INSERT INTO instructor_mirror (user_id, full_name) VALUES (?, ?)`, a.id, spec.name).Error; err != nil {
 					t.Fatal(err)
@@ -189,7 +186,7 @@ func (w *world) newDraft(owner int) courseFx {
 }
 
 // newPublished creates and publishes a course through the same activity
-// sequence the real workflow runs (services/course/workflows), without a
+// sequence the real workflow runs (services/publishing), without a
 // Temporal server.
 func (w *world) newPublished(owner int) courseFx {
 	w.t.Helper()

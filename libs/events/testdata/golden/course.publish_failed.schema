@@ -1,0 +1,9 @@
+smartcourse.course.v1.CoursePublishFailed
+course_id 1 string optional
+failed_activity 6 string optional
+failed_at 8 message optional
+instructor_id 5 string optional
+reason 7 string optional
+title 4 string optional
+version_id 2 string optional
+version_number 3 int32 optional

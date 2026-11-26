@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Living document |
-| Last updated | 2026-11-17 |
+| Last updated | 2026-11-26 |
 | Related | `smartcourse-rfc.md`, `smartcourse-adr.md`, `docs/baseline/SmartCourse.md`, `docs/baseline/Execution Guidelines.md` |
 
 ## Purpose
@@ -31,18 +31,24 @@ An entry here is not an admission of a mistake. It's the record that lets a revi
 | [DR-006](#dr-006--weekly-milestones-are-review-checkpoints-not-a-build-order) | Weekly milestones are review checkpoints, not a build order | Interpretation | Accepted |
 | [DR-007](#dr-007--celery-citation-correction) | Celery citation correction | Correction | Accepted |
 | [DR-008](#dr-008--password-reset-and-email-verification) | Password reset and email verification | Addition | Accepted |
-| [DR-009](#dr-009--separate-api-and-worker-binaries-per-supervisor-review) | Separate API and worker binaries, per supervisor review | Addition | Accepted |
+| [DR-009](#dr-009--separate-api-and-worker-binaries-per-supervisor-review) | Separate API and worker binaries, per supervisor review | Addition | Accepted; the single worker superseded in part 2026-11-26 (ADR-0033) |
 | [DR-010](#dr-010--per-service-table-ownership-and-liquibase-deferred-pending-discussion) | Per-service table ownership and Liquibase — deferred pending discussion | Interpretation | Resolved — both halves confirmed by 2026-11-03 (see entry's updates; tables → DR-013, Liquibase → entry itself) |
-| [DR-011](#dr-011--further-splitting-cmdapi-into-per-domain-deployable-services) | Further splitting cmd/api into per-domain deployable services | Interpretation | Accepted |
+| [DR-011](#dr-011--further-splitting-cmdapi-into-per-domain-deployable-services) | Further splitting cmd/api into per-domain deployable services | Interpretation | Accepted; four images superseded in part 2026-11-26 (ADR-0033) |
 | [DR-012](#dr-012--seed-data-created-through-the-service-layer-not-a-sql-script) | Seed data created through the service layer, not a SQL script | Interpretation | Proposed |
 | [DR-013](#dr-013--schema-per-service-reverses-dr-010s-shared-schema-position) | Schema-per-service reverses DR-010's shared-schema position | Interpretation | Accepted |
 | [DR-014](#dr-014--search-indexing-and-course-detail-caching-pulled-forward-into-m2) | Search indexing and course-detail caching pulled forward into M2 | Addition | Accepted |
 | [DR-015](#dr-015--dr-008s-existing-asynq-notification-path-was-inaccurate) | DR-008's "existing Asynq notification path" was inaccurate | Correction | Accepted |
-| [DR-016](#dr-016--syncrwmutex-required-by-the-tech-stack-not-used-not-previously-logged) | sync.RWMutex: required by the tech stack, not used, not previously logged | Interpretation | Accepted |
+| [DR-016](#dr-016--syncrwmutex-required-by-the-tech-stack-not-used-not-previously-logged) | sync.RWMutex: required by the tech stack, not used, not previously logged | Interpretation | Accepted; use added 2026-11-26 |
 | [DR-017](#dr-017--course_stats-and-daily_enrollments-were-computed-but-unreadable) | course_stats and daily_enrollments were computed but unreadable | Correction | Accepted |
+| [DR-018](#dr-018--search-indexer-and-cache-invalidator-stay-inside-the-publish-workflow-not-rehomed-as-kafka-consumers) | search-indexer and cache-invalidator stay inside the publish workflow | Interpretation | Accepted |
+| [DR-019](#dr-019--observability-stays-m4-week-3s-literal-ask-notwithstanding) | Observability stays M4, Week 3's literal ask notwithstanding | Interpretation | Superseded by ADR-0032 |
 | [DR-020](#dr-020--one-go-module-per-service-and-per-shared-library-beyond-the-baselines-clear-moduleservice-separation) | One Go module per service and per shared library, beyond the baseline's "clear module/service separation" | Interpretation | Accepted |
 | [DR-021](#dr-021--the-analytics-metric-count-is-nine-not-ten) | The analytics metric count is nine, not ten | Correction | Accepted |
 | [DR-022](#dr-022--limits-and-behaviours-chosen-during-the-bug-fix-pass-confirmed) | Limits and behaviours chosen during the bug-fix pass, confirmed | Clarification | Accepted |
+| [DR-023](#dr-023--idempotency-key-scope-and-replay-semantics) | `Idempotency-Key` scope and replay semantics | Clarification | Proposed |
+| [DR-024](#dr-024--analytics-ownership-and-the-metric-count-after-week-3) | Analytics ownership gate, nullable owner, and 8 of 9 metrics (9 of 9 after DR-026) | Clarification | Proposed |
+| [DR-025](#dr-025--certificates-and-notification-design-choices) | Certificates and notification design choices | Clarification | Proposed |
+| [DR-026](#dr-026--workflow-issues-source-and-the-three-event-gaps) | Workflow Issues source, the three event-catalogue gaps, and what is not backfilled | Clarification | Proposed |
 
 ---
 
@@ -65,6 +71,8 @@ MinIO is chosen over a real cloud provider's object storage to keep local develo
 ### If this turns out to be wrong
 
 Reversal trigger matches ADR-0019: a real cloud deployment target is chosen, at which point MinIO is swapped for the provider's object storage via configuration, not a rewrite, because the client speaks the S3 API either way.
+
+**Note 2026-11-25.** The Compose image is now the community fork `pgsty/minio` (client `pgsty/mc`), pinned by tag and digest, because the official `minio/minio` and `minio/mc` images can no longer be pulled on a fresh machine. It is a third-party fork under AGPLv3 (as seen in the image's `--version` output and bundled licence file); the application is unchanged (S3 API only). Details, risk and revert steps: ADR-0019 amendment.
 
 ---
 
@@ -210,6 +218,10 @@ A fair request on its own terms: one binary with a mode flag genuinely doesn't g
 
 Not applicable — this is a deployment-artifact change with no architectural downside identified; reversing it would mean returning to one binary, which no one has asked for.
 
+### Update 2026-11-26 — the single worker is superseded by per-service workers
+
+Superseded in part by the microservices split (ADR-0033 to ADR-0035, `docs/plans/microservices-split.md`): there is no longer one shared `worker` binary. Each service has its own API and/or worker binary (`identity-api`/`identity-worker`, `course-api`/`course-worker`, `analytics-api`/`analytics-worker`, `notification-worker`, `publishing-worker`, `audit-api`/`audit-worker`; 11 binaries with the `identity-admin` CLI), and `services/worker` was deleted. The principle of this entry, separate API and worker artifacts, now applies per service.
+
 ---
 
 ## DR-010 — Per-service table ownership and Liquibase — deferred pending discussion
@@ -236,6 +248,10 @@ The direct conversation this entry was waiting on happened. The supervisor's per
 
 A later written review asked for Liquibase again ("own Liquibase changelog" per service). Asked directly, the supervisor confirmed: "Liquibase not a hard requirement for you. You're on golang-migrate just we need to make sure each service has its own migrations folder." Both halves of this entry are now resolved — neither in the direction the original review asked for, but both by direct confirmation rather than this project's own unilateral case. `golang-migrate` stays (`libs/db`, `Makefile`), reorganized into one independent migration sequence per service (`migrations/{platform,identity,course,analytics}/`) rather than Liquibase changelogs. See DR-013 and ADR-0024 for what that same conversation asked for on data ownership, which this register's original per-service-table reasoning did not survive unchanged.
 
+### Update 2026-11-26 — per-service tables carried through to the outbox
+
+The per-service data ownership direction confirmed in DR-013 was completed by the microservices split (ADR-0033): the shared `platform` schema (outbox, `processed_events`, `idempotency_keys`) is removed, each service owns those tables in its own schema, and each service connects with its own Postgres role. One database remains. The migration sets are now `migrations/{platform,identity,course,analytics,notification,cutover}/`; `platform` keeps only the extensions. Liquibase is unaffected.
+
 ---
 
 ## DR-011 — Further splitting cmd/api into per-domain deployable services
@@ -253,6 +269,10 @@ Unlike DR-010, this doesn't reverse any existing ADR — it's an extension of AD
 ### If this turns out to be wrong
 
 If a five-image split (splitting `enrollment` out of `course-api` too) turns out to be what's actually expected, that requires accepting a real architectural cost — the seat-limit lock becoming a network call or distributed transaction — not just another `cmd/` directory. That tradeoff isn't decided here and would need its own ADR superseding ADR-0023's grouping decision specifically, not a silent code change.
+
+### Update 2026-11-26 — four images became eleven binaries
+
+Superseded in part by the microservices split (ADR-0033 to ADR-0035): the "four deployable images" (three APIs plus `cmd/worker`) became eleven binaries in six services, each with its own `Dockerfile.<binary>`, and the shared `cmd/worker` no longer exists. `course-api` still bundles `course`, `enrollment`, `progress` and `certificate` in one process for ADR-0012; the "shared database, shared transactions" framing of this entry now means one database with per-service schemas and roles, and shared transactions only within a service.
 
 ---
 
@@ -289,6 +309,10 @@ This is a genuine reversal of DR-010's shared-*schema* position, not an extensio
 ### If this turns out to be wrong
 
 If the schema split ever needs reversing (e.g., it turns out to add operational cost — migration-tooling surface, `search_path` misconfiguration risk — without a corresponding benefit the supervisor confirms she still wants), the fix is a new entry superseding this one and ADR-0024, collapsing back toward DR-010's original shared-schema position, not a silent revert.
+
+### Update 2026-11-26 — the split extended to outbox tables and roles
+
+ADR-0033 extended this entry's schema-per-service position: the `platform` schema is removed (each service owns its outbox, `processed_events` and `idempotency_keys` in its own schema), and each service connects with its own Postgres role (`svc_identity`, `svc_course`, `svc_analytics`, `svc_notification`) so the schema boundary is enforced by the database. The `search_path` misconfiguration risk named above is addressed by per-service roles and one `search_path` per binary; `migrations/README.md` records the name-collision hazard that remains for a connection with a combined path.
 
 ---
 
@@ -340,6 +364,10 @@ Not applicable — this entry itself is the correction, the same way DR-007 is. 
 
 RFC §21.0 already states this plainly in its own status prose: "`sync.RWMutex` has no forced-fit use — the one candidate pattern RFC §10.3 names (a read-heavy/write-rare in-process config cache) doesn't exist as a real need yet, and adding one only to use the primitive would be exactly the anti-pattern ADR-0021 was written to avoid." That's a defensible reading of an ambiguous instruction — "demonstrate practical usage" read as "use it where a real need exists," not "manufacture one" — but it was never logged in this register the way every other baseline departure was, so a reviewer checking this register specifically for unmet tech-stack items wouldn't find it. Logged now for exactly that reason: the gap itself isn't new; its absence from this document was.
 
+### Update (2026-11-26)
+
+The statement above that `sync.RWMutex` has zero production uses was true when written and is no longer. It now guards read-heavy, write-rare shared state in three places: the producer in `libs/kafka` (`producer.go`), the process-wide observability settings in `libs/temporal` (`observability.go`) and the connected-client state in `publishing-worker` (`cmd/publishing-worker/wire.go`). The original text is left as written.
+
 ### If this turns out to be wrong
 
 If a genuine read-heavy/write-rare shared-state need emerges (the in-process config cache RFC §10.3 names is still the most likely candidate), this is superseded by a new entry recording where `sync.RWMutex` was added and why that specific case earned it. If the reviewer intends literal, forced demonstration of every named primitive regardless of organic need, this entry is superseded and one is added for its own sake, with that tradeoff stated plainly rather than hidden.
@@ -361,6 +389,52 @@ Same category as DR-007/DR-015: a correction to our own status claims, not a bas
 ### If this turns out to be wrong
 
 Not applicable — this closes a gap between documentation and reality rather than making a bet.
+
+---
+
+## DR-018 — search-indexer and cache-invalidator stay inside the publish workflow, not rehomed as Kafka consumers
+
+**Category:** Interpretation · **Date:** 2026-11-06 · **Related:** RFC §6.5, ADR-0025, M3 planning
+
+### What differs
+
+RFC §6.5's consumer table lists `search-indexer` (subscribes `course.events`, upserts/removes `course_search_index`) and `cache-invalidator` (subscribes `course.events`, swaps the outline pointer, evicts stale keys) as standalone Kafka consumers, alongside `analytics-aggregator`, `notification-dispatcher`, and `audit-archiver`. Both pieces of functionality already exist — `IndexSearch` and `WarmCache`, activities inside `internal/workflows.PublishCourseWorkflow` (ADR-0025) — but as synchronous steps in the publish workflow, not as independent event-driven consumers reacting to a `CoursePublished` message on a topic.
+
+### Why
+
+As M3 (Kafka, the remaining consumers) was being scoped, rebuilding these two as literal Kafka consumers would be rework on something that already works correctly, and would weaken a property the current design deliberately has: `WarmCache` runs as the second-to-last activity in the workflow, before `PromoteAndPublish`, specifically so the cache is already warm the instant a course goes live (ADR-0025's own reasoning). Moving it behind a Kafka hop reintroduces exactly the staleness window — a published course briefly uncached — the current design avoids by construction. The same logic applies to `IndexSearch`. Both stay where they are; M3's Kafka-migration effort goes to the two consumers that are genuinely unbuilt — `notification-dispatcher` and `audit-archiver` — plus cutting `analytics-aggregator` (and the relay's other existing in-process handlers) over to real Kafka consumption per ADR-0021's already-committed migration path.
+
+### Status (2026-11-26)
+
+Restored to the register: this entry was written on 2026-11-06 and was missing from the file. Still in force. `IndexSearch` and `WarmCache` remain activities of the publish workflow (Week 3 plan decision D8).
+
+### If this turns out to be wrong
+
+If a real need emerges for `course.events` to be consumed by something other than the publish workflow itself (e.g. a downstream system this project doesn't yet know about), `IndexSearch`/`WarmCache` are rebuilt as Kafka consumers at that point — this entry is superseded, not the workflow's existing activities broken apart speculatively now.
+
+---
+
+## DR-019 — Observability stays M4, Week 3's literal ask notwithstanding
+
+**Category:** Interpretation · **Date:** 2026-11-06 · **Status:** Superseded by ADR-0032 (2026-11-26) · **Related:** DR-006, RFC §21, ADR-0032
+
+### What differs
+
+The Execution Guidelines' Week 3 scope lists "Observability setup (logs, tracing, metrics)" alongside Kafka integration and background workers. RFC §21 scopes OpenTelemetry, Prometheus, Grafana, and Jaeger entirely to M4, after events (M3). M3 work proceeds without pulling tracing/metrics forward.
+
+### Why
+
+Same precedent as DR-006: the weekly plan is a review cadence, not a hard technical gate on build order, and this project's actual delivery plan has never matched it week-for-week — Week 1 already included the full schema and enrollment, Week 2 already pulled search/caching forward from M3 (DR-014). Structured JSON logging (`internal/platform/logging`) has existed since M0 and already satisfies "logs" in Week 3's literal list; full distributed tracing through the Kafka event envelope is a materially larger piece of work than "basic... tracing" suggests, and RFC §6.4's event envelope already reserves `trace_id`/`span_id` fields for exactly this, so nothing about doing it in M4 instead requires a schema change later. Logged explicitly, rather than silently deferred, so a reviewer checking Week 3's checklist against this register finds the reasoning rather than an unexplained gap.
+
+### Superseded
+
+The condition below came true: the Week 3 plan (decision D1) put observability in Week 3, and ADR-0032 records the decision (OpenTelemetry tracing across the Kafka envelope, Prometheus, Grafana, Jaeger). The text above is the original entry and is left as written. Restored to the register on 2026-11-26; it was missing from the file.
+
+### If this turns out to be wrong
+
+If the reviewer intends Week 3's observability line as a hard requirement rather than a checkpoint goal, this entry is superseded and a thin tracing slice (trace context propagation through the new Kafka consumers specifically, not the full M4 stack) is pulled forward instead.
+
+---
 
 ---
 
@@ -389,6 +463,10 @@ Like DR-013, this is adopted because it was given as a direct requirement after 
 
 If the per-package library split proves to be overhead without a second owner, collapse to three grouped modules (`core`, `web`, `data`) or one `libs/common` — the layout allows it and ADR-0026's reversal trigger says when. If the module split as a whole is rejected, ADR-0026 is superseded by a new record; the per-service wiring change that came first (no shared `bootstrap`) stands on its own.
 
+### Update 2026-11-26 — module counts and the worker's imports
+
+The counts in this entry are historical (13 library modules, 19 `go.mod` files, `identity-api` at 388 packages). The repository now has 33 Go modules: six services, 23 libraries (`libs/*`, including `libs/eventbus`, `libs/runtime` and `libs/contracts/publishing`), `test/e2e`, `tools/seed` and `tools/guardcheck`. The "not yet confirmed" point about the worker importing the `course` and `analytics` handler packages is moot: `services/worker` was deleted, and no service imports another service (ADR-0033; `scripts/check-module-graph.sh` enforces it). The seed tool now drives the HTTP APIs and requires no service module.
+
 ---
 
 ## DR-021 — The analytics metric count is nine, not ten
@@ -401,7 +479,7 @@ The PRD (FR-5 and its traceability row), RFC §21.0 and §A, `services/analytics
 
 ### Why this is logged, and what changed
 
-Same category as DR-007, DR-015 and DR-017: a correction to our own status claims, not a baseline deviation. The count is now "nine" in the documents above, and progress is **7 of 9**. Verified against the code on 2026-11-17: total students, total instructors, total courses published and average courses per student are in `platform_snapshot`; completion rate and average completion time are in `course_stats`; new enrollments over time are in `daily_enrollments`. **Most popular courses** and **failed events / workflow issues** are not implemented.
+Same category as DR-007, DR-015 and DR-017: a correction to our own status claims, not a baseline deviation. The count is now "nine" in the documents above, and progress was **7 of 9** on 2026-11-17 (8 of 9 after Week 3, see DR-024). Verified against the code on 2026-11-17: total students, total instructors, total courses published and average courses per student are in `platform_snapshot`; completion rate and average completion time are in `course_stats`; new enrollments over time are in `daily_enrollments`. **Most popular courses** and **failed events / workflow issues** are not implemented.
 
 ### If this turns out to be wrong
 
@@ -424,7 +502,8 @@ The 38-defect fix pass (module-split-findings.md) left several values and behavi
 | Route limits (F-15) | 5 per minute: register, password-reset request, verification resend. 20: login. 30: password-reset confirm, verification confirm. 60: refresh, logout |
 | HTTP hardening (F-29) | `MAX_BODY_BYTES` 1 MiB; read timeout 15 s, write timeout 30 s, idle timeout 120 s; all overridable by environment variable |
 | Argon2 (F-26) | Defaults 64 MiB, 3 iterations, parallelism 2; values outside the validated range stop the service starting |
-| Analytics (F-18) | Any authenticated user reads platform totals; a student reads per-course stats only for a course they are actively or completed-enrolled in, and a withdrawn student gets 404; instructors may read any course (ownership not enforced, see the assessment) |
+| Analytics (F-18) | Any authenticated user reads platform totals; a student reads per-course stats only for a course they are actively or completed-enrolled in, and a withdrawn student gets 404; instructors may read any course (ownership not enforced, see the assessment) | **Superseded in Week 3 for instructors by DR-024:** an instructor now reads only the courses they own.
+| Admin-only reads after a Redis flush (E10, 2026-11-25; **Proposed**, not yet confirmed by the project owner) | The admin failed-event API and `GET /analytics/issues` cannot read identity's tables (ADR-0022 to 0024), so a missing token-version key in Redis fails closed there (401 `token_stale`) instead of reading as version 1. After a flush an admin is locked out of those two surfaces until identity's re-seeder (15 s tick, versions above 1; it now runs in `identity-worker`) or a login, refresh or identity `/me` or admin call rewrites the key. The instructor routes in course-api keep "miss means version 1" (F-38) so a flush does not lock out instructors. Decision rationale in `libs/auth/README.md`. *Update 2026-11-26: the "worker admin API" is now `audit-api` (ADR-0034), with the same fail-closed rule.* |
 | Admin role (F-33) | An admin may demote themselves when another active admin exists; otherwise 409 `last_admin` |
 | Ownership (F-36) | A non-owner of an existing course gets 404 `not_found`, identical to an unknown id (an API contract change from 403 `not_owner`) |
 
@@ -435,6 +514,117 @@ None of these contradict the baseline; they fill gaps in it. They are numbers an
 ### If this turns out to be wrong
 
 Each value is a constant or an environment variable in the file named in the findings register. Changing one is a one-line edit plus the test that pins it.
+
+---
+
+## DR-023 — `Idempotency-Key` scope and replay semantics
+
+**Category:** Clarification · **Date:** 2026-11-18 · **Related:** RFC §8.1 step 2, §15.1, §15.2; `libs/idempotency`; Week 3 plan Phase 1
+
+### What was chosen
+
+RFC §15.1 says the header is "honoured on all non-idempotent writes" and §8.1 says a completed request's stored response is replayed. It does not say which routes, which responses are stored, or what a conflicting retry gets. The implementation chose:
+
+| Area | Choice |
+|---|---|
+| Routes | The `POST` routes in course-api: create course, add module, add lesson, publish, archive, `POST /assets/upload-url`, and `POST /enrollments`. `PATCH`, `PUT` and `DELETE` are idempotent by construction and are not wrapped. Identity routes are not wrapped: `register` and `login` have no authenticated user to scope a key to, and the authenticated identity writes are `PATCH` |
+| Stored responses | Only 2xx responses with a JSON body up to 1 MiB. A 4xx, a 5xx, a panic or a larger response releases the key, so the retry runs again as it would without a key |
+| Same key, different request | 422 `idempotency_key_reused` (the RFC's "rejected as a client error"). The comparison covers method, path, query and body |
+| Retry while the first request runs | 409 `idempotency_request_in_progress` with `Retry-After: 1` |
+| Replay | Stored status and body, with `Idempotent-Replayed: true`. The body is kept as JSONB, so key order and whitespace may differ from the first response |
+| Scope and lifetime | Per authenticated user and route pattern; 24 hours (RFC §15.2). An `in_progress` row older than 3 minutes is treated as abandoned and can be claimed |
+| Cleanup | `PruneExpired` exists; the scheduled job that calls it belongs to the worker wiring (Phase 5) and is not scheduled yet. *Update 2026-11-26: it is scheduled hourly by `course-worker`, over `course.idempotency_keys` (the table moved from `platform` to the `course` schema, ADR-0033).* |
+
+### Why this is logged
+
+The RFC names the header but not these edges. A reviewer may want 4xx responses stored too (the Stripe convention), or the identity routes covered.
+
+### If this turns out to be wrong
+
+Storing 4xx responses is a change to one predicate in `libs/idempotency` (`storable`). Wrapping more routes is passing the middleware to `RegisterRoutes`.
+
+---
+
+## DR-024 — Analytics ownership and the metric count after Week 3
+
+**Category:** Clarification · **Date:** 2026-11-19 · **Related:** DR-017, DR-021, DR-022 (F-18), RFC §9, `services/analytics/analytics/README.md`
+
+### What was chosen
+
+| Area | Choice |
+|---|---|
+| Per-course ownership | An instructor reads per-course analytics only for courses they own, using `instructor_id` from `course.course_published` (admins read any course; students keep the DR-022 enrollment rule). Any other caller gets 404, identical to an unknown course (F-36). This replaces the earlier "instructors may read any course" rule |
+| Courses published before the migration | `course_mirror.instructor_id` is nullable and analytics cannot read the course schema (ADR-0024), so there is no backfill. Such a course is readable by admins only until its next `course_published` event fills the owner. An event without `instructor_id` never erases a recorded owner |
+| Behaviour change | An instructor asking about a course analytics has not seen now gets 404 instead of zeros |
+| Most Popular Courses | `GET /analytics/popular-courses`: ranks published courses by active plus completed enrollments, served from a Redis sorted set that the reconciler rebuilds, falling back to Postgres when Redis is absent, down, slow or empty. Any authenticated user may read it; it returns course ids and counts only (no title, because the mirror holds none). Archived courses stay in the ranking, because `course_mirror.published` is never cleared |
+| Reconciliation | `analytics.NewReconciler(db, rdb).Run` recomputes the platform snapshot, every course's stats and the daily buckets from the mirrors; `analytics-worker` runs it every 60 s (it was the shared worker when this was written). `daily_enrollments` is now rebuilt by it as well as counted on events |
+| Metric count | 8 of the 9 FR-5 metrics were live when this was written. The ninth, Failed Events / Workflow Issues, had an admin-only route that answered 503 until a source was attached. **Superseded by DR-026: 9 of 9 now have a source** |
+
+### Why this is logged
+
+The baseline names the metrics but not who may see per-course figures, and the owner cannot be backfilled across a schema boundary. A reviewer may prefer a one-off republish to fill owners sooner, or a different fallback for ownerless rows.
+
+### If this turns out to be wrong
+
+The ownership rule is one predicate in the service; a republish of existing courses fills the owner column.
+
+---
+
+## DR-025 — Certificates and notification design choices
+
+**Category:** Clarification · **Date:** 2026-11-19 · **Related:** RFC §8.3, §8.4, ADR-0014, DR-008, DR-015, `services/course/certificate/README.md`, `services/notification/README.md` (was `services/worker/notification/README.md` when written)
+
+### What was chosen
+
+| Area | Choice |
+|---|---|
+| Certificate table | The `certificates` table already existed (migration 000003) and was unused; migration 000007 alters it: adds `student_id`, `course_id` and a nullable `course_version_id`, a CHECK on the verification code format, two indexes, and backfills the ids from enrollments. The RFC's column list had none of these; they make "my certificates" and the owner check single indexed reads |
+| Issuing | One certificate per enrollment (`UNIQUE(enrollment_id)`, `ON CONFLICT DO NOTHING`), idempotent under duplicate and concurrent delivery. The student's name comes from `instructor_mirror`; if it is not mirrored yet the handler errors so the consumer retries rather than issuing a nameless certificate (a relay handler when written; since ADR-0033 the `certificate-issuer` Kafka consumer in `course-worker`) |
+| Revocation | None. An issued certificate survives a completed enrollment returning to `active` (RFC §8.3/§8.4). Today nothing moves `completed` back to `active` |
+| Unknown or withdrawn enrollment | The completion event is acknowledged with a logged warning, because a retry cannot help and an error would only cycle the row until the relay gives up. This is a stopgap until the dead-letter store parks such events (the store now exists, ADR-0031 and ADR-0034; whether this handler should error instead is not re-decided here) |
+| Public verification | `GET /certificates/verify/{code}` is unauthenticated, rate-limited (30 per minute per IP), and returns only course title, student name and issue date. A malformed code is a 400 with no database read |
+| Notification enqueue | Notification handlers only write delivery rows; they do not enqueue. (Written for the in-process relay; the reasoning holds for the Kafka consumer in `notification-worker`, which commits the handler transaction before the offset.) The relay commits a handler's transaction after the handler returns and has no after-commit hook, so an enqueue inside a handler could fire for a rolled-back transaction. A sweeper (`EnqueuePending`) is the single enqueue path and also repairs a crash between commit and enqueue. A row can be enqueued twice; the delivery claim makes that harmless |
+| Duplicate sends | A small duplicate-send window remains by design: the send succeeded but marking it sent failed, a send outlived its lease, or the connection dropped after DATA. It is documented, not denied |
+| Mail provider | A local SMTP sink (Mailpit) only. No real mail provider is integrated (DR-008, DR-015, plan section 9) |
+
+### Why this is logged
+
+None of these are specified by the baseline. They are choices a reviewer may reasonably want different, especially the certificate columns and the sweeper-only enqueue path.
+
+### If this turns out to be wrong
+
+Each choice is local: the certificate columns are one migration, the enqueue path is one package, and the unknown-enrollment behaviour is a branch in `IssueForCompletion`.
+
+---
+
+## DR-026 — Workflow Issues source and the three event-catalogue gaps
+
+**Category:** Clarification · **Date:** 2026-11-24 · **Related:** DR-024, DR-025, RFC §4.6, §6.5, §7.4, §9, ADR-0024, ADR-0030, ADR-0031, `libs/events/README.md`, `services/analytics/analytics/README.md`
+
+### What was chosen
+
+| Area | Choice |
+|---|---|
+| Missing events | The E2E run found that RFC §6.5's `LessonCompleted`, `CertificateIssued` and `CoursePublishFailed` were never emitted. They are now: `progress.lesson_completed` (once per lesson completion, not on an idempotent repeat), `progress.certificate_issued` (in the transaction that inserts the certificate, on the inserting path only) and `course.publish_failed` (in the transaction that moves a version to `publish_failed`, from the workflow's failure step and from the stale-publish reconciler, once per failure). Schemas are BACKWARD-compatible additions; the catalogue is 11 events and 15 registry subjects. `CourseCreated`, `CourseVersionCreated` and `CoursePublishRequested` remain unemitted: the RFC's consumer table gives them no consumer |
+| What "Workflow Issues" counts | The number of course publishes that ended in `publish_failed`, from `course.publish_failed` events, shown as `workflow_issues.failed` and `by_workflow` (`PublishCourseWorkflow`) on `GET /analytics/issues`. It is a cumulative count of failures, not of versions currently failing: a version that failed twice counts twice and one that later published still counts. It is not a count of failed Temporal workflows of any other type (publishing is the only workflow) |
+| Where the count lives | `analytics.publish_failures` (one row per event, keyed by event id) and `analytics.workflow_issue_stats` (the count), migration 000004. The handler recomputes the count under a row lock and the 60 s reconciler recomputes it from the mirror. Analytics still reads no other schema (ADR-0024) |
+| Metric count | **9 of the 9 FR-5 metrics have a source.** The failed-events half still needs MongoDB: without it the route answers 503, as before. `workflow_issues` is now always an object, never null |
+| Notifications | A certificate-issued mail to the student and a publish-failed mail to the instructor (the RFC's §4.6 table asks for both). The certificate's verification code is in neither the event nor the mail |
+| Audit log | The RFC's §4.6 table says `CoursePublishFailed` and `CertificateIssued` are "archive + audit". Both are archived (the archiver subscribes to every catalogue type); neither is in the archiver's `audit_log` list yet, which is unchanged here |
+
+### Not backfilled, and what that means
+
+- **Outbox rows written before this change** are not rewritten. Nothing emitted `lesson_completed`, `certificate_issued` or `publish_failed` before, so there is nothing to replay: only new events exist. Certificates issued before this change have no `certificate_issued` event and their students were not mailed; lessons completed earlier have no `lesson_completed` event.
+- **Publish failures that happened before this change are not counted** in Workflow Issues, and their instructors were not mailed. The only record is `course_versions.publish_error` in the course schema, which analytics may not read. The metric starts at zero and so understates history; it is a count since the event existed.
+- **In-flight publish workflows at deploy time** were scheduled with the two-argument `MarkPublishFailed`; the activity now takes the failed activity's name as a third argument. Whether a workflow already past `ValidateMetadata` fails cleanly on that mismatch was not tested; drain or let publishes finish before deploying.
+
+### Why this is logged
+
+The baseline names the metric but not its source, and the RFC lists events the code did not emit. A reviewer may want the count to mean open failures rather than total failures, or an `audit_log` entry for both new events.
+
+### If this turns out to be wrong
+
+The count's definition is one query in `analytics/workflow_issues.go`; the event is one `outbox.Write` in each producer; the migration has a tested down path that drops both tables.
 
 ---
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay/relaytest"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/enrollment"
 )
@@ -29,6 +30,7 @@ import (
 // withdrawn_at alone, not just that it withdraws everyone indiscriminately.
 func TestHandleCourseArchived_WithdrawsActiveEnrollments(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	ctx := context.Background()
 
@@ -71,10 +73,7 @@ func TestHandleCourseArchived_WithdrawsActiveEnrollments(t *testing.T) {
 		t.Fatalf("write course.course_archived event: %v", err)
 	}
 
-	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(50*time.Millisecond))
-	for _, h := range enrollment.Handlers() {
-		rl.Register(h)
-	}
+	rl := relay.New(env.DB, relaytest.DeliverTo(env.DB, enrollment.Handlers()...), relay.WithWorkerCount(1), relay.WithPollInterval(50*time.Millisecond))
 	runCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	go rl.Run(runCtx)

@@ -22,12 +22,14 @@ import (
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay/relaytest"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/course"
 )
 
 func TestHandleUserRegistered_PopulatesInstructorMirror(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	ctx := context.Background()
 	userID := uuid.Must(uuid.NewV7())
 
@@ -40,10 +42,7 @@ func TestHandleUserRegistered_PopulatesInstructorMirror(t *testing.T) {
 		t.Fatalf("write identity.user_registered event: %v", err)
 	}
 
-	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(50*time.Millisecond))
-	for _, h := range course.Handlers() {
-		rl.Register(h)
-	}
+	rl := relay.New(env.DB, relaytest.DeliverTo(env.DB, course.Handlers()...), relay.WithWorkerCount(1), relay.WithPollInterval(50*time.Millisecond))
 	runCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	go rl.Run(runCtx)
@@ -67,6 +66,7 @@ func TestHandleUserRegistered_PopulatesInstructorMirror(t *testing.T) {
 
 func TestHandleUserProfileUpdated_UpdatesInstructorMirror(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	ctx := context.Background()
 	userID := uuid.Must(uuid.NewV7())
 
@@ -87,10 +87,7 @@ func TestHandleUserProfileUpdated_UpdatesInstructorMirror(t *testing.T) {
 		t.Fatalf("write identity.user_profile_updated event: %v", err)
 	}
 
-	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(50*time.Millisecond))
-	for _, h := range course.Handlers() {
-		rl.Register(h)
-	}
+	rl := relay.New(env.DB, relaytest.DeliverTo(env.DB, course.Handlers()...), relay.WithWorkerCount(1), relay.WithPollInterval(50*time.Millisecond))
 	runCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	go rl.Run(runCtx)
@@ -122,6 +119,7 @@ func TestHandleUserProfileUpdated_UpdatesInstructorMirror(t *testing.T) {
 // silently succeed with no instructor_mirror row.
 func TestHandleUserRegistered_MalformedPayload_GivesUpRatherThanSucceeding(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	ctx := context.Background()
 	aggID := uuid.Must(uuid.NewV7())
 
@@ -134,10 +132,7 @@ func TestHandleUserRegistered_MalformedPayload_GivesUpRatherThanSucceeding(t *te
 		t.Fatalf("write malformed identity.user_registered event: %v", err)
 	}
 
-	rl := relay.New(env.DB, relay.WithWorkerCount(1), relay.WithPollInterval(50*time.Millisecond), relay.WithMaxAttempts(3))
-	for _, h := range course.Handlers() {
-		rl.Register(h)
-	}
+	rl := relay.New(env.DB, relaytest.DeliverTo(env.DB, course.Handlers()...), relay.WithWorkerCount(1), relay.WithPollInterval(50*time.Millisecond), relay.WithMaxAttempts(3))
 	runCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	go rl.Run(runCtx)

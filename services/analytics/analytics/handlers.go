@@ -26,7 +26,7 @@ import (
 const consumerName = "analytics-aggregator"
 
 // Handlers returns every relay.Handler this module registers. Called once
-// at worker startup (buildRelay in services/worker/cmd/worker/wire.go — ADR-0022) — wiring lives there, not
+// at worker startup (analytics-worker's consumers, services/analytics/cmd/analytics-worker — ADR-0022, ADR-0033) — wiring lives there, not
 // here, so a binary only links the modules it actually runs.
 func Handlers() []relay.Handler {
 	return []relay.Handler{
@@ -35,6 +35,7 @@ func Handlers() []relay.Handler {
 		relay.NewHandler(consumerName, []string{"enrollment.student_enrolled"}, handleStudentEnrolled),
 		relay.NewHandler(consumerName, []string{"enrollment.student_withdrawn"}, handleStudentWithdrawn),
 		relay.NewHandler(consumerName, []string{"progress.course_completed"}, handleCourseCompleted),
+		relay.NewHandler(consumerName, []string{"course.publish_failed"}, handlePublishFailed),
 	}
 }
 
@@ -54,12 +55,13 @@ func handlePlatformCounts(ctx context.Context, tx *gorm.DB, evt relay.DecodedEve
 
 func handleCoursePublished(ctx context.Context, tx *gorm.DB, evt relay.DecodedEvent) error {
 	var payload struct {
-		CourseID uuid.UUID `json:"course_id"`
+		CourseID     uuid.UUID  `json:"course_id"`
+		InstructorID *uuid.UUID `json:"instructor_id"`
 	}
 	if err := json.Unmarshal(evt.Payload, &payload); err != nil {
 		return fmt.Errorf("decode course.course_published payload: %w", err)
 	}
-	if err := UpsertCourseMirror(ctx, tx, payload.CourseID, true); err != nil {
+	if err := UpsertCourseMirror(ctx, tx, payload.CourseID, true, payload.InstructorID); err != nil {
 		return err
 	}
 	if err := EnsureCourseStatsRow(ctx, tx, payload.CourseID); err != nil {

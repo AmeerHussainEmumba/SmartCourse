@@ -15,11 +15,10 @@ import (
 	"time"
 
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/config"
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 func TestSecurity_Resource_ArgonFlood_DoesNotStarveCheapEndpoints(t *testing.T) {
-	h := newHarnessWith(t, testenv.Setup(t), config.Argon2Config{MemoryKiB: 64 * 1024, Iterations: 3, Parallelism: 2, SaltLength: 16, KeyLength: 32})
+	h := newHarnessWith(t, setupIdentity(t), config.Argon2Config{MemoryKiB: 64 * 1024, Iterations: 3, Parallelism: 2, SaltLength: 16, KeyLength: 32})
 
 	cheap := func() time.Duration {
 		s := time.Now()

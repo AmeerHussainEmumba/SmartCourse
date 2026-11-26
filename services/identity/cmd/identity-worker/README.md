@@ -1,0 +1,23 @@
+# services/identity/cmd/identity-worker
+
+Identity's background process (`docs/plans/microservices-split.md` §6). `main.go` is `runtime.Main("identity-worker", wire, runtime.WithOutbox())`; `wire.go` registers three independent components (see `services/identity/README.md`):
+
+| Component | What | Notes |
+|---|---|---|
+| `relay` | `libs/relay` over `identity.outbox`, publish only | Publisher and no handlers (`TestBuildRelay_IsPublishOnly`). Waits for Kafka with backoff (`eventbus.Prepare`, `NewPublisherFor`); `RELAY_WORKERS` sizes the pool. |
+| `token-version-reseeder` | `Service.RunTokenVersionReseeder`, every 15 s | Repairs `user:tv:<id>` after a Redis flush (F-38). Moved here from identity-api. |
+| `jobs` | `libs/asynqx` servers and scheduler, `libs/jobs` | `PruneOutbox` only. |
+
+Internal listener `METRICS_HTTP_ADDR` (`:9100`; compose publishes it on 9111): `/metrics`, `/health/live`, `/health/ready`. Postgres and Redis fatal; Kafka non-fatal. A component failing is shown degraded and never stops the others. Connects as `svc_identity`.
+
+**Asynq queue namespace.** This worker's queues are prefixed `identity:` (`identity:low`; `asynqx.Namespace`) because every worker shares one Redis database and the same logical queue names; without the prefix a worker would dequeue and archive another service's tasks. The `queue` label of the `asynq_*` gauges carries the prefixed name.
+
+Tests: unit wiring guards (`wire_test.go`: publish-only relay, worker count, job set, Asynq pools); `-tags=integration` (`wire_integration_test.go`): real Postgres and Redis through `runtime.Run`, a recording publisher in place of Kafka (relay publishes and marks rows published in `identity.outbox`, re-seeder writes the key, an enqueued prune task deletes an old published row, Kafka down degrades readiness, a panicking relay leaves the others running). Not covered here: a live Kafka broker and schema registry (see `libs/eventbus` and the E2E harness).
+
+## Configuration
+
+**Required:** `POSTGRES_DSN` (`svc_identity`), `POSTGRES_SEARCH_PATH=identity,public`, `REDIS_ADDR`, `KAFKA_BROKERS`, `SCHEMA_REGISTRY_URL` (groups Postgres, Redis, Kafka).
+
+**Optional:** `RELAY_WORKERS`, `KAFKA_*` tuning, `ASYNQ_*`, `OUTBOX_RETENTION`, `JOBS_OUTBOX_PRUNE_INTERVAL`, `METRICS_HTTP_ADDR`, `OTEL_*`.
+
+**Not read:** `JWT_SIGNING_KEY`, MinIO, MongoDB, SMTP; Argon settings fall back to their defaults (the re-seeder hashes nothing). Declared in `main.go` as `requirements` and loaded with `config.LoadWith` through `runtime.WithConfig`; `config_test.go` proves the binary loads with only these variables and names a missing one. Per-variable reference: `env.example` and `libs/config/README.md`.

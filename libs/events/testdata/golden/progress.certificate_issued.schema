@@ -1,0 +1,7 @@
+smartcourse.progress.v1.CertificateIssued
+certificate_id 1 string optional
+course_id 4 string optional
+course_title 5 string optional
+enrollment_id 2 string optional
+issued_at 6 message optional
+student_id 3 string optional

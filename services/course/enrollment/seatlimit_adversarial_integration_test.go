@@ -20,6 +20,7 @@ import (
 	apperrors "github.com/AmeerHussainEmumba/SmartCourse/libs/errors"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/outbox"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay"
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/relay/relaytest"
 	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 	"github.com/AmeerHussainEmumba/SmartCourse/services/course/enrollment"
 )
@@ -78,6 +79,7 @@ func errCode(err error) string {
 
 func TestAdv_SeatLimit_150Contenders_25Seats(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	const seats, contenders = 25, 150
 	limit := seats
@@ -109,6 +111,7 @@ func TestAdv_SeatLimit_150Contenders_25Seats(t *testing.T) {
 
 func TestAdv_Churn_EnrollWithdrawReenroll_SameStudentsRacing(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	const seats, students, rounds = 5, 14, 8
 	limit := seats
@@ -163,6 +166,7 @@ func TestAdv_Churn_EnrollWithdrawReenroll_SameStudentsRacing(t *testing.T) {
 
 func TestAdv_ArchivedUnpublishedAndMissingCoursesRejectEnrollment(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	ctx := context.Background()
 
@@ -217,6 +221,7 @@ func TestAdv_ArchivedUnpublishedAndMissingCoursesRejectEnrollment(t *testing.T) 
 // the archive committed.
 func TestAdv_ArchiveRacingWithEnroll_NoSeatsLeftAfterRelay(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	courseID := seedCourse(t, env, nil)
 
@@ -264,10 +269,7 @@ func TestAdv_ArchiveRacingWithEnroll_NoSeatsLeftAfterRelay(t *testing.T) {
 	}
 	env.DB.Raw(`SELECT archived_at FROM courses WHERE id = ?`, courseID).Row().Scan(&archivedAt)
 
-	rl := relay.New(env.DB, relay.WithPollInterval(10*time.Millisecond))
-	for _, h := range enrollment.Handlers() {
-		rl.Register(h)
-	}
+	rl := relay.New(env.DB, relaytest.DeliverTo(env.DB, enrollment.Handlers()...), relay.WithPollInterval(10*time.Millisecond))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { rl.Run(ctx); close(done) }()
@@ -299,6 +301,7 @@ func TestAdv_ArchiveRacingWithEnroll_NoSeatsLeftAfterRelay(t *testing.T) {
 
 func TestAdv_Prerequisites_UnderConcurrency(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	ctx := context.Background()
 	prereq := seedCourse(t, env, nil)
@@ -377,6 +380,7 @@ func TestAdv_Prerequisites_UnderConcurrency(t *testing.T) {
 
 func TestAdv_LimitLoweredBelowCurrentCount(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	ctx := context.Background()
 	limit := 10
@@ -441,6 +445,7 @@ func TestAdv_LimitLoweredBelowCurrentCount(t *testing.T) {
 
 func TestAdv_WithdrawSequentialEdgeCases_NoCountDrift(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	ctx := context.Background()
 	courseID := seedCourse(t, env, nil)

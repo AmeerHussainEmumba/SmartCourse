@@ -4,17 +4,24 @@ info:
   version: "0.1.0"
   description: >
     Course delivery platform backend. This file is the contract (RFC §15.1)
-    and is grown module by module as they're implemented — see
+    for the PUBLIC HTTP API only: the routes served on the host ports of
+    identity-api (8090), course-api (8091), analytics-api (8092) and audit-api
+    (8093). It is one spec over four processes; every path carries a
+    path-level `servers` entry naming the service that answers it, so Swagger
+    UI's "Execute" calls the right port. It does not describe the internal
+    listeners (/metrics and /health/* on 9101-9104 and 9111-9116), the
+    public /health/live and /health/ready routes every API also serves, or
+    any Kafka event contract (those live in libs/events). See
     docs/rfc/smartcourse-rfc.md §15 for conventions (keyset pagination,
-    error shape, Idempotency-Key) and docs/rfc/smartcourse-prd.md for
+    error shape, Idempotency-Key) and docs/prd/smartcourse-prd.md for
     product context. Publishing workflow status (M2, ADR-0025) is built —
     see POST/GET on /courses/{id}/publish[-status] and GET /courses/search
-    below. 7 of FR-5's 9 analytics metrics are live (DR-021) — see /analytics/*
+    below. All 9 of FR-5's analytics metrics are live (DR-021, DR-026; the ninth, failed events / workflow issues, is an admin route that needs MongoDB for its failed-events half and answers 503 without it) — see /analytics/*
     below (DR-017: the last two of these had been computed since ADR-0024
-    but had no read path until this spec caught up to reality). Endpoints
-    not yet built (certificates, "Most Popular Courses"/"Failed Events"
-    analytics, admin/audit beyond role change) are not listed here — an
-    absent path means "not built yet," not "undocumented."
+    but had no read path until this spec caught up to reality). An absent
+    path means "not built yet," not "undocumented."
+    Certificates (/certificates, public verification by code) and Most
+    Popular Courses (/analytics/popular-courses) are built.
 
     Cross-cutting behaviour (all services). Request bodies are capped at
     1 MiB by default (413 PAYLOAD_TOO_LARGE; MAX_BODY_BYTES). Every response
@@ -35,21 +42,30 @@ info:
     GET /health/ready reports per-dependency "ok"/"failed" only; the detail
     goes to the service log, not the response.
 servers:
-  # One spec, three backing processes (ADR-0023) — route paths and
-  # shapes didn't change, only which service answers them. Pick the
-  # entry matching the endpoint you're trying; Swagger UI's "Execute"
-  # fires against whichever is selected here.
-  - url: http://localhost:8090/api/v1
-    description: Local dev — identity-api (make run-identity-api) — auth, users, roles
-  - url: http://localhost:8091/api/v1
-    description: Local dev — course-api (make run-course-api) — courses, enrollments, progress
-  - url: http://localhost:8092/api/v1
-    description: Local dev — analytics-api (make run-analytics-api) — analytics dashboard
+  # One spec, four backing processes (ADR-0023, ADR-0033, ADR-0034). Each
+  # path below repeats the matching entry as a path-level `servers` list (via
+  # the YAML anchors defined here), so "Execute" fires at the right port
+  # without picking one by hand. Host ports are the docker compose mapping
+  # (container port 8080); natively, `make run-<binary>` defaults to HTTP_PORT
+  # 8080, so set HTTP_PORT to match.
+  - &srv-identity
+    url: http://localhost:8090/api/v1
+    description: Local dev — identity-api (make run-identity-api) — auth, users, roles (/auth/*, /me, /admin/users/*)
+  - &srv-course
+    url: http://localhost:8091/api/v1
+    description: Local dev — course-api (make run-course-api) — courses, modules, lessons, assets, publishing, enrollments, progress, certificates
+  - &srv-analytics
+    url: http://localhost:8092/api/v1
+    description: Local dev — analytics-api (make run-analytics-api) — /analytics/*
+  - &srv-audit
+    url: http://localhost:8093/api/v1
+    description: Local dev — audit-api (make run-audit-api) — failed-events admin routes (/admin/failed-events); replay republishes to Kafka
   - url: /api/v1
     description: Relative — correct once this spec is served from the same origin as the API itself (not the case for any local dev tool today)
 
 paths:
   /auth/register:
+    servers: [*srv-identity]
     post:
       summary: >
         Register a new student account. Answers 202 with the same body
@@ -69,6 +85,7 @@ paths:
         '429': { description: Too many requests from this IP, or too many emails to this address, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /auth/login:
+    servers: [*srv-identity]
     post:
       summary: Log in
       requestBody:
@@ -82,6 +99,7 @@ paths:
         '429': { description: "Too many failed attempts: 5 per minute per account+IP, 20 per minute per account across all IPs. Only failures count.", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /auth/refresh:
+    servers: [*srv-identity]
     post:
       summary: Rotate a refresh token for a new access token (ADR-0015)
       requestBody:
@@ -92,6 +110,7 @@ paths:
         '401': { description: Invalid, expired, or reused token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /auth/logout:
+    servers: [*srv-identity]
     post:
       summary: Revoke a refresh token (idempotent)
       requestBody:
@@ -101,6 +120,7 @@ paths:
         '204': { description: No Content }
 
   /auth/password-reset/request:
+    servers: [*srv-identity]
     post:
       summary: Request a password reset email (DR-008)
       description: Always returns 202, whether or not the email exists (RFC §11.3 — no enumeration).
@@ -111,6 +131,7 @@ paths:
         '202': { description: Accepted }
 
   /auth/password-reset/confirm:
+    servers: [*srv-identity]
     post:
       summary: Confirm a password reset. Revokes all refresh tokens and bumps token_version on success.
       requestBody:
@@ -126,6 +147,7 @@ paths:
         '401': { description: Invalid or expired token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /auth/verify-email/resend:
+    servers: [*srv-identity]
     post:
       summary: Resend the email verification link (DR-008)
       requestBody:
@@ -135,6 +157,7 @@ paths:
         '202': { description: Accepted }
 
   /auth/verify-email/confirm:
+    servers: [*srv-identity]
     get:
       summary: Confirm email verification
       parameters:
@@ -144,6 +167,7 @@ paths:
         '401': { description: Invalid or expired token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /me:
+    servers: [*srv-identity]
     get:
       summary: Get the current user's profile
       security: [{ bearerAuth: [] }]
@@ -159,6 +183,7 @@ paths:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
 
   /admin/users/{id}/role:
+    servers: [*srv-identity]
     patch:
       summary: Change a user's role/status (admin only; ADR-0015 addendum applies)
       security: [{ bearerAuth: [] }]
@@ -181,7 +206,108 @@ paths:
         '404': { description: "Unknown user id. Nothing is written (no cache key, no outbox event).", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '409': { description: "last_admin: the change would leave the platform with no active admin", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
+  /admin/failed-events:
+    servers: [*srv-audit]
+    get:
+      summary: List failed (dead-lettered) events, newest first (admin only; ADR-0031)
+      description: >
+        Served by audit-api (port 8080 in the container, published on 127.0.0.1:8093 in Compose),
+        not by the identity, course or analytics services. Requires an admin token whose token
+        version is current; this route fails closed (RequireFreshPrivilegeStrict), so a Redis
+        cache miss answers 401 token_stale. Keyset-paginated; payloads are
+        omitted from the list (use the detail route). 503 while MongoDB is unreachable.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [parked, replayed] } }
+        - { name: consumer, in: query, schema: { type: string, maxLength: 128 }, description: Exact consumer name, for example analytics }
+        - { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+        - { name: cursor, in: query, schema: { type: string }, description: Opaque cursor from a previous response's next_cursor }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/FailedEvent' } }
+                  next_cursor: { type: string, description: "Empty on the last page" }
+        '400': { description: "Bad status, limit or cursor", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: "Missing, invalid or stale token", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: Not an admin, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: MongoDB is unreachable, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/failed-events/{event_id}:
+    servers: [*srv-audit]
+    get:
+      summary: One event's failed records (one per consumer that gave up on it), with payload and error history
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: event_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: consumer, in: query, schema: { type: string, maxLength: 128 }, description: "Optional: only that consumer's record. 404 when the event has no record for it" }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event_id: { type: string, format: uuid }
+                  records: { type: array, items: { $ref: '#/components/schemas/FailedEvent' } }
+        '400': { description: event_id is not a UUID, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: "Missing, invalid or stale token", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: Not an admin, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: No failed record for that event id, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: MongoDB is unreachable, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /admin/failed-events/{event_id}/replay:
+    servers: [*srv-audit]
+    post:
+      summary: Replay a failed event by republishing it to its consumer's retry topic (admin only)
+      description: >
+        Replay is republish, not re-invoke. Each parked record of the event is encoded from its
+        stored payload and schema id and produced to retry.<consumer>; the consuming service's
+        own consumer group applies it through its normal idempotent path (handler plus
+        processed_events), so a duplicate is absorbed. The record is marked replayed only after
+        the broker acknowledged the retry record, exactly once however many callers race.
+        Replaying an already replayed event is a 200 with replayed=false and status
+        already_replayed: nothing is produced. A record that cannot be decoded or encoded for a
+        retry (no schema id, payload that does not match its schema, unknown event type or
+        consumer) is refused with 422 replay_refused and stays parked. A failure of Kafka or
+        MongoDB is a 503 with no detail; the record stays parked and the call may be repeated.
+        Every attempt is written to the audit log (failed_event_replayed, with the admin's user
+        id). Takes no request body.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: event_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Replayed, or already replayed (no-op)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event_id: { type: string, format: uuid }
+                  replayed: { type: boolean, description: "True when this call moved a record to replayed" }
+                  outcomes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        consumer: { type: string }
+                        status: { type: string, enum: [replayed, already_replayed] }
+                        retry_topic: { type: string, description: "The topic the retry record was produced to; absent when nothing was produced" }
+        '400': { description: event_id is not a UUID, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: "Missing, invalid or stale token", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: Not an admin, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: No failed record for that event id, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { description: "replay_refused: a record cannot be decoded or encoded for a retry (details.outcomes lists each consumer with a reason); nothing was produced for it and it stays parked", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: "MongoDB or Kafka is unreachable (no detail is returned); the record stays parked", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
   /courses:
+    servers: [*srv-course]
     get:
       summary: Catalogue — published courses, keyset-paginated (RFC §13.2), filterable
       parameters:
@@ -193,6 +319,8 @@ paths:
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogueResponse' } } } }
     post:
+      parameters:
+      - { $ref: '#/components/parameters/IdempotencyKey' }
       summary: Create a course (instructor only) — also creates its initial draft version
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -203,6 +331,7 @@ paths:
         '409': { description: Slug already in use, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /courses/{slug}:
+    servers: [*srv-course]
     get:
       summary: Published course detail — version, modules, lessons
       parameters:
@@ -212,6 +341,7 @@ paths:
         '404': { description: Not found or not published, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /courses/{id}:
+    servers: [*srv-course]
     patch:
       summary: Update the draft version (instructor, owner only)
       security: [{ bearerAuth: [] }]
@@ -224,10 +354,11 @@ paths:
         '404': { description: "Course not found, or not owned by the caller (a non-owner gets the same 404 as an unknown id so existence is not leaked; ADR-0026 phase 5, F-36)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /courses/{id}/modules:
+    servers: [*srv-course]
     post:
       summary: Add a module to the draft (instructor, owner only)
       security: [{ bearerAuth: [] }]
-      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       requestBody:
         required: true
         content:
@@ -240,10 +371,11 @@ paths:
         '201': { description: Created }
 
   /modules/{id}/lessons:
+    servers: [*srv-course]
     post:
       summary: Add a lesson to a module in the draft (instructor, owner only)
       security: [{ bearerAuth: [] }]
-      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/CreateLessonRequest' } } }
@@ -251,6 +383,7 @@ paths:
         '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Lesson' } } } }
 
   /modules/{id}:
+    servers: [*srv-course]
     patch:
       summary: Update a module's title (instructor, owner only). Draft-only — rejected if the module belongs to a non-draft version (ADR-0010).
       security: [{ bearerAuth: [] }]
@@ -268,6 +401,7 @@ paths:
       responses: { '204': { description: No Content } }
 
   /lessons/{id}:
+    servers: [*srv-course]
     patch:
       summary: >
         Update a lesson (instructor, owner only). Draft-only, same rule
@@ -288,11 +422,49 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses: { '204': { description: No Content } }
 
+  /assets/upload-url:
+    servers: [*srv-course]
+    post:
+      parameters:
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+      summary: >
+        Get a pre-signed URL to upload a learning asset straight to object
+        storage (instructor who owns the course only; RFC §7.4, §11.7,
+        ADR-0019). The API never proxies the bytes. The object key is generated
+        by the server from the course (and optional lesson) and a fresh id; the
+        client cannot choose or influence it. Send the returned headers verbatim
+        and a body of exactly size_bytes bytes with a PUT to upload_url before
+        expires_at (15 minutes): the content type and length are part of the
+        signature, so storage rejects anything else. Then pass asset_key as the
+        lesson's asset_key. The publish workflow's VerifyAssets checks that every
+        referenced key exists in storage with an allowed type and size; a missing
+        or invalid asset fails the publish (publish_failed, with a readable
+        publish_error) without touching the live version. Allowed content types
+        and per-type maximum sizes: video/mp4 and video/webm 2 GiB,
+        application/pdf 100 MiB, image/png and image/jpeg 10 MiB. Admins and
+        students are refused (403); an instructor who does not own the course
+        gets 404.
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/UploadURLRequest' } } }
+      responses:
+        '200': { description: Pre-signed upload, content: { application/json: { schema: { $ref: '#/components/schemas/UploadURL' } } } }
+        '400': { description: "validation_failed (bad ids, non-positive size) | unsupported_content_type", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: Missing, invalid or stale token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: Caller is not an instructor (student or admin), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: "Course not found, not owned by the caller, or lesson_id is not a lesson of the course's draft", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '409': { description: "The course is archived (course_archived) or has no draft (no_draft)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '413': { description: "asset_too_large: size_bytes exceeds the maximum for the content type", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: "assets_unavailable (object storage not configured) or temporarily_unavailable (signing failed)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
   /courses/{id}/publish:
+    servers: [*srv-course]
     post:
       summary: >
         Start publishing the draft (instructor, owner only). Async as of M2
-        (ADR-0025): starts services/course/workflows.PublishCourseWorkflow and
+        (ADR-0025): starts PublishCourseWorkflow (services/publishing, run by
+        publishing-worker; its activities run in course-worker) and
         returns immediately. The draft is claimed (state publishing) before
         the workflow starts, so a duplicate call while a publish is running
         gets 409 publish_in_progress instead of attaching to it (ADR-0028).
@@ -300,13 +472,14 @@ paths:
         call can simply be retried. Poll GET /courses/{id}/publish-status for
         the result.
       security: [{ bearerAuth: [] }]
-      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         '202': { description: Publish workflow started, content: { application/json: { schema: { $ref: '#/components/schemas/PublishAccepted' } } } }
         '404': { description: "Course not found, or not owned by the caller", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
         '409': { description: "No draft to publish (no_draft), the course is archived (course_archived), or a publish is already running for it (publish_in_progress)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /courses/{id}/publish-status:
+    servers: [*srv-course]
     get:
       summary: >
         Poll the publish workflow started by POST .../publish (instructor,
@@ -321,6 +494,7 @@ paths:
         '404': { description: "Course has never had a draft or a published version, or is not owned by the caller (same 404 either way)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /courses/search:
+    servers: [*srv-course]
     get:
       summary: >
         Full-text ranked search over published courses (RFC §7.4's
@@ -334,21 +508,22 @@ paths:
         '200': { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/SearchResult' } } } } } } }
 
   /courses/{id}/archive:
+    servers: [*srv-course]
     post:
       summary: >
         Archive a course (instructor, owner only) — soft delete via
         archived_at, not a row removal. Hides it from the catalogue and
         from GetPublishedDetail, blocks new enrollment, and withdraws
-        every currently-active enrollment on it (services/course/enrollment's
-        relay handler reacts to the course.course_archived event this
-        writes). No "unarchive" exists.
+        every currently-active enrollment on it (course-worker's enrollment consumer reacts to the
+        course.course_archived event this writes). No "unarchive" exists.
       security: [{ bearerAuth: [] }]
-      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }, { name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         '204': { description: No Content }
         '404': { description: "Course not found, or not owned by the caller (a non-owner gets the same 404 as an unknown id so existence is not leaked; ADR-0026 phase 5, F-36)", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /analytics/platform:
+    servers: [*srv-analytics]
     get:
       summary: >
         Platform-wide totals (SmartCourse.md FR-5) — total students/instructors/courses published, average courses per student.
@@ -357,30 +532,98 @@ paths:
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformSnapshot' } } } }
 
+  /analytics/popular-courses:
+    servers: [*srv-analytics]
+    get:
+      summary: >
+        Most Popular Courses (FR-5): published courses ranked by enrollments (active plus completed),
+        highest first, courses with no enrollments omitted. Served from a Redis sorted set refreshed by
+        the reconciler (about every 60 s) and falls back to Postgres if Redis is empty or unavailable;
+        never a 5xx on a Redis miss. Ids and counts only, so any authenticated user may read it.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 50, default: 10 } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties: { course_id: { type: string, format: uuid }, enrollments: { type: integer, format: int64 } }
+        '400': { description: "limit is not an integer from 1 to 50", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /analytics/issues:
+    servers: [*srv-analytics]
+    get:
+      summary: >
+        Failed Events / Workflow Issues (FR-5), admin only. Dead-letter backlog from the MongoDB
+        failed_events store. Answers 503 while the store is not configured (MONGO_URI unset) or not
+        reachable; no other analytics route is affected. workflow_issues is always an object: the
+        number of course publishes that ended in publish_failed, counted from course.publish_failed
+        events (DR-026). It is a cumulative count of failures, not of versions currently failing (a
+        version that failed twice counts twice), and it starts at zero when the event was introduced:
+        publish failures before that are not counted.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  failed_events:
+                    type: object
+                    properties:
+                      total: { type: integer, format: int64 }
+                      unresolved: { type: integer, format: int64, description: "Parked and not yet replayed" }
+                      replayed: { type: integer, format: int64 }
+                      by_event_type: { type: object, additionalProperties: { type: integer, format: int64 } }
+                      by_consumer: { type: object, additionalProperties: { type: integer, format: int64 }, description: "Unresolved events per consumer" }
+                      oldest_unresolved_age_seconds: { type: integer, format: int64, nullable: true, description: "Null when nothing is unresolved" }
+                  workflow_issues:
+                    type: object
+                    required: [failed, by_workflow]
+                    properties:
+                      failed: { type: integer, format: int64, description: "Publish failures recorded since course.publish_failed existed" }
+                      by_workflow: { type: object, additionalProperties: { type: integer, format: int64 }, description: "Failures per workflow type, for example PublishCourseWorkflow; {} when none" }
+        '401': { description: "Missing or invalid token, or token_stale: the admin's token version no longer matches the cached one, or the cache has no entry (for example after a Redis flush; this route fails closed, see DR-022). Refresh or log in again.", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '403': { description: "Caller is not an admin", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '503': { description: "The failed-events store is not configured or not reachable, or Redis (the token-version check) is unreachable", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
   /analytics/courses/{id}:
+    servers: [*srv-analytics]
     get:
       summary: >
         One course's aggregate stats (FR-5: completion rate, average time
         to complete) — zeros if the course has never been published, not a
         404 (this schema never queries services/course/course directly, ADR-0024,
         so it can't distinguish "never published" from "doesn't exist").
-        Access: admins and instructors may read any course; a student may
-        read it only if they have an active or completed enrollment in it
+        Access: admins may read any course; an instructor only a course they
+        own; a student only if they have an active or completed enrollment in it
         (from analytics' own enrollment mirror). Everyone else gets 404, not
-        403, so a course's existence is not leaked. (Instructor ownership is
-        not yet enforced: the course_published event carries no instructor id.)
+        403, so a course's existence is not leaked. Instructors are limited to
+        courses they own (instructor_id from the course_published event); a
+        course published before analytics recorded owners is readable by admins
+        only until it is published again.
       security: [{ bearerAuth: [] }]
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CourseStats' } } } }
-        '404': { description: "Caller is a student without an active or completed enrollment in the course", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: "Caller is a student without an active or completed enrollment in the course, or an instructor who does not own it", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /analytics/courses/{id}/daily-enrollments:
+    servers: [*srv-analytics]
     get:
       summary: >
         One course's daily enrollment counts (FR-5 — "New Enrollments Over Time"), oldest first,
         bucketed by the enrollment's UTC day. Same access rule as GET /analytics/courses/{id}:
-        admins and instructors any course, a student only a course they are enrolled in, otherwise 404.
+        admins any course, an instructor only a course they own, a student only a course they are enrolled in, otherwise 404.
       security: [{ bearerAuth: [] }]
       parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
       responses:
@@ -398,11 +641,14 @@ paths:
                       properties: { day: { type: string, format: date }, count: { type: integer } }
 
   /enrollments:
+    servers: [*srv-course]
     get:
       summary: List the current student's enrollments
       security: [{ bearerAuth: [] }]
       responses: { '200': { description: OK } }
     post:
+      parameters:
+      - { $ref: '#/components/parameters/IdempotencyKey' }
       summary: Enroll in a course (RFC §8.1, ADR-0012)
       security: [{ bearerAuth: [] }]
       requestBody:
@@ -413,6 +659,7 @@ paths:
         '409': { description: "already_enrolled | course_full | course_not_published | prerequisite_not_met", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /enrollments/{id}:
+    servers: [*srv-course]
     get:
       summary: Get an enrollment (owner only)
       security: [{ bearerAuth: [] }]
@@ -427,6 +674,7 @@ paths:
       responses: { '204': { description: No Content } }
 
   /enrollments/{id}/progress:
+    servers: [*srv-course]
     get:
       summary: Get lesson-level progress for an enrollment (owner only)
       security: [{ bearerAuth: [] }]
@@ -434,6 +682,7 @@ paths:
       responses: { '200': { description: OK } }
 
   /enrollments/{id}/lessons/{lessonKey}/complete:
+    servers: [*srv-course]
     put:
       summary: Mark a lesson complete (idempotent, RFC §8.3). Transitions the enrollment to completed once every lesson in the current published version is done.
       security: [{ bearerAuth: [] }]
@@ -444,7 +693,55 @@ paths:
         '204': { description: No Content }
         '404': { description: "Enrollment not found or not yours, or lessonKey is not a lesson of the published version (lesson_not_found). Previously 204 for an unknown key.", content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
+  /certificates:
+    servers: [*srv-course]
+    get:
+      summary: List the current student's certificates, newest first (RFC §8.4)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Certificate' } } } } } } }
+        '401': { description: Missing or invalid token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /certificates/{id}:
+    servers: [*srv-course]
+    get:
+      summary: Get one certificate (owner only). Another student's certificate answers exactly like an unknown id (DR-022).
+      security: [{ bearerAuth: [] }]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Certificate' } } } }
+        '400': { description: Malformed id (validation_failed), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '401': { description: Missing or invalid token, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: Unknown id or not yours (not_found), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
+  /certificates/verify/{code}:
+    servers: [*srv-course]
+    get:
+      summary: Verify a certificate by its verification code (public, no token; rate limited to 30 per minute per IP, RFC §8.4)
+      description: >-
+        Returns only the course title, the student name on the certificate and the issue date.
+        Certificates are never revoked (RFC §8.4), so a 200 means the certificate was issued, not
+        that the holder's enrollment is still complete.
+      security: []
+      parameters: [{ name: code, in: path, required: true, schema: { type: string, pattern: '^[A-Z2-7]{26}$' } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/CertificateVerification' } } } }
+        '400': { description: Malformed code (validation_failed), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '404': { description: Unknown code (not_found), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '429': { description: Rate limited (rate_limited), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+
 components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: >-
+        Optional client-chosen key (1-255 printable ASCII characters). A retry with the same
+        key, user and request gets the stored 2xx response back with Idempotent-Replayed: true;
+        the same key with a different request gets 422 idempotency_key_reused; a retry while the
+        first request is still running gets 409 idempotency_request_in_progress. Stored for 24 hours.
+      schema: { type: string, minLength: 1, maxLength: 255 }
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
 
@@ -455,6 +752,40 @@ components:
         code: { type: string }
         message: { type: string }
         details: {}
+
+    FailedEvent:
+      type: object
+      description: >
+        An event a consumer gave up on, unique per (event_id, consumer). errors, payload and
+        payload_base64 appear on the detail route only.
+      properties:
+        id: { type: string, description: "Record id, the pagination key" }
+        event_id: { type: string, format: uuid }
+        consumer: { type: string }
+        event_type: { type: string }
+        topic: { type: string }
+        aggregate_type: { type: string }
+        aggregate_id: { type: string }
+        status: { type: string, enum: [parked, replayed] }
+        attempts: { type: integer }
+        schema_id: { type: integer }
+        schema_version: { type: integer }
+        occurred_at: { type: string, format: date-time }
+        first_failed_at: { type: string, format: date-time }
+        last_failed_at: { type: string, format: date-time }
+        replayed_at: { type: string, format: date-time }
+        last_error: { type: string }
+        errors:
+          type: array
+          description: "Error history, oldest first, capped at the newest 100"
+          items:
+            type: object
+            properties:
+              at: { type: string, format: date-time }
+              attempt: { type: integer }
+              message: { type: string }
+        payload: { description: "The event payload when it is JSON" }
+        payload_base64: { type: string, description: "The payload bytes when they are not JSON" }
 
     RegisterRequest:
       type: object
@@ -508,6 +839,26 @@ components:
         level: { type: string, enum: [beginner, intermediate, advanced], nullable: true }
         tags: { type: array, items: { type: string } }
 
+    UploadURLRequest:
+      type: object
+      required: [course_id, content_type, size_bytes]
+      description: There is deliberately no filename or key field; unknown fields are ignored.
+      properties:
+        course_id: { type: string, format: uuid }
+        lesson_id: { type: string, format: uuid, nullable: true, description: "Scope the key to a lesson of the course's draft" }
+        content_type: { type: string, enum: [video/mp4, video/webm, application/pdf, image/png, image/jpeg] }
+        size_bytes: { type: integer, format: int64, minimum: 1, description: "Exact size of the file that will be uploaded; capped per content type" }
+
+    UploadURL:
+      type: object
+      properties:
+        upload_url: { type: string, description: Pre-signed PUT URL }
+        method: { type: string, enum: [PUT] }
+        headers: { type: object, additionalProperties: { type: string }, description: Headers to send verbatim (they are signed) }
+        asset_key: { type: string, description: "Server-generated key: courses/{course_id}/assets/{id}.{ext} or courses/{course_id}/lessons/{lesson_id}/{id}.{ext}" }
+        expires_at: { type: string, format: date-time }
+        max_size_bytes: { type: integer, format: int64, description: Maximum size for this content type }
+
     CreateLessonRequest:
       type: object
       required: [title, position, content_type]
@@ -516,7 +867,7 @@ components:
         position: { type: integer, minimum: 1 }
         content_type: { type: string, enum: [video, text, pdf, link] }
         content: { type: object }
-        asset_key: { type: string, nullable: true }
+        asset_key: { type: string, nullable: true, description: "A key issued by POST /assets/upload-url for this course; anything else is 400 invalid_asset_key. Existence, type and size are verified at publish." }
         duration_s: { type: integer, minimum: 0 }
 
     UpdateModuleRequest:
@@ -637,3 +988,22 @@ components:
         status: { type: string, enum: [active, completed, withdrawn] }
         enrolled_at: { type: string, format: date-time }
         withdrawn_at: { type: string, format: date-time, nullable: true }
+
+    Certificate:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        enrollment_id: { type: string, format: uuid }
+        course_id: { type: string, format: uuid }
+        course_version_id: { type: string, format: uuid, nullable: true }
+        course_title: { type: string, description: "Snapshot at issue time (RFC §8.4)" }
+        student_name: { type: string, description: "Snapshot at issue time (RFC §8.4)" }
+        verification_code: { type: string, pattern: '^[A-Z2-7]{26}$' }
+        issued_at: { type: string, format: date-time }
+
+    CertificateVerification:
+      type: object
+      properties:
+        course_title: { type: string }
+        student_name: { type: string }
+        issued_at: { type: string, format: date-time }

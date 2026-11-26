@@ -1,45 +1,95 @@
 name: CI
 
+# What runs is decided by scripts/ci-select.sh from the changed files (policy
+# and the skip-e2e label: docs/guides/ci.md). In short:
+#   - push to main: everything, E2E included;
+#   - PR: only the modules the change touches plus the modules that depend on
+#     them (derived from the go.mod files), their images, and, when the PR's base
+#     is main, the E2E scenarios mapped to the touched services (all of them for
+#     libs/, test/e2e or any shared file). A code owner can waive E2E with the
+#     skip-e2e label;
+#   - the cheap global guards and the compose check always run.
+# Branch protection should require the single job `ci-ok`, not the individual
+# jobs: matrix job names change with the selection.
 on:
   push:
     branches: [main]
   pull_request:
+    # labeled/unlabeled so that adding or removing skip-e2e re-evaluates E2E.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+# A newer push to the same PR cancels the older run. A label event for a label
+# other than skip-e2e gets its own group (and does nothing, see `select`), so it
+# cannot cancel a real run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'skip-e2e') && github.run_id || 'run' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 jobs:
-  build-lint-test:
+  # Runs scripts/ci-select.sh and publishes its result as job outputs.
+  select:
+    if: ${{ !((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'skip-e2e') }}
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: smartcourse
-          POSTGRES_PASSWORD: smartcourse
-          POSTGRES_DB: smartcourse
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U smartcourse -d smartcourse"
-          --health-interval 5s --health-timeout 3s --health-retries 10
-      redis:
-        image: redis:7-alpine
-        ports: ["6379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s --health-timeout 3s --health-retries 10
+    outputs:
+      full: ${{ steps.sel.outputs.full }}
+      full_reason: ${{ steps.sel.outputs.full_reason }}
+      modules: ${{ steps.sel.outputs.modules }}
+      has_modules: ${{ steps.sel.outputs.has_modules }}
+      images: ${{ steps.sel.outputs.images }}
+      has_images: ${{ steps.sel.outputs.has_images }}
+      migrations: ${{ steps.sel.outputs.migrations }}
+      e2e_run: ${{ steps.sel.outputs.e2e_run }}
+      e2e_reason: ${{ steps.sel.outputs.e2e_reason }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
+      - name: Select what to run
+        id: sel
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT_NAME" = push ]; then
+            args=(--full)
+          else
+            args=(--base "$BASE_SHA")
+          fi
+          scripts/ci-select.sh "${args[@]}" --format github | tee -a "$GITHUB_OUTPUT"
+          scripts/ci-select.sh "${args[@]}" --format json > "$RUNNER_TEMP/select.json"
+          {
+            echo "### CI selection"
+            echo
+            jq -r '"- full run: \(.full) \(.full_reason)\n- docs only: \(.docs_only)\n- modules (\(.modules | length)): \([.modules[] | "\(.dir)\(if .reason == "dependent" then " (dependent)" else "" end)"] | join(", "))\n- images: \(.images | join(", "))\n- migrations job: \(.migrations)\n- E2E: `\(.e2e.run | if length > 80 then .[0:80] + "..." else . end)` (\(.e2e.reason))"' "$RUNNER_TEMP/select.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The cheap global guards: always run, whatever changed.
+  guards:
+    needs: select
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.5"
+          # 1.26.11 rather than the go.mod floor (1.26.5): govulncheck reports
+          # reachable standard-library vulnerabilities in net/http, crypto/tls,
+          # crypto/x509 and others for every release below 1.26.11, so the
+          # govulncheck step cannot pass on 1.26.5. go.mod's `go 1.26.5`
+          # is a minimum and stays as is.
+          go-version: "1.26.11"
           cache: true
           cache-dependency-path: "**/go.sum"
 
-      - name: Build (every module standalone, GOWORK=off)
-        run: scripts/for-each-module.sh go build ./...
+      - name: CI selection logic and skip-e2e gate (unit tests)
+        run: make test-ci-select
 
-      - name: Vet
-        run: scripts/for-each-module.sh go vet ./...
+      - name: E2E scenario map (every e2e test mapped to services)
+        run: make check-e2e-map
 
       - name: Link graph (each binary links only the modules it uses)
         run: make check-link-graph
@@ -59,35 +109,324 @@ jobs:
       - name: HTTP hardening (server timeouts, body cap, trusted proxies)
         run: make check-http-hardening
 
+      - name: Pending E2E specs (no spec E1 to E14 is skipped past its phase)
+        run: make check-pending-e2e
+
+      # Copies the repo and injects violations: slow, and it tests the guards
+      # themselves, which only a full run (scripts/, go.work, .github/ ...) can change.
+      # (The injections run `go mod tidy` offline, so the module cache must hold
+      # every module's dependencies first; the old job had built everything by then.)
+      - name: Warm the module cache for the injection tests
+        if: needs.select.outputs.full == 'true'
+        run: scripts/for-each-module.sh go mod download
+
       - name: Guards fail on injected violations
+        if: needs.select.outputs.full == 'true'
         run: make test-guards
 
+  # One job per selected module (and per module that depends on a changed one):
+  # build, vet, lint, govulncheck, then unit + integration tests with the race
+  # detector, each module standalone (GOWORK=off). The integration tests start
+  # their own containers (libs/testenv), so the job needs no service containers.
+  module:
+    name: module ${{ matrix.dir }}
+    needs: select
+    if: needs.select.outputs.has_modules == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.modules) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    env:
+      GOWORK: "off"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.11"
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
       - name: Install golangci-lint
+        if: matrix.lint
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.14.0
           install-only: true
 
-      - name: golangci-lint in every module (boundaries inside services/course, RFC §4.4)
-        run: scripts/for-each-module.sh golangci-lint run ./...
+      - name: golangci-lint (boundaries inside services/course, RFC §4.4)
+        if: matrix.lint
+        run: golangci-lint run ./...
 
-      - name: Run migrations
+      - name: Install govulncheck (pinned)
+        if: matrix.govulncheck
         run: |
-          for svc in platform identity course analytics; do
-            go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest \
+          go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # govulncheck exits non-zero only for vulnerabilities whose vulnerable
+      # symbol is actually called from the module's code; findings in packages
+      # that are imported but not called, or in required modules that are not
+      # even imported, are printed but do not fail the job. The vulnerability
+      # database is live, so a new advisory can fail an unrelated PR: bump the
+      # dependency (or the Go version above) rather than skipping the step.
+      - name: govulncheck (fails on reachable vulnerabilities only)
+        if: matrix.govulncheck
+        run: govulncheck ./...
+
+      # One run gives both the result and the coverage line (the old workflow ran
+      # the tests twice: once plain, once for the coverage report).
+      - name: Unit + integration tests with coverage (race detector always on, RFC §10.6/§18.7)
+        if: matrix.integration
+        run: |
+          go test -race -tags=integration -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | tail -1
+
+      - name: Unit tests with coverage (race detector always on)
+        if: ${{ !matrix.integration }}
+        run: |
+          go test -race -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | tail -1
+
+  # The migration sets apply to a real Postgres in order, and the per-service
+  # roles converge. Runs when any migration changed or on a full run.
+  migrations:
+    needs: select
+    if: needs.select.outputs.migrations == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: smartcourse
+          POSTGRES_PASSWORD: smartcourse
+          POSTGRES_DB: smartcourse
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U smartcourse -d smartcourse"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.11"
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      # Pinned to the version every go.mod resolves (the Makefile's MIGRATE_VERSION).
+      - name: Install migrate (pinned)
+        run: |
+          go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@v4.20.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # Same order as `make migrate-up` and libs/testenv (docs/plans/microservices-split.md
+      # section 3.1): platform identity course analytics notification cutover.
+      - name: Run migrations (all six sets, in order)
+        run: |
+          for svc in platform identity course analytics notification cutover; do
+            migrate \
               -path migrations/$svc \
               -database "postgres://smartcourse:smartcourse@localhost:5432/smartcourse?sslmode=disable&x-migrations-table=${svc}_schema_migrations" \
               up
           done
 
-      - name: Unit + integration tests (race detector always on — RFC §10.6/§18.7)
-        run: scripts/for-each-module.sh go test -race -tags=integration ./...
+      # The runner's psql (15+) is needed for the script's \getenv. [DEV ONLY] passwords.
+      - name: Per-service Postgres roles (scripts/db-roles.sh)
+        run: scripts/db-roles.sh
         env:
-          POSTGRES_DSN: postgres://smartcourse:smartcourse@localhost:5432/smartcourse?sslmode=disable
-          REDIS_ADDR: localhost:6379
+          DB_OWNER_DSN: postgres://smartcourse:smartcourse@localhost:5432/smartcourse?sslmode=disable
+          SVC_IDENTITY_PASSWORD: svc_identity_dev
+          SVC_COURSE_PASSWORD: svc_course_dev
+          SVC_ANALYTICS_PASSWORD: svc_analytics_dev
+          SVC_NOTIFICATION_PASSWORD: svc_notification_dev
 
-      - name: Coverage report
-        run: scripts/for-each-module.sh sh -c 'go test -race -tags=integration -coverprofile=coverage.out ./... && go tool cover -func=coverage.out | tail -1'
+  # Every selected image builds, without pushing: one Dockerfile per binary plus
+  # schema-init, the one-shot Schema Registry bootstrap. The matrix is derived
+  # from Dockerfile.* by scripts/ci-select.sh (an image is built when its module
+  # is selected; every image on a full run), so a new Dockerfile cannot be left
+  # out of it. The build context is the repo root and each image compiles its
+  # own module with GOWORK=off, so a missing COPY or replace fails here.
+  docker-images:
+    needs: select
+    if: needs.select.outputs.has_images == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(needs.select.outputs.images) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.image }} (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.${{ matrix.image }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+
+  compose-config:
+    needs: select
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docker compose config for every profile
+        run: |
+          docker compose config -q
+          for p in core workflow observability full; do
+            docker compose --profile "$p" config -q
+          done
+
+  # Is a skip-e2e label on this PR honoured? Only PRs whose base is main can
+  # skip (E2E is mandatory there; elsewhere it does not run at all). The label
+  # counts only when the person who last applied it is a code owner: the login
+  # list, CODEOWNERS and this script itself are read from the PR's BASE commit
+  # through the API (never from the PR's own checkout), and the actor comes from
+  # the issue events API, not from anything the PR author controls.
+  e2e-gate:
+    needs: select
+    if: github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.gate.outputs.skip }}
+      by: ${{ steps.gate.outputs.by }}
+      reason: ${{ steps.gate.outputs.reason }}
+    steps:
+      - name: Check the skip-e2e label
+        id: gate
         env:
-          POSTGRES_DSN: postgres://smartcourse:smartcourse@localhost:5432/smartcourse?sslmode=disable
-          REDIS_ADDR: localhost:6379
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'skip-e2e') }}
+        run: |
+          fallback() { { echo "skip=false"; echo "by="; echo "reason=$1"; } | tee -a "$GITHUB_OUTPUT"; exit 0; }
+          [ "$HAS_LABEL" = true ] || fallback "no skip-e2e label"
+          d="$RUNNER_TEMP/gate"; mkdir -p "$d"
+          for f in scripts/ci-e2e-gate.sh .github/e2e-skip-owners .github/CODEOWNERS; do
+            gh api -H 'Accept: application/vnd.github.raw' "repos/$REPO/contents/$f?ref=$BASE_SHA" > "$d/$(basename "$f")" 2>/dev/null || rm -f "$d/$(basename "$f")"
+          done
+          [ -s "$d/ci-e2e-gate.sh" ] || fallback "the base branch has no scripts/ci-e2e-gate.sh yet: label ignored, E2E runs"
+          gh api --paginate "repos/$REPO/issues/$PR/events" > "$d/events.json" || fallback "could not read the PR events: label ignored, E2E runs"
+          bash "$d/ci-e2e-gate.sh" --events "$d/events.json" --owners "$d/e2e-skip-owners" --codeowners "$d/CODEOWNERS" | tee -a "$GITHUB_OUTPUT"
+
+  # The container tier: real Postgres, Redis, Kafka, Schema Registry, MongoDB,
+  # Mailpit and Temporal in Docker, and the ten long-running service binaries
+  # as subprocesses built by the harness (test/e2e/harness, build tag `e2e`).
+  # Mandatory on pushes to main and on PRs whose base is main, unless a code
+  # owner's skip-e2e label is honoured (e2e-gate). Which scenarios run comes
+  # from test/e2e/scenario-map.json via scripts/ci-select.sh: all of them for a
+  # full run, libs/ or test/e2e changes; the mapped ones for a service-only PR;
+  # none for docs only. Only tests carrying the `e2e` tag run here.
+  e2e:
+    needs: [select, e2e-gate]
+    if: >-
+      always() && needs.select.result == 'success' &&
+      needs.select.outputs.e2e_run != 'none' &&
+      (github.event_name == 'push' || github.event.pull_request.base.ref == 'main') &&
+      needs.e2e-gate.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.11"
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - name: End-to-end scenarios (make test-e2e)
+        env:
+          E2E_RUN: ${{ needs.select.outputs.e2e_run }}
+          E2E_WHY: ${{ needs.select.outputs.e2e_reason }}
+          GATE_REASON: ${{ needs.e2e-gate.outputs.reason }}
+        run: |
+          echo "### E2E" >> "$GITHUB_STEP_SUMMARY"
+          echo "Ran: $E2E_WHY" >> "$GITHUB_STEP_SUMMARY"
+          case $GATE_REASON in *ignored*|*removed*) echo "Note: $GATE_REASON" >> "$GITHUB_STEP_SUMMARY" ;; esac
+          if [ "$E2E_RUN" = all ]; then
+            make test-e2e
+          else
+            make test-e2e E2E_RUN="$E2E_RUN"
+          fi
+
+  # The three outage-shaped scenarios (TestAdversarial_*: certificate mirror
+  # stall, MongoDB outage, two replicas killed in turn) are slow, so they run
+  # after a merge, not on every PR. A failure here is a regression on main.
+  e2e-adversarial:
+    needs: [select]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.11"
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - name: Adversarial E2E scenarios (make test-e2e-adversarial)
+        run: make test-e2e-adversarial
+
+  # Visible record when E2E did not run on a PR into main.
+  e2e-skipped:
+    name: E2E skipped
+    needs: [select, e2e-gate]
+    if: >-
+      always() && needs.select.result == 'success' &&
+      github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main' &&
+      (needs.e2e-gate.outputs.skip == 'true' || needs.select.outputs.e2e_run == 'none')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Say why E2E did not run
+        env:
+          SKIPPED: ${{ needs.e2e-gate.outputs.skip }}
+          BY: ${{ needs.e2e-gate.outputs.by }}
+          WHY: ${{ needs.select.outputs.e2e_reason }}
+        run: |
+          if [ "$SKIPPED" = true ]; then
+            msg="E2E SKIPPED: the skip-e2e label was applied by code owner @${BY}. Every other check still ran."
+          else
+            msg="E2E not required for this change: ${WHY}"
+          fi
+          echo "::notice title=E2E::$msg"
+          { echo "### E2E"; echo "$msg"; } >> "$GITHUB_STEP_SUMMARY"
+
+  # The single check to require in branch protection: red when any job failed or
+  # was cancelled; skipped jobs (nothing selected, E2E waived) count as fine.
+  ci-ok:
+    if: always() && needs.select.result != 'skipped'
+    needs: [select, guards, module, migrations, docker-images, compose-config, e2e-gate, e2e, e2e-adversarial, e2e-skipped]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed or was legitimately skipped
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          if echo "$RESULTS" | grep -Eq 'failure|cancelled'; then exit 1; fi

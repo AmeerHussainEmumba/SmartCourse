@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | Living document |
-| Last updated | 2026-11-17 |
+| Last updated | 2026-11-26 |
 | Related | `smartcourse-rfc.md` |
 
 ## Review status (2026-09-24)
@@ -25,6 +25,7 @@ The distinction matters when something changes. Six months from now, a contribut
 - Options that were considered and rejected stay in the record. The rejected option is often the more useful half.
 - New decisions during implementation get a new ADR. The register is expected to grow.
 - Paths in records dated before ADR-0026 (`internal/...`, `cmd/...`, `internal/platform/...`) describe the layout at the time of the decision. Since ADR-0026 they live under `services/`, `libs/` and `tools/`; see `services/README.md`.
+- Records dated before ADR-0033 (2026-11-25) that mention `services/worker`, `cmd/worker`, `platform.outbox` or a shared worker describe the layout at the time; since ADR-0033 there is no `services/worker` and each service has its own outbox. See `docs/plans/microservices-split.md`.
 
 **Statuses:** `Accepted` · `Superseded by ADR-NNNN` · `Deprecated` · `Proposed`
 
@@ -50,16 +51,23 @@ The distinction matters when something changes. Six months from now, a contribut
 | [0016](#adr-0016--postgresql-full-text-search-over-a-dedicated-engine) | PostgreSQL full-text search over a dedicated engine | Accepted | §19.2 |
 | [0017](#adr-0017--analytics-aggregates-in-postgresql-with-scheduled-reconciliation) | Analytics aggregates in PostgreSQL with scheduled reconciliation | Accepted | §9.3 |
 | [0018](#adr-0018--docker-compose-profiles-for-tiered-local-development) | Docker Compose profiles for tiered local development | Accepted | §17.1 |
-| [0019](#adr-0019--minio-for-learning-asset-object-storage) | MinIO for learning-asset object storage | Accepted | §2.3 (A1), §4.7 |
+| [0019](#adr-0019--minio-for-learning-asset-object-storage) | MinIO for learning-asset object storage | Accepted — image source amended 2026-11-25 (`pgsty/minio` fork) | §2.3 (A1), §4.7 |
 | [0020](#adr-0020--gcra-rate-limiting-over-fixed-window-counters) | GCRA rate limiting over fixed-window counters | Accepted | §5.7, §11.3 |
-| [0021](#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka) | In-process outbox relay with a worker pool, ahead of Kafka | Accepted — claim mechanism amended by ADR-0027 | §6.3, §21.0 |
+| [0021](#adr-0021--in-process-outbox-relay-with-a-worker-pool-ahead-of-kafka) | In-process outbox relay with a worker pool, ahead of Kafka | Accepted — claim mechanism amended by ADR-0027; superseded in part by ADR-0033 | §6.3, §21.0 |
 | [0022](#adr-0022--separate-api-and-worker-binaries-one-shared-codebase-and-database) | Separate API and worker binaries, one shared codebase and database | Accepted — extended by ADR-0026 | §4.2 |
 | [0023](#adr-0023--split-cmdapi-into-identity-api-course-api-and-analytics-api) | Split cmd/api into identity-api, course-api, and analytics-api | Accepted — extended by ADR-0026 | §4.2 |
-| [0024](#adr-0024--schema-per-service-within-one-shared-database) | Schema-per-service within one shared database | Accepted — deferred `go.mod` item resolved by ADR-0026 | §5.3 |
+| [0024](#adr-0024--schema-per-service-within-one-shared-database) | Schema-per-service within one shared database | Accepted — deferred `go.mod` item resolved by ADR-0026; superseded in part by ADR-0033 (`platform` schema removed) | §5.3 |
 | [0025](#adr-0025--course-publishing-as-a-temporal-workflow-m2) | Course publishing as a Temporal workflow (M2) | Accepted — amended by ADR-0028 | §7.4 |
-| [0026](#adr-0026--one-go-module-per-service-and-per-shared-library) | One Go module per service and per shared library | Accepted | §4.1, §4.2, §4.4 |
+| [0026](#adr-0026--one-go-module-per-service-and-per-shared-library) | One Go module per service and per shared library | Accepted — superseded in part by ADR-0033 (the worker's coupling) | §4.1, §4.2, §4.4 |
 | [0027](#adr-0027--the-relay-holds-each-rows-claim-through-handling) | The relay holds each row's claim through handling | Accepted | §6.3 |
 | [0028](#adr-0028--publish-claims-the-version-before-starting-the-workflow) | Publish claims the version before starting the workflow | Accepted | §7.5 |
+| [0029](#adr-0029--two-event-transports-behind-one-seam-in-process-and-kafka) | Two event transports behind one seam: in-process and Kafka | Accepted (project owner, 2026-11-26) — superseded in part by ADR-0033 (in-process transport removed) | §6.2, §6.3 |
+| [0030](#adr-0030--event-contracts-protobuf-generated-code-and-client-library-selection) | Event contracts: Protobuf, generated code, and client library selection | Accepted (project owner, 2026-11-26) | §6.4, §6.8 |
+| [0031](#adr-0031--mongodb-archive-dead-letter-parking-and-replay) | MongoDB archive, dead-letter parking, and replay | Accepted (project owner, 2026-11-26) | §5.4, §6.9 |
+| [0032](#adr-0032--observability-in-week-3-trace-context-through-the-event-envelope) | Observability in Week 3: trace context through the event envelope | Accepted (project owner, 2026-11-26) | §12 |
+| [0033](#adr-0033--independent-services-per-service-outbox-and-idempotency-tables-kafka-only-integration-per-service-roles) | Independent services: per-service outbox and idempotency tables, Kafka-only integration, per-service roles | Accepted | §4.4, §6 |
+| [0034](#adr-0034--the-audit-service-archive-dead-letter-store-and-replay-as-republish) | The audit service: archive, dead-letter store, and replay as republish | Accepted | §6.8, §6.9 |
+| [0035](#adr-0035--the-publishing-service-workflows-and-activities-on-separate-task-queues) | The publishing service: workflows and activities on separate task queues | Accepted | §7 |
 
 ---
 
@@ -204,6 +212,10 @@ Option C is defensible and was seriously considered. It loses on two counts: eve
 ### Reversal trigger
 
 Audit ceasing to be a requirement, or observed event volume low enough that a partitioned PostgreSQL table demonstrably suffices.
+
+### Amendment 2026-11-27 — the read path
+
+"Write-only from the application's perspective, no synchronous user-facing request path reads from it" is not literally true of the built system. `audit-api` (admin role only) reads `failed_events` and the archive for the failed-events list, inspect and replay (ADR-0034), and `analytics-api` reads `failed_events` to serve the Failed Events metric. Both are admin or metrics paths, not paths a student or instructor request takes, and the decision stands in that sense: no learner-facing request depends on MongoDB, and an outage degrades the archiver, the failed-events view and that one metric. The constraint should be read as "no learner-facing path", not "no reads".
 
 ---
 
@@ -547,6 +559,12 @@ Option C fails because Kafka has no delayed delivery, no scheduling, and no per-
 
 Non-Go services needing to consume the same jobs, or routing requirements exceeding Asynq's model.
 
+### Amendment 2026-11-27 — what a Redis wipe costs
+
+Verified by reading the code and a local test of the container's persistence (see `docs/guides/local-stack.md`, "Redis persistence"); a Redis wipe has not been run against a live stack with the workers watching the recovery.
+
+The Negative consequence above ("a Redis loss now costs queued jobs") is true for the queue but not for what the jobs protect. Notification deliveries are recorded in Postgres first, and `notification.EnqueuePending` re-enqueues any row still pending after five minutes, so a flush delays notifications and does not lose them. Periodic jobs (the reconciler, cleanups, the token-version re-seeder) are enqueued again by the next tick of the Asynq scheduler loop, so at most one run is lost. Asynq's uniqueness keys also live in Redis, so after a wipe a job can run twice; the jobs are meant to be idempotent, but I have not checked each one. Not audited: every other enqueue site.
+
 ---
 
 ## ADR-0014 — Kafka to Asynq handoff for notifications only
@@ -705,6 +723,10 @@ Aggregates stay in PostgreSQL rather than MongoDB (ADR-0004) so reconciliation i
 
 Reconciliation queries becoming expensive enough to affect transactional performance, which would push toward incremental-only with periodic sampled verification.
 
+### Implementation note (Week 3, 2026-11-19)
+
+The reconciliation this ADR calls for is built. `analytics.NewReconciler(db, rdb).Run` recomputes the platform snapshot, every course's stats row and its daily buckets from the event-fed mirrors and rebuilds the Most Popular Courses sorted set; the worker runs it every 60 seconds through the Asynq scheduler. Safety against the relay's handlers: the recompute functions take the `course_stats` / `platform_snapshot` row lock first and read the mirror afterwards, so a writer that waited for the lock sees what the other committed and cannot write back a stale total (lock order is always course stats, then platform snapshot); a second concurrent `Run` waits on a transaction-scoped advisory lock and redoes the same idempotent work. A deterministic test pins the lock-then-read order; a randomised concurrency test checks only that there is no deadlock or error. The earlier statement in the first implementation that reconciliation "does not exist yet" no longer holds. Search-index and cache reconciliation (ADR-0025's gap) remain unbuilt.
+
 ---
 
 ## ADR-0018 — Docker Compose profiles for tiered local development
@@ -785,6 +807,16 @@ Option D is rejected because it couples asset storage to a specific API replica'
 
 A real cloud deployment target being chosen, at which point MinIO is replaced by the provider's object storage — the S3-compatible client makes this a configuration change, which is the reason Option A was chosen over anything MinIO-specific.
 
+### Amendment 2026-11-25 — image source changed to the `pgsty/minio` fork
+
+**What changed.** The official `minio/minio` and `minio/mc` images can no longer be pulled from Docker Hub or quay.io on a fresh machine (`pull access denied` / 401, verified by the project lead), so `docker compose --profile core up` failed for any reviewer or CI runner without the images cached. `docker-compose.yml` (`minio`, `minio-init`) and the integration-test helper `services/course/internal/miniotest` now use the community fork `pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372` and `pgsty/mc:RELEASE.2026-11-12T00-00-00Z@sha256:b532278b7a3747dbab6fe45eebb40a653efa704e6758e24e9d9ec54fc96c1800` (multi-arch index digests). Nothing in the application changed: it speaks only the S3 API, and the ports, `MINIO_*` variables, credentials, bucket name and health endpoint are the same. The decision (Option A, S3-compatible store, coded against the S3 API) stands; only where the image comes from changed.
+
+**Evidence it is compatible** (run 2026-11-25): the course integration tests (`assets`, `course`, `activities`, `-race -tags=integration`) pass against the fork; on a disposable compose project the bucket was created by `minio-init`, a pre-signed PUT succeeded, a lesson referenced the asset and the publish reached `ready`, while a wrong-length or wrong-type PUT (403), a never-uploaded key and a zero-byte object each failed the publish with `asset_invalid: asset not found`; E2E E01 passed (it does not start object storage).
+
+**Risk.** The fork is third-party and community-maintained (maintainer label `pgsty`), not the MinIO vendor. Its own docs and the `mc` image are being rebranded ("Silo"), so image names, tags or the `minio` binary name may change; tags could be withdrawn. Mitigations: pin by tag and digest (never `latest`), review the tag before any bump, and keep the S3-only application code so the store stays replaceable (SeaweedFS and RustFS were identified as alternatives). Supply-chain trust in a community build is lower than in the vendor's; this is for local development and CI, not a production decision. Licence: the images' `minio --version` / `mc --version` output prints "License: GNU AGPLv3", and the minio image ships `/licenses/LICENSE` (AGPL v3 text); same licence family as upstream MinIO. This is what was observed in the images, not a legal review.
+
+**Revert.** Put the previous references back (`minio/minio:RELEASE.2025-09-07T16-13-09Z`, `minio/mc:RELEASE.2025-08-13T08-35-41Z`) in `docker-compose.yml` and the `image` constant in `services/course/internal/miniotest/miniotest.go`, if those images are pullable again or from a private mirror/self-built image, or switch to another S3-compatible store; no application change needed. Do not use `latest`.
+
 ---
 
 ## ADR-0020 — GCRA rate limiting over fixed-window counters
@@ -826,6 +858,8 @@ None anticipated. If Redis itself is ever removed from the stack, rate limiting 
 ---
 
 ## ADR-0021 — In-process outbox relay with a worker pool, ahead of Kafka
+
+> **Superseded in part by ADR-0033 (2026-11-25):** the in-process relay that ran every module's handlers is replaced by one publish-only relay per service and Kafka consumers; this record stays as the history of the bridge.
 
 **Status:** Accepted (claim mechanism amended by ADR-0027) · **Date:** 2026-09-25 · **RFC:** §6.3, §21.0
 
@@ -944,6 +978,8 @@ If `identity-api`, `course-api`, or `analytics-api` ever need to call each other
 
 ## ADR-0024 — Schema-per-service within one shared database
 
+> **Superseded in part by ADR-0033 (2026-11-25):** the shared `platform` schema (outbox, `processed_events`, `idempotency_keys`) is removed; each service owns those tables in its own schema.
+
 **Status:** Accepted (deferred `go.mod`/`libs/common` item resolved by ADR-0026) · **Date:** 2026-11-03 · **RFC:** §5.3
 
 ### Context
@@ -1057,6 +1093,8 @@ If `internal/search` lands as its own module in M3 with its own schema and ranki
 ---
 
 ## ADR-0026 — One Go module per service and per shared library
+
+> **Superseded in part by ADR-0033 (2026-11-25):** the worker no longer imports `course` or `analytics`; services require only `libs/*`.
 
 **Status:** Accepted · **Date:** 2026-11-17 · **RFC:** §4.1, §4.2, §4.4 · **Supersedes in part:** ADR-0001 (single `go.mod`; boundaries enforced by `depguard`) · **Extends:** ADR-0022, ADR-0023 · **Resolves:** the `go.mod`/`libs/common` item ADR-0024 deferred
 
@@ -1206,6 +1244,261 @@ If publishes legitimately approach the lease (longer activities, queueing behind
 
 ---
 
+## ADR-0029 — Two event transports behind one seam: in-process and Kafka
+
+> **Superseded in part by ADR-0033 (2026-11-25):** the in-process transport is removed; Kafka is the only transport and each service consumes independently.
+>
+> **Code note (2026-11-26):** the in-process path is also gone from `libs/relay`. `WithPublisher`, `Handlers()`, `Publishing()` and the unclaused original claim query named below no longer exist; the publisher is `relay.New`'s second argument and every relay claims per aggregate. Read the text below as the history of the bridge, not as a description of the code.
+
+**Status:** Accepted (project owner, 2026-11-26) · **Date:** 2026-11-18 · **RFC:** §6.2, §6.3 · **Would amend:** ADR-0021's reversal trigger, ADR-0027
+
+### Context
+
+ADR-0021 built the outbox relay with in-process handlers and said that when Kafka lands, "publish" becomes a Kafka producer and the handlers become consumer handlers. Two facts complicate a straight replacement. The `core` compose profile deliberately has no Kafka (ADR-0018), yet the worker and the relay run in it. And ~300 existing integration tests exercise the handlers through the in-process relay.
+
+### Options
+
+**A. Replace the in-process relay with Kafka outright.** One path, no drift. Every integration test and the `core` profile then need a broker, and there is no rollback if the Kafka path misbehaves.
+
+**B. Two transports behind one seam (proposed).** `EVENT_TRANSPORT=inprocess` keeps today's behaviour; `kafka` makes the relay produce to Kafka and runs consumer groups that call the same handlers. The outbox stays the only path to Kafka (RFC §6.2).
+
+**C. Keep in-process for domain handlers and use Kafka only for new consumers.** Smaller change, but the events the RFC says flow through Kafka would not, so FR-4's "Kafka event backbone" is only half true.
+
+### Decision
+
+**Option B.** The handler contract (`HandlerFunc`, idempotency through `processed_events` in the handler's own transaction) is the seam. In Kafka mode a consumer opens the transaction, checks and writes `processed_events` with the effect, commits, then commits the offset. A consumer that fails past its retry budget parks the event (ADR-0031) and advances, so a poison message cannot stop a partition. Handler suites run against both transports; end-to-end tests run on Kafka.
+
+### Consequences
+
+**Positive.** The fast dev loop and `core` profile survive; rollback is a config change; the same handlers are proven on both transports.
+
+**Negative.** Two code paths can drift; the mitigation is the shared handler suites and running E2E on Kafka. More configuration. The relay's per-row claim (ADR-0027) is held while producing, so a slow broker holds a connection per in-flight row.
+
+### Reversal trigger
+
+If the two transports diverge in behaviour more than once, or nobody uses `inprocess` outside tests, drop it and make Kafka the only transport (option A).
+
+### Implementation notes (2026-11-24, Phase 3: `libs/relay`, `libs/config`, `services/worker/transport`)
+
+What was built (accepted by the project owner on 2026-11-26):
+
+- **Selection.** `EVENT_TRANSPORT=inprocess|kafka` (default `inprocess`; any other value fails `config.Load`, so it fails startup in every binary). Kafka mode requires `KAFKA_BROKERS` and `SCHEMA_REGISTRY_URL`. Consumer tuning: `KAFKA_CONSUMER_MAX_IN_FLIGHT` (4), `..._MAX_ATTEMPTS` (5), `..._BACKOFF_BASE` / `..._BACKOFF_MAX`, `..._SHUTDOWN_TIMEOUT`, and `KAFKA_PRODUCE_TIMEOUT` (20s, at most 25s because the relay gives one row 30s).
+- **The seam is in the relay, the Kafka code is not.** `libs/relay` gained `Publisher` (`Publish(ctx, DecodedEvent) error`), `WithPublisher`, `Deliver` (the existing check-`processed_events`-then-handle-then-mark transaction, now exported) and `Handlers()`. It still imports no Kafka client and no `libs/events`, so the link-graph guard's ban on Kafka code in identity-api and analytics-api (which link the handler packages, hence `libs/relay`) is unaffected. The implementation is the new package `services/worker/transport` (encoding, `Publisher`, consumer `Runner`, start-up checks).
+- **Publish step.** In publish mode the relay's per-row step encodes the row (`libs/events`: JSON payload parsed strictly into the event type's Protobuf message, wrapped in the Envelope, framed with the envelope subject's registry id, `schema_version` = the payload subject's registry version), produces it to the topic chosen by the event-type prefix (RFC §6.5), keyed by `aggregate_id`, and marks the row published only after the broker's acknowledgement (`acks=all`). The registered handlers are not run by the relay in this mode.
+- **Per-aggregate order needed a change to the claim.** ADR-0027's claim (`ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`) lets worker B publish row N+1 of an aggregate while worker A is still producing row N, and lets a retried row be overtaken. In publish mode the claim adds `AND NOT EXISTS (an earlier unpublished row of the same aggregate)`. The per-row claim and its transaction are otherwise unchanged; in-process mode runs the original query. A test with four workers fails without the clause. Cost: the outbox has no index on `aggregate_id`, so the check scans the unpublished rows; fine for a small backlog, to be indexed (a migration, not done here) if the backlog is large.
+- **Failures.** A row that cannot be encoded (unknown event type, payload not matching its schema) returns an ordinary error: the relay retries it up to `maxAttempts`, then parks it and marks it published; rows of other aggregates are not held up while it burns its budget, and later rows of the same aggregate wait for that bounded time, then go out in order. A broker problem is marked `relay.Transient` and does **not** consume the attempt budget (an outage must not dead-letter good events); the row is only backed off. Exceptions are the broker's non-retriable verdicts on the record itself (message too large, corrupt, invalid topic), which count as ordinary failures.
+- **Dead-letter contract (for ADR-0031).** `relay.DeadLetter{Event, Consumer, Err, Attempts}`, `relay.DeadLetterSink{Park(ctx, DeadLetter) error}`, `relay.WithDeadLetterSink`. When the relay gives up it parks first, once per failed consumer (`relay.RelayConsumer` for a failed publish), and marks the row published only after every `Park` succeeded; if one fails the row stays unpublished, the failure is logged and counted (`ParkFailures`) and the next claim tries again. `Park` must be idempotent on (event id, consumer). With no sink the old log-and-drop behaviour remains and is the documented gap.
+- **Consumers.** One consumer group per consumer name (several handlers may share a name, as analytics does), subscribed to the topics of its event types; each record is decoded back to the `relay.DecodedEvent` the existing handlers take and run through `relay.Deliver`, so the same handlers run unchanged under both transports; the offset is committed by `libs/kafka` only after `Deliver` returned nil. After the retry budget, `OnExhausted` parks through the same sink (three tries, then the full event is logged and counted) and the offset advances. The `outbox_id` that mirror handlers use for their last-event guard travels in a record header (`outbox_id`), because the envelope has no field for it.
+- **Start-up.** In kafka mode the worker provisions the topics (`topics.Ensure`) and reads every subject's latest id and version from the registry; an unreachable registry or a missing subject stops the worker with an error naming it. It does not register schemas (`libs/events/cmd/register-schemas` does).
+- **Health.** `kafka.HealthCheck(brokers)` is exposed by the worker's transport (`HealthCheck()`) as the non-fatal readiness check. The worker has no HTTP surface, so nothing serves it yet.
+
+Verified (local, `go test -race -tags=integration`, real Postgres and Redis, a real `apache/kafka:3.7.0` broker): per-aggregate order end to end (8 aggregates x 15 events, 4 relay workers); a row re-published by the relay plus a record produced a third time yields one effect; a consumer cancelled mid-handler, with its effect uncommitted, resumes with nothing lost and nothing doubled; the broker stopped then started with a backlog growing meanwhile drains with no loss, no dead letters and no attempt consumed; an undecodable record and a handler that always fails are parked and the healthy records behind them are applied; a sink that refuses is counted and does not stall the partition; an unencodable row is parked by the relay and blocks nothing else; the worker's two end-to-end tests (events to analytics, course and enrollment effects; events to certificate and mail) pass under both transports. Mutation checks: removing the per-aggregate clause, treating a failed publish as success, accepting a refused `Park`, and swallowing handler errors in the consumer each made the matching test fail.
+
+**Not verified.** The real Schema Registry in the transport tests (a stand-in serves ids and versions; registration against the compose registry is covered by `libs/events`' `live` tests only); a Confluent-format consumer (Java or Go) reading these bytes, so interop is still checked against the documentation only; more than one broker, TLS, SASL; throughput, consumer lag and the cost of the per-aggregate claim under load; a hard process kill between the broker's ack and the relay's commit (simulated by re-publishing a row, not by killing a process); the compose stack running `EVENT_TRANSPORT=kafka` from the built images.
+
+**Known gaps.** (1) A consumer's dead-lettering cannot hold the offset when the sink is down: `libs/kafka`'s hook has no error return, so after three tries the event survives only in the log (the relay side, by contrast, keeps the row). (2) Events of different aggregates, and so of different topics, are unordered; the end-to-end test showed a `course_completed` handler retrying until the `student_enrolled` it depends on arrived. The five-attempt budget with short backoff could dead-letter such an event if its predecessor lags by more than a few seconds; a consumer that needs a parent event should make that retry window explicit. (3) `DecodedEvent.SchemaVersion` in kafka mode is the registry version, not the outbox row's. (4) Switching an existing deployment to Kafka: rows already published in-process never reach Kafka, and a new consumer group starts at the beginning of each topic.
+
+---
+
+## ADR-0030 — Event contracts: Protobuf, generated code, and client library selection
+
+**Status:** Accepted (project owner, 2026-11-26) · **Date:** 2026-11-18 · **RFC:** §6.4, §6.8 · **Builds on:** ADR-0008
+
+### Context
+
+ADR-0008 chose Protobuf with Schema Registry at BACKWARD compatibility but named no libraries and no module layout. Under ADR-0026 every shared package is its own Go module, and the images are built `CGO_ENABLED=0` as a non-root user with a per-module Docker closure check. Two later needs touch the contracts: the `outbox` table has no `trace_id`/`span_id` columns (ADR-0032), and `course_published` carries no instructor id, which is why per-course analytics cannot enforce instructor ownership (findings register, F-18).
+
+### Decision
+
+- A new module, `libs/events`, holds the `.proto` files, generated Go code (committed, so contributors can build without the toolchain), the envelope, and a codec for the registry's wire format. It depends on no service.
+- `course_published` gains `instructor_id`; the outbox gains trace and actor columns through a new platform migration with a verified down.
+- A bootstrap script registers every subject at BACKWARD compatibility, idempotently; CI fails on an incompatible change using golden files.
+- **Client libraries: not chosen here.** The candidates are a pure-Go Kafka client (franz-go is the leading candidate), the official MongoDB Go driver, Asynq (ADR-0013), and the OpenTelemetry and Prometheus Go libraries. Each is selected, with its version and the current-documentation check recorded in this ADR, before its first use. The selection criteria are fixed now: pure Go (no cgo), actively maintained, a context-aware shutdown, and a license compatible with the project.
+
+### Consequences
+
+**Positive.** One place defines the contract; breaking it fails CI; trace and actor data are available to every consumer.
+
+**Negative.** Generated code in the repository produces noisy diffs; every event change is a migration plus a schema change; the library choice stays open until the first phase that needs it, which is a deliberate delay.
+
+### Reversal trigger
+
+If registry compatibility checks block legitimate evolution more than they prevent breakage, or if generated-code churn dominates review, revisit the encoding (the RFC's Avro alternative was rejected for Go ergonomics, ADR-0008).
+
+### Implementation notes (2026-11-18, `libs/events`, `libs/asynqx`, `libs/mongostore`, `libs/telemetry`)
+
+These record what was built and chosen. The ADR was `Proposed` until the Kafka client library was chosen and the owner accepted it on 2026-11-26.
+
+- **Protobuf toolchain:** buf v1.75.0 (Apache-2.0) and protoc-gen-go v1.36.11 (BSD-3-Clause), matching the `google.golang.org/protobuf` v1.36.11 runtime; generated code is committed and `generate.sh` reproduces it byte for byte. Confluent's wire format (magic byte, 4-byte schema id, message-index list) was checked against Confluent's documentation; a real Confluent client has **not** yet read these bytes (Phase 3).
+- **Registry client:** standard-library `net/http`, no third-party dependency. Twelve subjects registered at BACKWARD against a real Schema Registry; an additive change was accepted and a field-type change rejected (409).
+- **Compatibility guard:** wire bytes carry only field numbers, so a rename is invisible to them. The golden files therefore also store the payload as JSON with field names and a per-field name/number/kind signature.
+- **Kafka value format:** a framed Envelope with the payload as bytes (RFC §6.4), not a framed per-event message with the envelope in headers.
+- **`schema_version`** is defined as the registry version of the payload's subject; a convention the registry does not enforce.
+- **Topic routing:** the outbox `aggregate_type` (`user`, `course`, `enrollment`) does not match the RFC topic names (enrollment events use `course`; `progress.course_completed` uses `enrollment`). The relay routes by `event_type` prefix (`events.Types()` holds the map); emitters are not changed.
+- **Only eight event types are emitted today** (identity 3, course 2, enrollment 2, progress 1). RFC §6.5's other events (`CourseCreated`, `LessonCompleted`, `CertificateIssued` and so on) have no producer and no message yet.
+  - **Update 2026-11-24 (DR-026):** the catalogue is now **eleven** event types and 15 registry subjects: `progress.lesson_completed`, `progress.certificate_issued` and `course.publish_failed` were added as BACKWARD-compatible messages with golden files, after the E2E run found RFC §6.5 listed them but nothing emitted them. `CourseCreated`, `CourseVersionCreated` and `CoursePublishRequested` still have no producer and no message.
+- **Other libraries, verified against the module proxy and source:** Asynq v0.26.0 (MIT) with robfig/cron/v3 v3.0.1; official MongoDB Go driver v2.10.0 (Apache-2.0); OpenTelemetry v1.44.0 and prometheus/client_golang v1.24.1 (Apache-2.0; v1.25.0 exists but needs protobuf v1.36.12, which would skew the single-version rule); AWS SDK for Go v2 S3 v1.115.0 (Apache-2.0) for asset storage. The licences for the telemetry libraries were stated from memory by the agent and should be re-checked against the module sources before the defense. The **Kafka client** was still unchosen at this point; see the next note.
+
+### Implementation notes (2026-11-24, `libs/kafka`): Kafka client
+
+- **Chosen: franz-go** `github.com/twmb/franz-go` v1.22.3 (published 2026-11-09, the latest on the module proxy when checked), with `pkg/kadm` v1.20.0 for topic administration; `pkg/kmsg` v1.15.1 and `github.com/pierrec/lz4/v4` v4.1.33 come with it. **Licence:** BSD-3-Clause for franz-go, kadm and kmsg (the LICENSE files in the downloaded modules are identical and were read); lz4 carries a BSD-style licence (header read, text not compared to the SPDX template). **Pure Go:** `CGO_ENABLED=0 go build` of the module succeeds. This satisfies the four criteria above: pure Go, actively maintained (a release within the last month of the check; maintenance cadence beyond that not assessed), context-aware (`PollFetches(ctx)`, `ProduceSync(ctx)`, `CommitRecords(ctx)`), licence compatible. The choice rests on the module source and the proxy listing, not on a comparison trial with `segmentio/kafka-go` or `confluent-kafka-go` (the latter needs cgo, which the images forbid).
+- **Verified against a real broker** (`apache/kafka:3.7.0`, the compose image, through `testenv.SetupKafka`): produce and consume round trip with key and headers; ordering per key across partitions; a consumer cancelled mid-handler leaves its record uncommitted and the next consumer of the group receives it, nothing lost; a poison record exhausts its budget, fires `OnExhausted`, and the healthy record behind it on the same partition is handled and the offsets advance; a graceful drain finishes the in-flight handler and commits; in-flight work stays within `MaxInFlight`; a consumer joining mid-stream loses nothing; a single broker stopped, and killed without grace, then restarted while four producers are mid-flight leaves exactly the produced records on the topic, in order per key, with no duplicates (single broker, data intact).
+- **A test found a default that matters:** franz-go does not retry an EOF on the first read of a connection (it assumes a TLS or SASL misconfiguration), and a restarting broker behind a port proxy produces exactly that. Both clients set `kgo.AlwaysRetryEOF()`. Revisit this when TLS or SASL is introduced.
+- **Not verified:** multi-broker behaviour (replication, leader election, `min.insync.replicas`); TLS and SASL; throughput and consumer lag under load; a Confluent-format consumer reading `libs/events` bytes through this transport (still the Phase 3 interop item above); crash recovery when the broker also loses its producer-state snapshot; `govulncheck` on the new dependencies.
+- **Topic list** is in `libs/kafka/topics` (RFC §6.5, three partitions, replication factor one) and equals docker-compose's `kafka-init` (a unit test compares them). The partition count is still the RFC §20 (D5) placeholder.
+- **Was open when written (now accepted, 2026-11-26; the relay and consumers use this module):** what a consumer does when `OnExhausted` cannot park (ADR-0031's open item) was left to the hook, which had no error return and always let the offset advance. *(Closed 2026-11-26, B-06/B-07: `OnExhausted` now returns an error and the `libs/eventbus` hook holds the record until the sink accepts it; see `libs/eventbus/README.md`.)*
+
+---
+
+## ADR-0031 — MongoDB archive, dead-letter parking, and replay
+
+**Status:** Accepted (project owner, 2026-11-26) · **Date:** 2026-11-18 · **RFC:** §5.4, §6.9 · **Builds on:** ADR-0004 · **Closes:** ADR-0021's "no dead-letter store"
+
+### Context
+
+ADR-0021 records that a poison event past max attempts is marked published and logged, so it is lost for recovery. The baseline requires failures to be diagnosable and lists "Failed Events / Workflow Issues" as a metric. ADR-0004 limits MongoDB to the archive and audit, not aggregates.
+
+### Decision
+
+- `events` and `audit_log` archive every event with its schema id; `failed_events` parks anything a consumer or the relay gives up on, with payload, consumer, attempts and error history.
+- A parked event is never dropped and never blocks the stream.
+- Replay is by `event_id` through an admin-only endpoint and re-enters the normal idempotent path, so replaying twice has the same effect as once.
+- Aggregates stay in PostgreSQL (ADR-0017). A MongoDB outage degrades the archiver and the failed-events view only; analytics and the API keep working.
+
+### Consequences
+
+**Positive.** Closes the relay's drop-on-poison hole and makes the ninth analytics metric real.
+
+**Negative.** A second store to run and secure; a replayed event can legitimately repeat an external effect such as an email (RFC §6.6 accepts this); an admin replay endpoint is a new privileged surface that needs its own tests.
+
+### Reversal trigger
+
+If the archive's only users are replay and the failed-events metric, and operating MongoDB costs more than a PostgreSQL table would, revisit ADR-0004.
+
+### Implementation notes (2026-11-18, `libs/mongostore`)
+
+- Collections `events` (archive; `_id` is the `event_id`, so the built-in id index is the uniqueness guarantee), `audit_log`, `failed_events` (unique `(event_id, consumer)`). No TTL index: the archive is permanent.
+- **Differs from RFC §5.4:** the RFC names `resolved_at` and an index on `{resolved_at, last_failed_at}`; the code uses `status` (`parked` or `replayed`) plus `replayed_at`. The RFC should follow the code, and will be updated in Phase 9.
+- Parking is idempotent per `(event_id, consumer)`: repeats append to the error history (kept to the newest 100 entries; `attempts` keeps the true total). Payloads over 15 MiB are refused (`ErrPayloadTooLarge`). `MarkReplayed` moves `parked` to `replayed` exactly once under concurrency. Re-parking a replayed event returns it to `parked`.
+- `CountFailedSince` counts on `last_failed_at`, optionally by status. This is the working definition of the "Failed Events" metric; confirm it in Phase 6.
+- **Open, for the consumer-runner phase:** what a consumer does when parking itself fails because MongoDB is down (keep the event retryable, or fail loudly), and whether replay marks before publishing or after.
+- Not verified: replica sets, authentication/TLS, performance.
+
+### Implementation notes (Phase 4: archive, dead letters, replay, admin surface)
+
+**Built** (tests against real MongoDB, Postgres and Redis; details in `services/worker/{archive,deadletter,admin}/README.md`):
+
+- `services/worker/archive`: the `audit-archiver` consumer for every `libs/events` type; archive document per `event_id` with `schema_version`, `schema_id` (0 unless a resolver is supplied) and the registry subject in headers; `audit_log` records, idempotent per event, for `identity.user_role_changed`, `course.course_published`, `course.course_archived`.
+- `services/worker/deadletter`: `Sink` (park: bounded, idempotent per `(event_id, consumer)`, an error means "not parked") and `Replayer` (handler plus `processed_events` marker in one transaction under an advisory lock, then `MarkReplayed`; replay twice is a no-op, concurrent replays apply once, a handler failing again leaves the record parked with the new error).
+- `services/worker/admin`: worker-side HTTP on `ADMIN_HTTP_ADDR` (default `:8093`, loopback in Compose): health and the admin-only failed-events list, detail and replay (admin role plus `RequireFreshPrivilege`). Replay lives in the worker because it must re-run the worker's handlers.
+- analytics-api serves the Failed Events metric from `failed_events` (`services/analytics/failedevents`).
+- `libs/mongostore` gained replay metadata on parked events (including the outbox id, because mirror handlers order updates by it), `AppendAuditOnce` and `SummarizeFailed`.
+
+**Resolves the open items above:** replay is **apply, then mark** (a crash between them leaves the record parked and the next replay finds the marker and only marks it; the reverse order would risk a lost replay). When parking fails because MongoDB is down, `Sink.Park` returns an error and the transport must keep the event retryable; the transport's behaviour on that error is still its own decision and is **not built here**. *(Update 2026-11-26: built for the Kafka consumers, B-06/B-07. A consumer whose sink refuses a record holds it and retries the sink with backoff, the offset not advanced, until the sink accepts it or the consumer stops; "a parked event is never dropped" now also holds during a MongoDB outage, at the price of the held partition waiting. Not verified end to end against a real MongoDB outage; the E2E `TestAdversarial_MongoOutage_BeyondDefaultRetryBudget_LosesEvents` was not re-run.)*
+
+**Deviations and decisions:**
+
+- **Link-graph relaxation for analytics-api only.** `scripts/check-link-graph.sh` no longer forbids `libs/mongostore` for analytics-api, so the metric is served from `failed_events` directly. identity-api stays forbidden, course-api's rule is unchanged, and `scripts/test-guards.sh` has cases for both. Reason: the alternatives (a worker-side internal endpoint, a read-model event mirrored into Postgres) add a hop or a migration for one admin metric. Cost: analytics-api now links the MongoDB driver and depends on MongoDB for that one route (503 when it is down, nothing else affected; it connects lazily).
+- The audit-archiver must be registered **only in Kafka mode** (in in-process mode a failing handler fails the whole relay row, so a MongoDB outage would burn attempts for every consumer). It is not registered anywhere yet.
+- The worker gets an HTTP surface (it had none) for the admin routes. `RequireFreshPrivilege` has no token-version source in the worker (it cannot read `identity.users`), so a Redis miss counts as version 1, as in course-api.
+- The Failed Events workflow half (`WorkflowIssuesSource`) is not built; `/analytics/issues` reports `workflow_issues: null`. Recommended: a `course.publish_failed` event mirrored into analytics. **Built 2026-11-24 (DR-026):** `course.publish_failed` is emitted and mirrored into `analytics.publish_failures` / `workflow_issue_stats`, and `workflow_issues` is now an object (failed publishes since the event existed).
+- `MONGO_URI` is optional everywhere: unset or unreachable degrades archive, parking, replay and the metric, and nothing else.
+
+**Not verified:** the relay's give-up path (`libs/relay`) still marks a poison row published until the dead-letter hook is wired to `Sink`; replay under Kafka and of Protobuf payloads; a MongoDB replica set, authentication or TLS; the admin port from the built image or Compose; anything about throughput. Replay is not written to `audit_log` (who replayed what is not recorded).
+
+### Note (2026-11-25, E10 and E13 fixes; still Proposed)
+
+- **Admin surface fails closed.** The 2026-11-18 note above says the worker's `RequireFreshPrivilege` treats a Redis miss as version 1. E10 showed the consequence: after a Redis flush the old token of an admin demoted from version 1 got 200 on `GET /api/v1/admin/failed-events`. The worker (and `GET /analytics/issues` in analytics-api) now use `auth.RequireFreshPrivilegeStrict`: a miss is 401 `token_stale`. Cost: a bounded lockout of admins from these two surfaces after a flush (identity's re-seeder runs every 15 s and rewrites versions above 1; a version-1 admin is unlocked by login, refresh or any identity `/me` or admin call). The alternative (reading `identity.users`) is refused by ADR-0022 to 0024. See DR-022.
+- **Replay is audited.** Each replay attempt appends an `audit_log` entry per consumer outcome (`failed_event_replayed`: admin id from the verified token, event id, consumer, outcome); entries are per attempt (no `event_id`, so the unique partial index does not collapse them). A failed audit write is logged and counted and does not undo the replay.
+- **Archive carries its source.** Over Kafka the archive document stores the frame's registry schema id as `schema_id` and the record's topic, key, partition and offset, carried to the handler in the context (`relay.Source`). In-process delivery stores `schema_id` 0 (header `schema_id_source: none`) and no coordinates. `schema_id` is the topic's envelope schema, as the frame header carries it, not a per-event-type payload schema.
+- **Audit set follows the RFC table:** role change, publish, publish failure, archive, certificate issuance.
+
+### Amendment 2026-11-27 — a refused park holds the partition
+
+"A parked event is never dropped and never blocks the stream" holds only while MongoDB accepts the park. When the dead-letter sink refuses a record (MongoDB down, or the payload refused), `libs/eventbus` does not skip it and does not drop it: it holds that record, retries, and the partition stalls behind it. This was decided on 2026-11-26 (owner): skipping would lose the event, and a stall is visible and recoverable. There is no time limit on a hold.
+
+The stall is made visible, not prevented: `dead_letter_held_records{consumer}` (gauge), `dead_letter_park_failures_total{consumer}` (counter) and the alert `DeadLetterRecordHeld` (held for 5 minutes, severity page). Unit tests cover the counters; a real MongoDB outage has not been exercised against a live Prometheus. The earlier open question in the implementation notes ("what a consumer does when parking itself fails because MongoDB is down") is answered by this amendment: keep the event, hold, alert.
+
+---
+
+## ADR-0032 — Observability in Week 3: trace context through the event envelope
+
+**Status:** Accepted (project owner, 2026-11-26) · **Date:** 2026-11-18 · **RFC:** §12 · **Would supersede:** DR-019
+
+### Context
+
+DR-019 (2026-11-06) kept observability out of Week 3 on the grounds that the weekly plan is a cadence, not a gate, and said that if the reviewer meant the Execution Guidelines' "basic monitoring and tracing available" as a hard requirement, the entry would be superseded. The project owner has confirmed (2026-11-18) that it is required, and that Week 3 is the last stage before external review and defense, so nothing can be deferred past it.
+
+### Decision
+
+- OpenTelemetry in every service, exported to Jaeger; W3C trace context is written to the outbox row at the moment of the state change and continued by the relay, Kafka consumers and Asynq jobs, so one trace spans request to delivery (RFC §12.2).
+- Prometheus metrics at `/metrics` on every service: RED per route, plus outbox backlog and oldest-unpublished age, consumer lag, queue depth and retries, dead-letter totals, workflow outcomes and DB pool use (RFC §12.3). Labels use route templates, never raw identifiers; a test fails on unbounded cardinality.
+- Grafana dashboards and Prometheus alert rules are provisioned from the repository.
+- Alerting is on the rate of dead-lettering and on outbox age, not on a single event (RFC §6.9).
+- Scope is "basic": the full RFC list is the target, and what is not reached is recorded as not built rather than implied.
+
+### Consequences
+
+**Positive.** An asynchronous pipeline becomes diagnosable; the deliverable is met rather than argued.
+
+**Negative.** Instrumentation adds a dependency to every service (the link-graph budget must be extended deliberately, ADR-0026); sampling and exporter settings are new configuration; observability code touches hot paths.
+
+### Reversal trigger
+
+If instrumentation overhead shows up in the latency targets (RFC §13.1), lower the sampling rate before removing spans.
+
+### Implementation notes (2026-11-18, `libs/telemetry`)
+
+- OpenTelemetry v1.44.0 exporting OTLP over HTTP; the module is complete and tested but **not wired into any service** yet. Disabled mode is a true no-op.
+- **Errors-always-sampled is only partly achievable.** The SDK cannot decide to keep a trace from a later error. The implementation records every span and exports a span that ends in error even when its trace was not sampled, so an unsampled failing request shows in Jaeger as a **fragment** (the failed span, not its siblings). Whole-trace capture needs tail sampling in a collector, which is not built. Say this plainly in the defense.
+- **Link-graph cost:** any binary that imports the module links gRPC (66 packages) and protobuf through the OTLP exporter. Wiring telemetry into identity-api and analytics-api will change their package counts; the budget in `scripts/check-link-graph.sh` must be extended deliberately when that happens, not silently.
+- **Metric names** are fixed (they are what the Prometheus alert rules and Grafana dashboard query): `http_requests_total{route,method,status}`, `http_request_duration_seconds{route,method}`, `outbox_backlog`, `outbox_oldest_unpublished_seconds`, `kafka_consumer_lag{group,topic}`, `asynq_queue_depth{queue}`, `asynq_retry_count{queue}`, `dead_letter_total{consumer}`, `workflow_started_total`, `workflow_completed_total`, `workflow_failed_total`, `db_connections_in_use`, `db_connections_max`, `event_processed_total{consumer,outcome}`. HTTP metrics label by route template, with a constant for unmatched routes; a test fires 20,000 distinct paths and expects a small constant number of series.
+- **Provisioning (`observability/`):** Prometheus v3.16.0, Grafana 13.3.1, Jaeger all-in-one 1.76.0, Mailpit v1.34.0; eight alert rules and one 12-panel dashboard. The alert thresholds are **development placeholders**, not tuned values. The worker's metrics port (9100 in `prometheus.yml`) is an **assumption** that must match what the worker serves once instrumented. `asynq_retry_count` is treated as a gauge.
+- Not verified: a trace through real Jaeger, the app scrape targets coming up, the dashboard rendering with data.
+
+### Implementation notes (2026-11-24, Phase 7 instrumentation: HTTP, DB, Redis, Temporal, Asynq, metrics)
+
+**What is built.** `libs/telemetry` is wired into identity-api, course-api, analytics-api and the worker through one call, `libs/infra` `Dependencies.Observe`. Configuration is `config.Telemetry` (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SDK_DISABLED`, `OTEL_SERVICE_NAME`, `OTEL_TRACES_SAMPLER_ARG`, `METRICS_ENABLED`, `METRICS_HTTP_ADDR` default `:9100`). Tracing off (no endpoint) installs nothing; an unreachable collector never blocks start-up or a request and logs one WARN a minute; shutdown flush is bounded at 5 s.
+
+| Piece | Where | Note |
+|---|---|---|
+| HTTP tracing and RED | `router.Options.Observe` | route templates (`c.FullPath()`), `unmatched` constant; `trace_id` and `span_id` in the access log; `smartcourse.request_id` on the span; probes not traced |
+| `/metrics` | API port (three services), `METRICS_HTTP_ADDR` (worker) | **unauthenticated by design**; compose publishes on 127.0.0.1 only; the worker's is not the admin port |
+| DB, Redis spans | `db.EnableTracing`, `cache.EnableTracing` | hand-written (no `otelgorm`/`redisotel`: no extra module); only under a request span; Redis key and SQL values never recorded |
+| Temporal | `temporal.Observe` | `go.temporal.io/sdk/contrib/opentelemetry` v0.8.1 (MIT), resolves to the repo's otel v1.44.0 and sdk v1.50.0 (v0.9.0 needs otel v1.45 and sdk v1.51, which the hygiene guard would reject as skew) |
+| Trace into the outbox | `outbox.Write` | trace and span from the context span, actor through a resolver hook installed by `libs/infra` (a direct `libs/auth` import would have forced every module that requires `libs/relay` to change its go.mod) |
+| Metrics fed | outbox gauges (15 s poller, identity, course, worker), `asynq_*` (worker, Inspector), `db_connections_*` (all), `workflow_*` (worker interceptor) | a metric a binary never feeds is not exported |
+| Defined, not fed | `kafka_consumer_lag`, `event_processed_total`, `dead_letter_total` | `countParked` wraps the dead-letter store; nothing builds the sink yet |
+| Cardinality | `telemetry.CheckLabels` | fails on any label outside a bounded set; run against every service's registry |
+| Asynq jobs | `Server.Handle` | span and `job_id` logger per attempt; fresh trace (payload traceparent is a later step). Also fixes `Inspector.Stats` on a queue that never held a task |
+
+**Link-graph cost (measured with `go list -deps`).** identity-api 388 to 553 packages, analytics-api 453 to 618, course-api 655 to 725, worker 747 to 813. `scripts/check-link-graph.sh` now carries a package budget per binary (about 5% over today); identity-api and analytics-api still may not link Temporal, Asynq, Kafka or another service.
+
+**Verified live (disposable compose project, 2026-11-24).** Prometheus scraped the four targets UP; a request to course-api produced a Jaeger trace with HTTP, Postgres and Redis spans and the matching `platform.outbox` row (trace id, span id, actor); the dashboard's 13 panels' expressions ran against Prometheus. The tests run against real Postgres and Redis (testcontainers) and an in-memory span exporter.
+
+**Not verified or not built.** The relay, Kafka consumer and Asynq-enqueue spans (the trace stops at the outbox row; the relay must continue it); tail sampling (the fragment limitation above stands); a real Temporal server (workflow counters and the interceptor were tested with the SDK's test environment); alert thresholds (all placeholders); load and overhead; panels rendered in a browser; production hardening of `/metrics` (it relies on network placement).
+
+### Implementation notes (2026-11-24, Phase 7 events: the trace and the metrics through the pipeline)
+
+**What is built.** One request is one trace through the event pipeline, on both transports, and the three metrics that were defined but empty are fed.
+
+| Hop | How | Where |
+|---|---|---|
+| Relay | A per-delivery span that continues the trace stored on the outbox row. The row has `trace_id` and `span_id` and no header, so a traceparent is built from the two (`TraceparentFromIDs`, sampled flag set) and the relay span is the child of the stored span, which is the HTTP server span. The seam is an observer option on the relay (`relay.WithObserver`, start and finish callbacks); `libs/relay` imports no tracing library, the worker implements it (`transport.RelayObserver`). Relay log lines carry `event_id` | `libs/relay`, `services/worker/transport/observe.go` |
+| Produce | `StartProduce` child of the relay span; its traceparent is put in a Kafka record header `traceparent` | `transport.Publisher` |
+| Consume | The runner reads the header (falling back to the envelope's trace ids when absent), starts a consume span per record and group around the handlers, so the handlers' DB spans nest under it | `transport.Runner` |
+| Queue | The delivery handler stores the traceparent of the span it runs under in `notification.deliveries.traceparent` (migration `000002`); the sweeper enqueues each row under it; `asynqx.Client.Enqueue` starts an enqueue span and sets the Asynq task **header**; `Server.Handle` continues from it | `services/worker/notification`, `libs/asynqx` |
+
+Decisions. (1) The trace rides in Asynq task headers, not the payload, because the payload feeds the deterministic task id and old queued tasks must still deliver: no payload shape change, so no compatibility shim, and a test pins `DeliveryPayload`. (2) The delivery-row migration is worth it: the sweeper runs seconds later in a background loop that is in no trace, so without a stored traceparent the job could only be the root of a new trace. It is nullable metadata with a tested down path. (3) `kafka_consumer_lag{group,topic}` is the total over a topic's partitions from the brokers (`libs/kafka.LagReader`, polled every 15 s); partition and offset are not labels because they depend on topic configuration and churn on rebalance, while group (one per consumer name) and topic (four) are fixed by code. (4) `event_processed_total` counts per handler run with outcomes `processed`, `duplicate` (`relay.DeliverEvent` reports it), `failed` and `dead_lettered`; in-process it comes from a relay hook. (5) `dead_letter_total` is fed because `startTelemetry` now returns the Observability and the sink is built over `countParked(mg, o.Metrics)`; both give-up paths (the relay, and a consumer past its budget) use that one sink. (6) Tracing off adds nothing: no observer, no record header, no stored traceparent.
+
+**Tests.** `TestWorker_OneTraceAcrossPipeline` (both transports; real Postgres, Redis, Kafka; in-memory span exporter): a course enrollment request to the in-process enrollment routes arrives with a known trace id, and the HTTP server span, the outbox insert, the relay span (child of the HTTP span), in kafka mode the produce span and a consume span per group (children of the produce span), a handler DB span under the consumer (relay in-process), the Asynq enqueue span and the delivery job span (a descendant of the handler span and the HTTP span) all carry that id. `TestWorker_Metrics_KafkaOutageAndRecovery`: broker stopped, enrollments still accepted, `outbox_backlog` rises, `outbox_oldest_unpublished_seconds` grows, broker restarted, both return to 0 and `kafka_consumer_lag` to 0. `TestWorker_DeadLetterTotal_*`: parking increments the counter on both transports and on the relay's own give-up (`consumer="relay"`); a refused park does not. `TestWorker_TracingDisabled_*`. Cardinality: `CheckLabels` runs on the worker registry after real traffic. Mutation-checked (the change was made, the named test failed, the change was reverted): not injecting the record header; the consumer ignoring the header and the envelope; the job ignoring the task header; the sweeper ignoring the stored traceparent; not starting the lag poller; `countParked` returning the store unwrapped.
+
+**Verified live (2026-11-24, disposable compose project `sc-obs2`, worker and identity-api images built from the working tree, `EVENT_TRANSPORT=kafka`, Jaeger, Kafka, Schema Registry with the real subjects registered, MongoDB, Mailpit, Postgres, Redis; removed with `down -v`).** One `POST /api/v1/auth/register` carrying a known `traceparent` produced one Jaeger trace of 34 spans: the identity-api server span and its Redis and Postgres children including `INSERT outbox`; `outbox relay publish` (worker, child of the server span); `identity.events publish` (producer, child of the relay span); four `identity.events process` consumer spans (one per group: analytics, instructor mirror, notification, audit), each a child of the produce span with its handlers' SELECT and RAW spans under it; `notification:deliver enqueue` (child of one of the consume spans: the span ids were read from the Jaeger API, but which group it is was not checked) and `notification:deliver process` (its child) with its own DB spans. Mailpit held the welcome mail. The worker's `/metrics` showed `event_processed_total{outcome="processed"}` for the four groups, `kafka_consumer_lag{group,topic}` at 0 for every group/topic and `outbox_backlog 0`.
+
+**Not verified or not built.** `dead_letter_total` and the outage metrics were checked by tests, not in the live stack. The SMTP send has no span of its own (the job span covers it). The stored span id is the HTTP server span, so a row written by code that ran under a child span (a DB span is never put back in the context, so none today) would parent the relay under that child. The sampled flag is always set when continuing from the row's ids, so a trace the HTTP side sampled out (ratio below 1) is still exported from the relay onward, as a fragment without its root. Tail sampling, behaviour under load and tracing overhead, Temporal workflow spans in the same trace (the publish workflow starts from the HTTP request but was not part of this run), Grafana panel rendering, and alert firing remain as before. The in-process relay does not count `dead_lettered` in `event_processed_total` (its give-up is counted by `dead_letter_total`).
+
+---
+
 ## Appendix — Template for new records
 
 ```markdown
@@ -1232,6 +1525,95 @@ What was chosen and why. Address the strongest counter-argument directly.
 The observable condition that should prompt revisiting this.
 "None anticipated" is acceptable when true, with a reason.
 ```
+
+---
+
+## ADR-0033 — Independent services: per-service outbox and idempotency tables, Kafka-only integration, per-service roles
+
+**Status:** Accepted (project owner, 2026-11-25) · **Date:** 2026-11-25 · **RFC:** §4.4, §6 · **Supersedes in part:** ADR-0021 (in-process relay), ADR-0024 (the shared `platform` schema), ADR-0026 (the worker's coupling), ADR-0029 (dual transport), DR-009 (one worker) · **Plan:** `docs/plans/microservices-split.md`
+
+### Context
+
+The Week 2 review accepted the module split and fixes and asked for two things to make the services genuinely independent: the shared worker still imported `course` and `analytics` code (so the Temporal workflows should move into their own service, and each service should run its own relay), and each service needed its own outbox table instead of the shared `platform.outbox`. The shared worker and the shared `platform` schema were the last two couplings left from ADR-0021 and ADR-0024, both of which recorded them as stopgaps ahead of Kafka.
+
+### Decision
+
+1. **No service imports another service's code.** Services share `libs/*` only (the kernel and the contracts). The module-graph guard enforces it.
+2. **Each service owns its outbox, its consumer-idempotency table (`processed_events`) and its HTTP idempotency table (`idempotency_keys`) in its own schema.** Outbox tables exist only where events are produced (`identity.outbox`, `course.outbox`); `processed_events` only where events are consumed (`course`, `analytics`, `notification`). The `platform` schema is removed; a one-off `cutover` migration moves existing rows to the owning service with ids and ordering intact.
+3. **Kafka is the only integration transport.** The in-process delivery mode is removed. Each service's relay only publishes: it claims its own outbox rows, produces after the broker ack, and marks them published. Consumers run in the owning service's worker, one consumer group per consumer name, with the effect and the `processed_events` marker in one transaction and the offset committed afterwards.
+4. **Each service has a separate API binary and worker binary** (DR-009's principle, now per service): `identity-api`/`identity-worker`, `course-api`/`course-worker`, `analytics-api`/`analytics-worker`, plus `notification-worker`, `publishing-worker` and `audit-api`/`audit-worker`.
+5. **Independence is enforced by the database.** Each service connects with its own Postgres role with rights on its own schema only; a table-driven test proves that every role is refused on every other schema (for example `svc_identity` cannot read `course`). One database remains, with per-service schemas and roles; the design survives a later database split because every guarantee below is per schema.
+
+### The rule that keeps dual writes out
+
+The outbox row (producer) and the `processed_events` marker (consumer) are written in the **same database transaction as the state change or effect they protect, in the owning service's schema**. That is what makes splitting the tables safe. It would be broken by: an outbox in a different database from its business tables; a `processed_events` table detached from the effect it guards; a service writing events for state another service owns; or copying outbox or `processed_events` state between tables asynchronously (a mirror-and-sync scheme is itself a dual write, and no unified view is needed because each table is read only by its owner).
+
+### Consequences
+
+**Positive.** Services can be built, tested, scaled and (later) deployed independently; the guarantees no longer depend on every service sharing one schema; the database proves the boundary.
+
+**Negative.** Eleven binaries (ten long-running plus the identity-admin CLI) instead of four. Kafka and the Schema Registry are required for any cross-service effect, including in development. Cross-service causal order is not guaranteed (an event may arrive before the one it depends on): consumers must tolerate a missing dependency by retrying for long enough (the default budget is about a minute) or by keeping a pending state. "Published" now means the broker acknowledged; how far a consumer is behind is Kafka lag. Each worker prunes its own tables.
+
+### Alternatives considered
+
+- **Mirror each service's outbox and `processed_events` into a unified table** to keep a single view: rejected (asynchronous copying is a dual write, needs constant sync jobs, and the single view is not needed).
+- **Separate databases per service:** not required by the review; deferred. Nothing here prevents it.
+- **Keep the in-process transport for development:** impossible across independent services (it ran other services' handlers).
+- **Store consumed offsets in the service database instead of `processed_events`:** workable but needs partition-assignment handling; per-event markers are simpler and already proven by the end-to-end tests.
+
+### Reversal trigger
+
+If operating ten long-running binaries proves too costly for the team, merge API and worker per service into one binary (a runtime role flag) without changing the data model.
+
+---
+
+## ADR-0034 — The audit service: archive, dead-letter store, and replay as republish
+
+**Status:** Accepted (project owner, 2026-11-25) · **Date:** 2026-11-25 · **RFC:** §6.8, §6.9 · **Related:** ADR-0031, ADR-0033
+
+### Context
+
+With services independent, nothing may re-run another service's handlers. The Week 3 replay re-invoked a consumer's handler by importing it into the worker; that cannot survive the split. The event archive, the audit log and the failed-event store are cross-cutting: one consumer reads every topic and one store holds every service's failures.
+
+### Decision
+
+- A separate **audit service** owns the MongoDB store (`events` archive, `audit_log`, `failed_events`). `audit-worker` is the single consumer of every topic and its own retry topic, idempotent by event id in Mongo. `audit-api` lists, shows and replays failed events (admin role only, fail-closed token freshness).
+- **Each service's worker parks its own exhausted events** into `failed_events` (park before drop; with no store configured the event is logged and dropped as before). The audit service lists and replays them.
+- **Replay is republish.** `audit-api` encodes the stored record and produces it to `retry.<consumer>`; the consuming service's own consumer group handles that topic through its normal idempotent path. The order is produce first, mark replayed second, then an audit entry with the admin's id: a failure in between leaves the record parked and a second replay is absorbed by `processed_events`. A record that cannot be decoded or encoded, an unknown event type, a missing schema id or a consumer not in the known list is refused and stays parked (replaying garbage, or into a topic nobody reads, would mark the event done and lose it).
+- `analytics-api` reads the failed-event counts from the same Mongo collection through `libs/mongostore`. This read-only use of a store owned by another service is a deliberate, documented exception to independence, kept because the metric is an analytics feature and the shared library is the contract.
+
+### Consequences
+
+**Positive.** One place to see and repair failures and to audit; replay needs no knowledge of any service's code.
+
+**Negative.** Two more processes to run (`audit-api`, `audit-worker`); a retry topic per consumer; the Mongo `failed_events` collection is a shared contract between each worker (writer), `audit-api` (reader and replayer) and `analytics-api` (reader).
+
+### Alternative considered and rejected
+
+Each service owning its own dead letters and replay endpoint is purer but an operator would have to query every service and there would be no unified audit trail.
+
+---
+
+## ADR-0035 — The publishing service: workflows and activities on separate task queues
+
+**Status:** Accepted (project owner, 2026-11-25) · **Date:** 2026-11-25 · **RFC:** §7 · **Related:** ADR-0009, ADR-0025, ADR-0033
+
+### Context
+
+The publish workflow's activities touch course data, the object store, the search index and the cache, so the old worker imported the course service to run them. The review asked for the workflows to live in their own service.
+
+### Decision
+
+- `services/publishing` (`publishing-worker`) holds only the deterministic orchestration: the activity graph, retry policies and failure handling of `PublishCourseWorkflow`. It has no database and imports no service code.
+- The activities run in `course-worker`, which owns the data, on a separate task queue. The workflow calls every activity **by name** on that queue. `course-api` starts the workflow by name on the workflow queue and passes the activity queue in the workflow input.
+- `libs/contracts/publishing` is the contract (workflow name, the two queues `publish-workflows` and `course-activities`, activity names, the DTOs). It is **wire format**: Temporal history stores the names and the JSON field names, so they are pinned by tests and must not change without a versioning plan.
+- A test requires the set of activities the workflow schedules to equal the contract's list, so adding an activity on one side fails the build of the other.
+
+### Consequences
+
+**Positive.** Orchestration and business logic deploy and fail independently; no code import and no new API between the services.
+
+**Negative.** The combined workflow-and-activities path is only proven by the container end-to-end tests (E01, E12); a Temporal outage degrades the publishing worker's readiness instead of crashing it. In-flight workflows scheduled before a contract change must be drained or versioned.
 
 ---
 

@@ -42,11 +42,43 @@ func Connect(cfg *config.Config) (*Dependencies, error) {
 
 // HealthCheckers returns the dependency checks for /health/ready
 // (libs/router). Shared because every service has the same
-// dependencies, even though services/worker/cmd/worker doesn't expose an HTTP health
-// endpoint today.
+// dependencies; libs/runtime serves them on each binary's internal listener.
 func (d *Dependencies) HealthCheckers() map[string]router.Checker {
 	return map[string]router.Checker{
 		"postgres": func(ctx context.Context) error { return db.Ping(ctx, d.DB) },
 		"redis":    func(ctx context.Context) error { return d.RDB.Ping(ctx).Err() },
 	}
+}
+
+// ReadinessChecks is HealthCheckers in the plain func shape libs/runtime adds to
+// /health/ready, so runtime needs neither this package nor libs/router.
+func (d *Dependencies) ReadinessChecks() map[string]func(context.Context) error {
+	checks := map[string]func(context.Context) error{}
+	for name, c := range d.HealthCheckers() {
+		checks[name] = c
+	}
+	return checks
+}
+
+// Close releases the connections. Safe on a nil receiver.
+func (d *Dependencies) Close() {
+	if d == nil {
+		return
+	}
+	if d.DB != nil {
+		if sqlDB, err := d.DB.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	}
+	if d.RDB != nil {
+		_ = d.RDB.Close()
+	}
+}
+
+// Of returns the Dependencies a binary handed to runtime.WithDependencies(Connect)
+// (runtime.Process.Deps holds it as an interface so libs/runtime does not link
+// this package), or nil when d is nil or something else.
+func Of(d any) *Dependencies {
+	deps, _ := d.(*Dependencies)
+	return deps
 }

@@ -1,0 +1,5 @@
+# GitHub logins allowed to waive the E2E suite with the skip-e2e label
+# (docs/guides/ci.md). One login per line, case-insensitive, no @, no teams.
+# Read from the PR BASE branch, never the PR head, so a PR cannot add its own
+# author here. User logins in .github/CODEOWNERS are accepted as well.
+AmeerHussainEmumba

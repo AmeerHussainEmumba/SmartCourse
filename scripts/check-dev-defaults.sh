@@ -9,52 +9,44 @@
 #
 # Checks
 #   A  every compose service that carries a JWT_SIGNING_KEY pins APP_ENV: development
-#   B  libs/config rejects the published placeholder signing keys when APP_ENV=production
-#   C  no credential-looking literals in non-test Go code (tools/seed is checked separately)
+#   B  libs/config rejects the published placeholder signing keys when APP_ENV is not development
+#   C  no credential-looking literals in non-test Go code (tools/seed and test/ are checked separately or not shipped)
 #   D  tools/seed refuses to run outside development (it creates admin@smartcourse.dev with a known password)
 #   E  no committed .env files, private keys, or cloud tokens
 #   F  Dockerfiles: final stage runs as a non-root USER; base images pinned
-#   G  compose publishes data-store ports on all interfaces next to default credentials
+#   G  compose publishes ports beyond 127.0.0.1 (FAIL next to default credentials in the same service)
+#
+# A, B, C, D and G are done by tools/guardcheck, which parses docker-compose.yml as
+# YAML and the Go sources with go/parser (week-3 finding S-12: grep cannot tell code
+# from a comment, "x" from `x`, a list from an inline list, or "KEY: v" from
+# "- KEY=v"). Go rather than a script interpreter because the toolchain is already
+# required by every other check and by CI (actions/setup-go), whereas PyYAML is not
+# guaranteed on a CI image and a regex/awk YAML reader is exactly what was bypassed.
 #
 # Usage: scripts/check-dev-defaults.sh        (exit 1 if any FAIL)
+#        GUARD_ROOT=<dir> scripts/check-dev-defaults.sh   check another tree (the guard's own tests do)
 set -uo pipefail
-cd "$(dirname "$0")/.."
+here=$(cd "$(dirname "$0")/.." && pwd -P)
+cd "${GUARD_ROOT:-$here}" || { echo "FAIL [tooling] cannot enter ${GUARD_ROOT:-$here}"; exit 1; }
+root=$(pwd -P)
 
 fails=0; warns=0
 fail() { echo "FAIL [$1] $2"; fails=$((fails+1)); }
 warn() { echo "WARN [$1] $2"; warns=$((warns+1)); }
 ok()   { echo "ok   [$1] $2"; }
 
-# ---- A ---------------------------------------------------------------------
-bad=$(awk '
-  /^  [a-zA-Z0-9_-]+:[[:space:]]*$/ { if (svc != "" && key && env != "development") print svc; svc=$1; key=0; env="" }
-  /JWT_SIGNING_KEY:/ { key=1 }
-  /APP_ENV:/ { env=$2 }
-  END { if (svc != "" && key && env != "development") print svc }' docker-compose.yml)
-if [ -n "$bad" ]; then fail A "compose service(s) with a JWT_SIGNING_KEY but without APP_ENV: development: $(echo $bad)"; else ok A "every compose service with a signing key is pinned to APP_ENV=development"; fi
-
-# ---- B ---------------------------------------------------------------------
-placeholders=$( { grep -hE '^JWT_SIGNING_KEY=' env.example; grep -hE 'JWT_SIGNING_KEY:' docker-compose.yml; } | sed -E 's/^[A-Z_]+[=:] *//' | sort -u)
-if grep -qE 'production' libs/config/config.go && grep -qE 'placeholder|replace-with|local-dev|known.default|denylist|weak' libs/config/config.go; then
-  ok B "libs/config appears to reject placeholder signing keys in production"
+# ---- A, B, C, D, G (structured) ----------------------------------------------
+# A guard that cannot run must fail, never pass: a missing toolchain or a build
+# error is FAIL [tooling], and every FAIL/WARN line the program prints is counted.
+if ! command -v go >/dev/null 2>&1; then
+  fail tooling "go is not installed: checks A, B, C, D and G (tools/guardcheck) cannot run"
 else
-  fail B "libs/config/config.go only checks len(JWT_SIGNING_KEY) >= 32; these published values would be accepted with APP_ENV=production:"
-  echo "$placeholders" | sed 's/^/       /'
-  echo "       reproducer: go test -tags='integration bugrepro' -run TestBug_Load_ProductionAcceptsPublishedDefaultSigningKey ./libs/config"
-fi
-
-# ---- C ---------------------------------------------------------------------
-hits=$(grep -rnE '(Password|Passwd|Secret|SigningKey|APIKey|AccessKey|PrivateKey|Token)[A-Za-z]*[[:space:]]*(:=|=|:)[[:space:]]*"[^"]{6,}"' --include='*.go' . \
-  | grep -vE '_test\.go:|/testdata/|tools/seed/' | grep -vE 'json:"|binding:"|gorm:"' || true)
-if [ -n "$hits" ]; then fail C "credential-looking literals in production Go code:"; echo "$hits" | sed 's/^/       /'; else ok C "no credential literals in non-test Go code outside tools/seed"; fi
-
-# ---- D ---------------------------------------------------------------------
-if grep -qE 'seedPassword[[:space:]]*=' tools/seed/main.go; then
-  if grep -qE 'cfg\.Env|APP_ENV|"production"' tools/seed/main.go; then
-    ok D "tools/seed references the environment (verify it refuses production)"
-  else
-    pw=$(grep -nE 'seedPassword[[:space:]]*=' tools/seed/main.go | head -1)
-    fail D "tools/seed/main.go has one fixed password for every seeded account incl. an admin ($pw) and never checks cfg.Env: pointing POSTGRES_DSN at a real database seeds admin@smartcourse.dev with a public password"
+  gc_out=$(cd "$here/tools/guardcheck" && GOWORK=off go run . -root "$root" 2>&1); gc_rc=$?
+  if [ -n "$gc_out" ]; then echo "$gc_out"; fi
+  fails=$((fails + $(grep -c '^FAIL ' <<<"$gc_out")))
+  warns=$((warns + $(grep -c '^WARN ' <<<"$gc_out")))
+  if [ "$gc_rc" -ne 0 ] && ! grep -q '^FAIL ' <<<"$gc_out"; then
+    fail tooling "tools/guardcheck exited $gc_rc without a result line (build or runtime error above)"
   fi
 fi
 
@@ -77,13 +69,6 @@ for df in Dockerfile.*; do
   fi
   if grep -qE '^ENV .*(KEY|SECRET|PASSWORD|TOKEN)=' "$df"; then fail F "$df bakes a credential into the image with ENV"; fi
 done
-
-# ---- G ---------------------------------------------------------------------
-exposed=$(grep -nE '^[[:space:]]+- "?[0-9]+:[0-9]+"?' docker-compose.yml | grep -v '127.0.0.1' || true)
-if [ -n "$exposed" ]; then
-  warn G "docker-compose publishes ports on 0.0.0.0 (reachable from the LAN) next to default credentials (smartcourse/smartcourse, minio smartcourse123, redis without a password); bind to 127.0.0.1:"
-  echo "$exposed" | sed 's/^/       /'
-fi
 
 echo
 echo "dev-defaults check: $fails FAIL, $warns WARN"

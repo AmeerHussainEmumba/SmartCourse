@@ -1,0 +1,10 @@
+{
+  "course_id": "0192f0c0-0000-7000-8000-000000000002",
+  "failed_activity": "VerifyAssets",
+  "failed_at": "2026-11-18T09:30:00.123Z",
+  "instructor_id": "0192f0c0-0000-7000-8000-000000000004",
+  "reason": "asset not found",
+  "title": "Go in Depth",
+  "version_id": "0192f0c0-0000-7000-8000-000000000003",
+  "version_number": 3
+}

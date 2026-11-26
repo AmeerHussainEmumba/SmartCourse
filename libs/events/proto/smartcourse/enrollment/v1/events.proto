@@ -1,0 +1,24 @@
+// Payloads of enrollment.events (RFC §6.5), keyed by course_id. Fields mirror
+// what services/course/enrollment writes to the outbox.
+syntax = "proto3";
+
+package smartcourse.enrollment.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/AmeerHussainEmumba/SmartCourse/libs/events/gen/smartcourse/enrollment/v1;enrollmentv1";
+
+// enrollment.student_enrolled
+message StudentEnrolled {
+  string enrollment_id = 1;
+  string student_id = 2;
+  string course_id = 3;
+  google.protobuf.Timestamp enrolled_at = 4;
+}
+
+// enrollment.student_withdrawn
+message StudentWithdrawn {
+  string enrollment_id = 1;
+  string student_id = 2;
+  string course_id = 3;
+}

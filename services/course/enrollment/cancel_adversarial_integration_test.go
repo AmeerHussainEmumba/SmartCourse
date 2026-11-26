@@ -21,6 +21,7 @@ import (
 // hold, no transaction is left open server-side, and the pool is not leaking.
 func TestAdv_EnrollWithdraw_UnderRandomContextCancellation_AtomicAndLeakFree(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := enrollment.NewService(enrollment.NewRepository(env.DB))
 	const seats = 12
 	limit := seats

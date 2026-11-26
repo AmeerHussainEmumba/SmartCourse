@@ -69,7 +69,7 @@ closure() {
 fail=0
 for df in Dockerfile.*; do
   bin=${df#Dockerfile.}
-  module=$(awk '$1=="WORKDIR" && $2 ~ /^\/src\/(services|tools)\// {w=$2} END {sub("^/src/","",w); print w}' "$df")
+  module=$(awk '$1=="WORKDIR" && $2 ~ /^\/src\/(services|tools|libs)\// {w=$2} END {sub("^/src/","",w); print w}' "$df")
   if [ -z "$module" ] || [ ! -f "$module/go.mod" ]; then
     echo "FAIL $df: cannot determine the built module (expected a final 'WORKDIR /src/services/<m>')"; fail=1; continue
   fi

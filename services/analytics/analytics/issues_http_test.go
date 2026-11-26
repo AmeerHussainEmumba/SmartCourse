@@ -1,0 +1,222 @@
+//go:build integration
+
+// GET /analytics/issues (FR-5, "Failed Events / Workflow Issues"): the route
+// shape, admin-only access and the 503-when-unwired behaviour, against fake
+// FailedEventsSource/WorkflowIssuesSource. The real dead-letter store is not
+// reachable from this module (issues.go), so there is no test here that
+// moves the metric from real source data; that belongs with whoever supplies
+// the real sources.
+package analytics_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/AmeerHussainEmumba/SmartCourse/libs/auth"
+	"github.com/AmeerHussainEmumba/SmartCourse/services/analytics/analytics"
+)
+
+func tokenFor(t *testing.T, id uuid.UUID, role string) string {
+	t.Helper()
+	tok, err := auth.IssueAccessToken(testJWTCfg(), id, role, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok
+}
+
+type fakeFailedEvents struct {
+	sum *analytics.FailedEventsSummary
+	err error
+}
+
+func (f *fakeFailedEvents) SummarizeFailedEvents(context.Context) (*analytics.FailedEventsSummary, error) {
+	return f.sum, f.err
+}
+
+type fakeWorkflowIssues struct {
+	sum *analytics.WorkflowIssuesSummary
+	err error
+}
+
+func (f *fakeWorkflowIssues) SummarizeWorkflowIssues(context.Context) (*analytics.WorkflowIssuesSummary, error) {
+	return f.sum, f.err
+}
+
+func issuesEnv(t *testing.T, fe analytics.FailedEventsSource, wf analytics.WorkflowIssuesSource) *secEnv {
+	env := setup(t)
+	svc := analytics.NewService(analytics.NewRepository(env.DB)).WithPopularCache(env.RDB)
+	if fe != nil || wf != nil {
+		svc = svc.WithIssueSources(fe, wf)
+	}
+	return &secEnv{t: t, env: env, r: newTestEngine(t, svc)}
+}
+
+const issuesPath = "/api/v1/analytics/issues"
+
+func TestIssues_AdminOnly_AndReflectsSources(t *testing.T) {
+	fe := &fakeFailedEvents{sum: &analytics.FailedEventsSummary{Total: 5, Unresolved: 3, ByEventType: map[string]int64{"enrollment.student_enrolled": 5}}}
+	wf := &fakeWorkflowIssues{sum: &analytics.WorkflowIssuesSummary{Failed: 2, ByWorkflow: map[string]int64{"publish_course": 2}}}
+	s := issuesEnv(t, fe, wf)
+
+	if rec := s.get(issuesPath, ""); rec.Code != 401 {
+		t.Errorf("anonymous: want 401, got %d", rec.Code)
+	}
+	for _, role := range []string{"student", "instructor"} {
+		if rec := s.get(issuesPath, s.token(role)); rec.Code != 403 {
+			t.Errorf("%s: want 403, got %d", role, rec.Code)
+		}
+	}
+	rec := s.get(issuesPath, s.token("admin"))
+	if rec.Code != 200 {
+		t.Fatalf("admin: want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		FailedEvents struct {
+			Total       int64            `json:"total"`
+			Unresolved  int64            `json:"unresolved"`
+			ByEventType map[string]int64 `json:"by_event_type"`
+		} `json:"failed_events"`
+		WorkflowIssues struct {
+			Failed     int64            `json:"failed"`
+			ByWorkflow map[string]int64 `json:"by_workflow"`
+		} `json:"workflow_issues"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.FailedEvents.Total != 5 || body.FailedEvents.Unresolved != 3 || body.FailedEvents.ByEventType["enrollment.student_enrolled"] != 5 ||
+		body.WorkflowIssues.Failed != 2 || body.WorkflowIssues.ByWorkflow["publish_course"] != 2 {
+		t.Fatalf("response does not reflect the sources: %s", rec.Body.String())
+	}
+
+	// The metric moves when the source data does.
+	fe.sum = &analytics.FailedEventsSummary{Total: 6, Unresolved: 4}
+	rec = s.get(issuesPath, s.token("admin"))
+	if rec.Code != 200 || !json.Valid(rec.Body.Bytes()) {
+		t.Fatalf("after source change: %d %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.FailedEvents.Total != 6 || body.FailedEvents.Unresolved != 4 {
+		t.Fatalf("metric did not move with the source: %v %s", err, rec.Body.String())
+	}
+}
+
+func TestIssues_NilMaps_SerialiseAsEmptyObjects(t *testing.T) {
+	s := issuesEnv(t, &fakeFailedEvents{sum: &analytics.FailedEventsSummary{}}, &fakeWorkflowIssues{sum: &analytics.WorkflowIssuesSummary{}})
+	rec := s.get(issuesPath, s.token("admin"))
+	var raw map[string]map[string]json.RawMessage
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &raw) != nil {
+		t.Fatalf("want 200 JSON, got %d %s", rec.Code, rec.Body.String())
+	}
+	if string(raw["failed_events"]["by_event_type"]) != "{}" || string(raw["workflow_issues"]["by_workflow"]) != "{}" {
+		t.Fatalf("absent maps must be {}, got %s", rec.Body.String())
+	}
+}
+
+func TestIssues_SourcesNotWired_Is503NotAZero(t *testing.T) {
+	s := issuesEnv(t, nil, nil)
+	if rec := s.get(issuesPath, s.token("admin")); rec.Code != 503 {
+		t.Errorf("unwired sources: want 503, got %d: %s", rec.Code, rec.Body.String())
+	}
+	// Non-admins are still refused before anything about the wiring is revealed.
+	if rec := s.get(issuesPath, s.token("student")); rec.Code != 403 {
+		t.Errorf("student with unwired sources: want 403, got %d", rec.Code)
+	}
+}
+
+// A source whose store is unreachable is a degraded dependency: 503, with the
+// cause (host, port) kept out of the body.
+func TestIssues_SourceUnavailable_Is503(t *testing.T) {
+	s := issuesEnv(t, &fakeFailedEvents{err: fmt.Errorf("%w: dial tcp 10.0.0.5:27017: refused", analytics.ErrSourceUnavailable)}, nil)
+	rec := s.get(issuesPath, s.token("admin"))
+	if rec.Code != 503 || strings.Contains(rec.Body.String(), "10.0.0.5") {
+		t.Fatalf("want 503 without the cause, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Failed events alone are enough: the workflow section is null (unavailable),
+// not a made-up zero, and the new fields are reported.
+func TestIssues_WithoutWorkflowSource_ReportsNullWorkflowSection(t *testing.T) {
+	age := int64(42)
+	s := issuesEnv(t, &fakeFailedEvents{sum: &analytics.FailedEventsSummary{
+		Total: 3, Unresolved: 2, Replayed: 1, ByConsumer: map[string]int64{"analytics": 2}, OldestUnresolvedAgeSeconds: &age,
+	}}, nil)
+	rec := s.get(issuesPath, s.token("admin"))
+	var raw map[string]json.RawMessage
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &raw) != nil {
+		t.Fatalf("want 200 JSON, got %d %s", rec.Code, rec.Body.String())
+	}
+	if string(raw["workflow_issues"]) != "null" {
+		t.Errorf("workflow_issues = %s, want null", raw["workflow_issues"])
+	}
+	var fe struct {
+		Replayed   int64            `json:"replayed"`
+		ByConsumer map[string]int64 `json:"by_consumer"`
+		Age        *int64           `json:"oldest_unresolved_age_seconds"`
+	}
+	if err := json.Unmarshal(raw["failed_events"], &fe); err != nil || fe.Replayed != 1 || fe.ByConsumer["analytics"] != 2 || fe.Age == nil || *fe.Age != 42 {
+		t.Errorf("failed_events = %s (%v)", raw["failed_events"], err)
+	}
+}
+
+func TestIssues_SourceFailure_Is500WithoutLeakingTheCause(t *testing.T) {
+	s := issuesEnv(t, &fakeFailedEvents{err: errors.New("mongo: dial tcp 10.0.0.5:27017 refused")}, &fakeWorkflowIssues{sum: &analytics.WorkflowIssuesSummary{}})
+	rec := s.get(issuesPath, s.token("admin"))
+	if rec.Code != 500 {
+		t.Fatalf("want 500, got %d", rec.Code)
+	}
+	if body := rec.Body.String(); strings.Contains(body, "10.0.0.5") || strings.Contains(body, "mongo") {
+		t.Errorf("error body leaks the source error: %s", body)
+	}
+}
+
+// The E10 / access-scenario defect: GET /analytics/issues had no token-version
+// check, so a demoted admin's old token kept reading failed-event aggregates.
+func TestIssues_StaleAdminToken_Is401TokenStale(t *testing.T) {
+	s := issuesEnv(t, &fakeFailedEvents{sum: &analytics.FailedEventsSummary{}}, &fakeWorkflowIssues{sum: &analytics.WorkflowIssuesSummary{}})
+	id := uuid.New()
+	tok, err := auth.IssueAccessToken(testJWTCfg(), id, "admin", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := auth.TokenVersionRedisKey(id.String())
+	ctx := context.Background()
+
+	// Demoted and promoted again since the token was issued: cached version 2.
+	if err := s.env.RDB.Set(ctx, key, 2, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if rec := s.get(issuesPath, tok); rec.Code != 401 || !strings.Contains(rec.Body.String(), "token_stale") {
+		t.Errorf("stale version: want 401 token_stale, got %d %s", rec.Code, rec.Body.String())
+	}
+	// A Redis flush: the miss must NOT read as version 1 (fail closed).
+	if err := s.env.RDB.Del(ctx, key).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if rec := s.get(issuesPath, tok); rec.Code != 401 || !strings.Contains(rec.Body.String(), "token_stale") {
+		t.Errorf("after a flush: want 401 token_stale, got %d %s", rec.Code, rec.Body.String())
+	}
+	// Re-seeded (identity's re-seeder, or a login): the same token passes.
+	if err := s.env.RDB.Set(ctx, key, 1, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if rec := s.get(issuesPath, tok); rec.Code != 200 {
+		t.Errorf("fresh admin token: want 200, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Without a Redis client the check cannot run: 503, never an unchecked 200.
+func TestIssues_NoRedisClient_Is503(t *testing.T) {
+	env := setup(t)
+	svc := analytics.NewService(analytics.NewRepository(env.DB)).WithIssueSources(&fakeFailedEvents{sum: &analytics.FailedEventsSummary{}}, nil)
+	s := &secEnv{t: t, env: env, r: newTestEngine(t, svc)}
+	if rec := s.get(issuesPath, s.token("admin")); rec.Code != 503 {
+		t.Errorf("no Redis client: want 503, got %d", rec.Code)
+	}
+}

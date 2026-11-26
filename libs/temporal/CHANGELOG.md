@@ -4,6 +4,13 @@ All notable changes to this module. Versioning policy: `docs/guides/versioning.m
 
 ## [Unreleased]
 
+- README importers corrected for the split: course-api, course-worker and publishing-worker (the shared `services/worker` no longer exists). No code change.
+- Queue semantics documented (README): `cfg.Temporal.TaskQueue` is the workflow queue and `cfg.Temporal.ActivityQueue` the activity queue (`libs/contracts/publishing`). No code change.
+
+- Added `Observe(Observability{Tracing, Metrics})`, applied by `Connect` to every client built afterwards (and so to workers built on them): the `go.temporal.io/sdk/contrib/opentelemetry` tracing interceptor (v0.8.1, MIT; resolves to the repo's existing otel v1.44.0 and sdk v1.50.0) and a workflow counter interceptor for `workflow_started/completed/failed_total` (replays are not counted). The zero value adds nothing. New dependency: `libs/telemetry`.
+
+- Security: bumped indirect dependencies to clear govulncheck findings reachable from this module's code (golang.org/x/net v0.58.0 to v0.60.0 and github.com/quic-go/quic-go v0.59.0 to v0.59.1 where present; github.com/moby/go-archive v0.2.0 to v0.3.0, github.com/klauspost/compress v1.18.6 to v1.20.2 and github.com/moby/sys/user v0.4.0 to v0.4.1 where present, test-only via testcontainers). No API change.
+
 ## [0.1.0] - not yet tagged
 
 - Module created by the module split (ADR-0026, `docs/plans/module-split.md`). Nothing has been tagged; consumers reference it through a `replace` directive.

@@ -1,0 +1,5 @@
+smartcourse.identity.v1.UserRegistered
+email 2 string optional
+full_name 4 string optional
+role 3 string optional
+user_id 1 string optional

@@ -1,6 +1,6 @@
 # Versioning and releasing modules
 
-Applies from ADR-0026: SmartCourse is a monorepo of 20 Go modules (13 libraries under `libs/`, `libs/testenv`, four services under `services/`, `tools/seed`, and the cross-service tests in `test/e2e`). This guide says how they depend on each other today, when that changes, and how a module is released.
+Applies from ADR-0026: SmartCourse is a monorepo of 33 Go modules, the 33 `use` entries of `go.work` (24 under `libs/`: `asynqx`, `auth`, `cache`, `config`, `contracts/publishing`, `db`, `eventbus`, `errors`, `events`, `httpx`, `idempotency`, `infra`, `jobs`, `kafka`, `logging`, `mongostore`, `outbox`, `ratelimit`, `relay`, `runtime`, `router`, `telemetry`, `temporal` and `testenv`; six services under `services/`: `identity`, `course`, `analytics`, `notification`, `publishing`, `audit`; and three under `tools/` and `test/`: `tools/seed`, `tools/guardcheck` and `test/e2e`). A service requires only `libs/*` (ADR-0033); `scripts/check-module-graph.sh` enforces it. This guide says how they depend on each other today, when that changes, and how a module is released.
 
 ## Today: one team, `replace` directives, no tags
 

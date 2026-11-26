@@ -2,6 +2,8 @@
 
 The conventions every module's `handler.go` follows (RFC §11.5/§15.1), centralized so eight modules' HTTP surfaces look like one system instead of eight independently-invented ones.
 
+**Used by** the API binaries' domain packages (`identity-api`, `course-api`, `analytics-api`, `audit-api`) and by `libs/auth`, `libs/idempotency`, `libs/ratelimit` and `libs/router`.
+
 ## What's here
 
 - **`RequestID()`** — middleware that assigns (or reuses an inbound) request ID, attached to `gin.Context` and the response header. The minimum needed to correlate log lines today; full trace-context propagation via OpenTelemetry is layered on top in M4.

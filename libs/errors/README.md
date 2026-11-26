@@ -2,6 +2,8 @@
 
 SmartCourse's error-response contract (RFC §11.6): every handler returns an `*AppError`, never ad-hoc JSON.
 
+**Used by** the HTTP layers of `identity-api`, `course-api`, `analytics-api` and `audit-api` (the domain packages' handlers), and by `libs/auth`, `libs/httpx`, `libs/idempotency`, `libs/ratelimit` and `libs/router`.
+
 ## Why a stable, closed vocabulary
 
 `AppError` carries an HTTP status, a stable machine-readable `Code`, and a client-safe `Message` — the wrapped internal error (`Wrap`) is for logs only and is never serialized. The package exports a fixed set of common kinds (`ErrValidation`, `ErrUnauthorized`, `ErrTokenStale`, `ErrForbidden`, `ErrNotFound`, `ErrConflict`, `ErrRateLimited`, `ErrInternal`, `ErrUnavailable`) that every module builds on rather than inventing new codes per endpoint — a client integrating against this API gets one documented vocabulary, not eight modules' worth of slightly different error shapes.

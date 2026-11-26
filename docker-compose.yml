@@ -1,14 +1,87 @@
 name: smartcourse
 
-# Compose profiles (ADR-0018): a contributor working on enrollment logic
-# starts two containers, not a dozen. Every service lists every profile tier
-# it belongs to; `make dev-core` starts only `core`, `make dev-full` starts
-# everything. See README.md and docs/rfc/smartcourse-rfc.md §17.1.
+# Compose profiles (ADR-0018, docs/plans/microservices-split.md section 6):
+#   core          Postgres, Redis, MinIO (+init), Mailpit, Kafka (+init), Schema
+#                 Registry (+schema-init), MongoDB, Swagger UI and nine of the ten
+#                 binaries: identity-api/-worker, course-api/-worker,
+#                 analytics-api/-worker, notification-worker, audit-api/-worker.
+#                 Course publishing needs the `workflow` profile (below).
+#   workflow      core + Temporal, Temporal UI and publishing-worker.
+#   observability workflow + Prometheus, Grafana, Jaeger.
+#   full          everything.
+# Every service lists every profile tier it belongs to. `make dev-core` starts
+# `core`, `make dev-full` starts everything. See README.md, docs/guides/local-stack.md
+# and docs/rfc/smartcourse-rfc.md section 17.1.
+#
+# `observability` includes `workflow` on purpose: the ten binaries all export
+# traces and metrics, and publishing-worker is one of the ten Prometheus targets.
 
-x-profiles-core: &profiles-core [core, workflow, events, observability, full]
-x-profiles-workflow: &profiles-workflow [workflow, events, observability, full]
-x-profiles-events: &profiles-events [events, observability, full]
+x-profiles-core: &profiles-core [core, workflow, observability, full]
+x-profiles-workflow: &profiles-workflow [workflow, observability, full]
 x-profiles-observability: &profiles-observability [observability, full]
+
+# ---------------------------------------------------------------------------
+# Environment shared by the binaries. Every value is a local-dev-only
+# placeholder, like the hardcoded postgres/minio credentials below; never reuse
+# JWT_SIGNING_KEY beyond local dev. Environment is set here, not via env_file:
+# .env, so `docker compose up` works on a fresh clone and because in-network
+# values (service names) differ from what env.example gives a host-side `go run`.
+# Each binary below takes only the groups env.example section 2 lists for it.
+# ---------------------------------------------------------------------------
+x-env-base: &env-base
+  APP_ENV: development
+  LOG_LEVEL: info
+  # Internal listener of every binary: /metrics, /health/live, /health/ready.
+  # Never published beyond 127.0.0.1 (see each service's ports). /metrics has no
+  # authentication by design; it is not on any public API port.
+  METRICS_HTTP_ADDR: ":9100"
+  METRICS_ENABLED: "true"
+  # Observability (ADR-0032). The jaeger service is in the `observability`
+  # profile; without it running this endpoint is simply unreachable and tracing
+  # is a no-op (spans are dropped, one WARN a minute, startup never waits).
+  OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4318
+  OTEL_TRACES_SAMPLER_ARG: "1.0"
+
+x-env-redis: &env-redis
+  REDIS_ADDR: redis:6379
+
+x-env-jwt: &env-jwt
+  JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
+
+x-env-http: &env-http
+  HTTP_PORT: "8080"
+  CORS_ALLOWED_ORIGINS: http://localhost:8089
+
+x-env-minio: &env-minio
+  MINIO_ENDPOINT: http://minio:9000
+  MINIO_ACCESS_KEY_ID: smartcourse
+  MINIO_SECRET_ACCESS_KEY: smartcourse123
+  MINIO_BUCKET_ASSETS: smartcourse-assets
+
+x-env-kafka: &env-kafka
+  KAFKA_BROKERS: kafka:9092
+  SCHEMA_REGISTRY_URL: http://schema-registry:8081
+
+x-env-mongo: &env-mongo
+  MONGO_URI: mongodb://mongodb:27017
+
+x-env-temporal: &env-temporal
+  TEMPORAL_HOST_PORT: temporal:7233
+  TEMPORAL_NAMESPACE: default
+  TEMPORAL_TASK_QUEUE: publish-workflows
+  TEMPORAL_ACTIVITY_QUEUE: course-activities
+
+# Readiness probe: the internal listener's /health/ready answers 200 when the
+# binary's fatal dependencies are up (200 "degraded" when only an optional one,
+# e.g. MongoDB, is down). busybox wget exists in the alpine runtime images.
+x-healthcheck-internal: &healthcheck-internal
+  test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9100/health/ready"]
+  interval: 10s
+  timeout: 3s
+  retries: 6
+  start_period: 15s
+
+x-restart-dev: &restart-dev on-failure:5
 
 services:
   postgres:
@@ -18,12 +91,25 @@ services:
       POSTGRES_USER: smartcourse
       POSTGRES_PASSWORD: smartcourse
       POSTGRES_DB: smartcourse
+      # Per-service role passwords for scripts/db-roles.sh (run by the init
+      # script mounted below). The dev defaults match env.example and the DSNs
+      # of the service containers below; override all of them together in .env.
+      SVC_IDENTITY_PASSWORD: ${SVC_IDENTITY_PASSWORD:-svc_identity_dev}
+      SVC_COURSE_PASSWORD: ${SVC_COURSE_PASSWORD:-svc_course_dev}
+      SVC_ANALYTICS_PASSWORD: ${SVC_ANALYTICS_PASSWORD:-svc_analytics_dev}
+      SVC_NOTIFICATION_PASSWORD: ${SVC_NOTIFICATION_PASSWORD:-svc_notification_dev}
     # Mapped off the Postgres default (5432) to avoid colliding with other
-    # local projects' containers — the application always connects via
-    # POSTGRES_DSN (env.example), so this is a host-side convenience only.
+    # local projects' containers; the application always connects via
+    # POSTGRES_DSN, so this is a host-side convenience only.
     ports: ["127.0.0.1:5433:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Runs once, when the volume is first initialised: creates the
+      # per-service roles and schemas. An existing volume does not re-run it;
+      # `make migrate-up` (or `make db-roles`) runs the same script. The
+      # tables themselves come from `make migrate-up` (never on container
+      # start, RFC section 5.8).
+      - ./scripts/db-roles.sh:/docker-entrypoint-initdb.d/10-db-roles.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U smartcourse -d smartcourse"]
       interval: 5s
@@ -40,8 +126,12 @@ services:
       timeout: 3s
       retries: 10
 
+  # Object store: pgsty/minio, a community fork of MinIO with prebuilt images,
+  # because the official minio/minio and minio/mc images can no longer be pulled
+  # from Docker Hub or quay.io on a fresh machine. Third-party, AGPLv3, pinned by
+  # tag and digest. See ADR-0019 (amendment) and DR-001; revert steps are there.
   minio:
-    image: minio/minio:latest
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
     profiles: *profiles-core
     command: server /data --console-address ":9001"
     environment:
@@ -58,12 +148,14 @@ services:
       timeout: 3s
       retries: 10
 
+  # One-shot bucket creation with the fork's client image (pgsty/mc).
   minio-init:
-    image: minio/mc:latest
+    image: pgsty/mc:RELEASE.2026-11-12T00-00-00Z@sha256:b532278b7a3747dbab6fe45eebb40a653efa704e6758e24e9d9ec54fc96c1800
     profiles: *profiles-core
     depends_on:
       minio:
         condition: service_healthy
+    restart: "no"
     entrypoint: >
       /bin/sh -c "
       mc alias set local http://minio:9000 smartcourse smartcourse123 &&
@@ -71,184 +163,395 @@ services:
       exit 0
       "
 
-  # worker, identity-api, course-api, analytics-api (ADR-0022, ADR-0023):
-  # the application itself, as four independently built/deployed services
-  # sharing one PostgreSQL database and one set of Go packages — a
-  # modular monolith's code (ADR-0001), four deployment artifacts.
-  # Environment is set directly here, not via env_file: .env —
-  # deliberately, so `docker compose up` works on a fresh clone before
-  # anyone has copied env.example to .env, and because the in-network
-  # values (service names, not localhost:<mapped-port>) are different from
-  # what env.example gives a host-side `go run` anyway. Every value below
-  # is a local-dev-only placeholder, same as postgres/minio's hardcoded
-  # credentials above — never reuse JWT_SIGNING_KEY beyond local dev.
-  worker:
+  # Mail sink: self-hosted SMTP with a web UI (Week 3 decision D6); the project
+  # deliberately uses NO real mail provider. notification-worker sends to
+  # mailpit:1025 in-network; read mail at http://localhost:8025.
+  mailpit:
+    image: axllent/mailpit:v1.34.0
+    profiles: *profiles-core
+    ports:
+      - "127.0.0.1:1025:1025" # SMTP
+      - "127.0.0.1:8025:8025" # web UI + HTTP API
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Single-node KRaft broker. The JVM heap is capped for a laptop (the default
+  # Docker VM is about 8 GB): see docs/guides/local-stack.md for what was
+  # measured. Raise KAFKA_HEAP_OPTS in a docker-compose.override.yml for load tests.
+  kafka:
+    image: apache/kafka:3.7.0
+    profiles: *profiles-core
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
+    ports: ["127.0.0.1:29092:29092"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+
+  # Topic provisioning as code (RFC section 6.5): one topic per aggregate plus
+  # one retry topic per consumer (retry.<consumer>, docs/plans/microservices-split.md
+  # section 4). One-shot and idempotent (--if-not-exists), so `up` can be re-run
+  # safely. Uses the CLI already inside the pinned kafka image. Partitions and
+  # replication come from env with single-broker defaults; they only apply when
+  # a topic is first created (Kafka never shrinks partitions, and --if-not-exists
+  # will not change an existing topic): use kafka-topics.sh --alter to grow one.
+  # libs/kafka/topics has a test that compares the list below with topics.All().
+  kafka-init:
+    image: apache/kafka:3.7.0
+    profiles: *profiles-core
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      KAFKA_TOPIC_PARTITIONS: ${KAFKA_TOPIC_PARTITIONS:-3}
+      KAFKA_TOPIC_REPLICATION_FACTOR: ${KAFKA_TOPIC_REPLICATION_FACTOR:-1}
+      KAFKA_HEAP_OPTS: -Xms64m -Xmx128m
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -euo pipefail
+        for t in identity.events course.events enrollment.events progress.events retry.certificate-issuer retry.analytics-aggregator retry.course-instructor-mirror retry.enrollment-course-archival retry.notification-dispatcher retry.audit-archiver; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
+            --topic "$$t" --partitions "$$KAFKA_TOPIC_PARTITIONS" --replication-factor "$$KAFKA_TOPIC_REPLICATION_FACTOR"
+        done
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.0
+    profiles: *profiles-core
+    restart: unless-stopped
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:9092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_HEAP_OPTS: -Xms128m -Xmx256m
+    ports: ["127.0.0.1:8081:8081"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/subjects >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # One-shot schema bootstrap: registers every event subject at BACKWARD
+  # compatibility (libs/events/cmd/register-schemas, idempotent). Every worker
+  # waits for it to complete, because a worker fails at start when a subject is
+  # missing. `make register-schemas` does the same from the host.
+  schema-init:
     build:
       context: .
-      dockerfile: Dockerfile.worker
+      dockerfile: Dockerfile.schema-init
     profiles: *profiles-core
+    restart: "no"
     environment:
-      APP_ENV: development
-      POSTGRES_DSN: postgres://smartcourse:smartcourse@postgres:5432/smartcourse?sslmode=disable
-      # worker touches platform.outbox (reads), platform.processed_events
-      # (writes, its own idempotency marker), course.enrollments (writes,
-      # via enrollment.handleCourseArchived), and every analytics table
-      # (writes, via analytics' event handlers) — not identity, since no
-      # relay handler reads or writes identity.* (schema-per-service,
-      # ADR-0024).
-      POSTGRES_SEARCH_PATH: platform,course,analytics,public
-      REDIS_ADDR: redis:6379
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY_ID: smartcourse
-      MINIO_SECRET_ACCESS_KEY: smartcourse123
-      JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
-      # Only read by this binary's Temporal worker (ADR-0009/0025) — not
-      # identity-api/analytics-api. worker is tagged *profiles-core, same
-      # as temporal itself is NOT (it's *profiles-workflow), so under
-      # plain `core` this points at a server that isn't running; that's
-      # fine (temporal.Connect is lazy) — only publishing itself
-      # would fail until `make dev-workflow` brings temporal up too.
-      TEMPORAL_HOST_PORT: temporal:7233
-      TEMPORAL_NAMESPACE: default
-      TEMPORAL_TASK_QUEUE: course-publish
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
+      schema-registry:
         condition: service_healthy
 
-  # identity-api (ADR-0023, extending ADR-0022): services/identity/identity's HTTP
-  # surface split into its own deployable image — the most self-contained
-  # module in the codebase (no other module reads its tables directly;
-  # everyone else reads the caller's identity off the JWT claims instead).
-  # Port 8090 — no collision with 8081 (schema-registry, events
-  # profile), 8088 (temporal-ui), or 8089 (swagger-ui).
-  identity-api:
-    build:
-      context: .
-      dockerfile: Dockerfile.identity-api
+  # MongoDB: the audit archive, dead letters and replay. No authentication
+  # (local dev only; published on 127.0.0.1). The WiredTiger cache is capped
+  # for a laptop (default: 50% of RAM minus 1 GB).
+  mongodb:
+    image: mongo:7.0.48
     profiles: *profiles-core
-    environment:
-      APP_ENV: development
-      HTTP_PORT: "8080"
-      POSTGRES_DSN: postgres://smartcourse:smartcourse@postgres:5432/smartcourse?sslmode=disable
-      # identity + platform (identity.Service writes its outbox events
-      # into platform.outbox, in the same transaction as the business
-      # write — ADR-0006) + public (citext).
-      POSTGRES_SEARCH_PATH: identity,platform,public
-      REDIS_ADDR: redis:6379
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY_ID: smartcourse
-      MINIO_SECRET_ACCESS_KEY: smartcourse123
-      JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
-    ports: ["127.0.0.1:8090:8080"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
+    restart: unless-stopped
+    command: ["mongod", "--wiredTigerCacheSizeGB", "0.25"]
+    ports: ["127.0.0.1:27017:27017"]
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand(\"ping\").ok' | grep -q 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
 
-  # course-api (ADR-0023, extending ADR-0022): services/course/course,
-  # services/course/enrollment, and services/course/progress's HTTP surface, kept
-  # together in one image because enrollment locks the `courses` row in
-  # the SAME transaction it writes an enrollment row in (ADR-0012's
-  # seat-limit guarantee) — splitting them would force that lock into a
-  # network call. Port 8091 — no collision with 8081
-  # (schema-registry, events profile), 8088 (temporal-ui), or 8089
-  # (swagger-ui).
-  course-api:
-    build:
-      context: .
-      dockerfile: Dockerfile.course-api
-    profiles: *profiles-core
-    environment:
-      APP_ENV: development
-      HTTP_PORT: "8080"
-      POSTGRES_DSN: postgres://smartcourse:smartcourse@postgres:5432/smartcourse?sslmode=disable
-      # course (course+enrollment+progress's shared schema, ADR-0024) +
-      # platform (their outbox writes land in platform.outbox) + public
-      # (citext, pg_trgm — course_search_index).
-      POSTGRES_SEARCH_PATH: course,platform,public
-      REDIS_ADDR: redis:6379
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY_ID: smartcourse
-      MINIO_SECRET_ACCESS_KEY: smartcourse123
-      JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
-      # Service.Publish starts the publish workflow here (ADR-0009/0025) —
-      # see worker's identical block above for why this is safe to boot
-      # with no Temporal present (plain `core` profile).
-      TEMPORAL_HOST_PORT: temporal:7233
-      TEMPORAL_NAMESPACE: default
-      TEMPORAL_TASK_QUEUE: course-publish
-    ports: ["127.0.0.1:8091:8080"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-
-  # analytics-api (ADR-0023, extending ADR-0022): services/analytics/analytics's HTTP
-  # surface split into its own deployable image — read-only, already
-  # decoupled (consumes other modules' state via the relay/outbox, never a
-  # direct call into another module), the lowest-risk candidate to split
-  # out of cmd/api first. Port 8092 — no collision with 8081
-  # (schema-registry, events profile), 8088 (temporal-ui), or 8089
-  # (swagger-ui).
-  analytics-api:
-    build:
-      context: .
-      dockerfile: Dockerfile.analytics-api
-    profiles: *profiles-core
-    environment:
-      APP_ENV: development
-      HTTP_PORT: "8080"
-      POSTGRES_DSN: postgres://smartcourse:smartcourse@postgres:5432/smartcourse?sslmode=disable
-      # analytics only — its HTTP handlers are read-only, GET-only, and
-      # never write an outbox event, so unlike the other three it never
-      # needs platform (ADR-0024: analytics-api doesn't produce events).
-      POSTGRES_SEARCH_PATH: analytics,public
-      REDIS_ADDR: redis:6379
-      MINIO_ENDPOINT: http://minio:9000
-      MINIO_ACCESS_KEY_ID: smartcourse
-      MINIO_SECRET_ACCESS_KEY: smartcourse123
-      JWT_SIGNING_KEY: local-dev-only-signing-key-do-not-use-elsewhere-32b
-    ports: ["127.0.0.1:8092:8080"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-
-  # Browsable, runnable view of api/openapi.yaml — a static UI container,
-  # not a build step: it reads the file read-only, so it's always showing
-  # what's actually committed, not a snapshot that can drift. Port 8089,
-  # not 8080 (the API) or 8081 (schema-registry, events profile) — picked
-  # specifically to not collide with either.
+  # Browsable, runnable view of api/openapi.yaml: a static UI container, not a
+  # build step. It reads the file read-only, so it always shows what is
+  # committed. Port 8089, picked to not collide with the API ports (8090-8093),
+  # schema-registry (8081) or temporal-ui (8088).
   swagger-ui:
     image: swaggerapi/swagger-ui:v5.32.1
     profiles: *profiles-core
     environment:
-      # Must match the volume mount target exactly — the image's own
-      # entrypoint script does `[[ -f "$SWAGGER_JSON" ]]` to decide whether
-      # to wire the spec in at all; a mismatch here fails that check
-      # silently and the UI falls back to the default petstore example
-      # with no error anywhere.
+      # Must match the volume mount target exactly: the image's entrypoint does
+      # `[[ -f "$SWAGGER_JSON" ]]` to decide whether to wire the spec in at all;
+      # a mismatch fails silently and the UI falls back to the petstore example.
       SWAGGER_JSON: /openapi.yaml
     volumes:
       - ./api/openapi.yaml:/openapi.yaml:ro
     ports: ["127.0.0.1:8089:8080"]
 
+  # -------------------------------------------------------------------------
+  # The ten binaries (docs/plans/microservices-split.md sections 2 and 6).
+  # Each connects to Postgres with its OWN role (svc_<service>, created by
+  # scripts/db-roles.sh) and a search_path of `<schema>,public` (ADR-0024).
+  # API host ports: identity 8090, course 8091, analytics 8092, audit 8093
+  # (container 8080). Internal listeners (/metrics, /health/*) are published on
+  # 127.0.0.1 only: APIs 9101-9104, workers 9111-9116.
+  # restart: on-failure so a binary that lost the start-up race against a slow
+  # dependency retries a few times; depends_on gates the normal order.
+  # -------------------------------------------------------------------------
+
+  # identity-api: also carries the identity-admin CLI (first-admin bootstrap):
+  #   docker compose run --rm --entrypoint identity-admin \
+  #     -e IDENTITY_ADMIN_EMAIL=... -e IDENTITY_ADMIN_PASSWORD=... identity-api
+  identity-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.identity-api
+    profiles: *profiles-core
+    restart: *restart-dev
+    environment:
+      <<: [*env-base, *env-redis, *env-jwt, *env-http]
+      POSTGRES_DSN: postgres://svc_identity:${SVC_IDENTITY_PASSWORD:-svc_identity_dev}@postgres:5432/smartcourse?sslmode=disable
+      POSTGRES_SEARCH_PATH: identity,public
+    ports:
+      - "127.0.0.1:8090:8080"
+      - "127.0.0.1:9101:9100"
+    healthcheck: *healthcheck-internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  identity-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.identity-worker
+    profiles: *profiles-core
+    restart: *restart-dev
+    environment:
+      <<: [*env-base, *env-redis, *env-kafka]
+      POSTGRES_DSN: postgres://svc_identity:${SVC_IDENTITY_PASSWORD:-svc_identity_dev}@postgres:5432/smartcourse?sslmode=disable
+      POSTGRES_SEARCH_PATH: identity,public
+      RELAY_WORKERS: "4"
+      OUTBOX_RETENTION: 168h
+      JOBS_OUTBOX_PRUNE_INTERVAL: 1h
+    ports: ["127.0.0.1:9111:9100"]
+    healthcheck: *healthcheck-internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      schema-init:
+        condition: service_completed_successfully
+
+  # course-api: course, enrollment, progress and certificate HTTP surface; one
+  # process and one schema because enrollment locks the `courses` row in the
+  # same transaction it writes an enrollment (ADR-0012). TEMPORAL_* is dialled
+  # lazily: under plain `core` (no Temporal) the API boots, only publishing fails.
+  course-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.course-api
+    profiles: *profiles-core
+    restart: *restart-dev
+    environment:
+      <<: [*env-base, *env-redis, *env-jwt, *env-http, *env-minio, *env-temporal]
+      POSTGRES_DSN: postgres://svc_course:${SVC_COURSE_PASSWORD:-svc_course_dev}@postgres:5432/smartcourse?sslmode=disable
+      POSTGRES_SEARCH_PATH: course,public
+      # Pre-signed URLs are meant for browsers on the host, not for the
+      # compose network, so they carry the host-published MinIO address.
+      MINIO_PUBLIC_ENDPOINT: http://localhost:9002
+    ports:
+      - "127.0.0.1:8091:8080"
+      - "127.0.0.1:9102:9100"
+    healthcheck: *healthcheck-internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+  # course-worker: the course relay, consumers (instructor mirror, enrollment
+  # archival, certificate issuer), jobs, and the Temporal activities worker
+  # (it registers on TEMPORAL_ACTIVITY_QUEUE; publishing itself needs the
+  # `workflow` profile).
+  course-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.course-worker
+    profiles: *profiles-core
+    restart: *restart-dev
+    environment:
+      <<: [*env-base, *env-redis, *env-minio, *env-kafka, *env-mongo, *env-temporal]
+      POSTGRES_DSN: postgres://svc_course:${SVC_COURSE_PASSWORD:-svc_course_dev}@postgres:5432/smartcourse?sslmode=disable
+      POSTGRES_SEARCH_PATH: course,public
+      RELAY_WORKERS: "4"
+      OUTBOX_RETENTION: 168h
+      PROCESSED_EVENTS_RETENTION: 336h
+      JOBS_RECONCILE_PUBLISHES_INTERVAL: 1m
+      JOBS_ENROLLMENT_COUNT_INTERVAL: 1h
+      JOBS_IDEMPOTENCY_PRUNE_INTERVAL: 1h
+      JOBS_OUTBOX_PRUNE_INTERVAL: 1h
+    ports: ["127.0.0.1:9112:9100"]
+    healthcheck: *healthcheck-internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+      schema-init:
+        condition: service_completed_successfully
+
+  # analytics-api: read-only. MONGO_URI is optional (only GET /analytics/issues,
+  # the Failed Events metric, answers 503 without it).
+  analytics-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.analytics-api
+    profiles: *profiles-core
+    restart: *restart-dev
+    environment:
+      <<: [*env-base, *env-redis, *env-jwt, *env-http, *env-mongo]
+      POSTGRES_DSN: postgres://svc_analytics:${SVC_ANALYTICS_PASSWORD:-svc_analytics_dev}@postgres:5432/smartcourse?sslmode=disable
+      POSTGRES_SEARCH_PATH: analytics,public
+    ports:
+      - "127.0.0.1:8092:8080"
+      - "127.0.0.1:9103:9100"
+    healthcheck: *healthcheck-internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  analytics-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.analytics-worker
+    profiles: *profiles-core
+    restart: *restart-dev
+    environment:
+      <<: [*env-base, *env-redis, *env-kafka, *env-mongo]
+      POSTGRES_DSN: postgres://svc_analytics:${SVC_ANALYTICS_PASSWORD:-svc_analytics_dev}@postgres:5432/smartcourse?sslmode=disable
+      POSTGRES_SEARCH_PATH: analytics,public
+      PROCESSED_EVENTS_RETENTION: 336h
+      JOBS_ANALYTICS_RECONCILE_INTERVAL: 1m
+    ports: ["127.0.0.1:9113:9100"]
+    healthcheck: *healthcheck-internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      schema-init:
+        condition: service_completed_successfully
+
+  # notification-worker: mail goes to the Mailpit sink; no real provider.
+  notification-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.notification-worker
+    profiles: *profiles-core
+    restart: *restart-dev
+    environment:
+      <<: [*env-base, *env-redis, *env-kafka, *env-mongo]
+      POSTGRES_DSN: postgres://svc_notification:${SVC_NOTIFICATION_PASSWORD:-svc_notification_dev}@postgres:5432/smartcourse?sslmode=disable
+      POSTGRES_SEARCH_PATH: notification,public
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_FROM: no-reply@smartcourse.local
+      PROCESSED_EVENTS_RETENTION: 336h
+      JOBS_OUTBOX_PRUNE_INTERVAL: 1h
+    ports: ["127.0.0.1:9114:9100"]
+    healthcheck: *healthcheck-internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      schema-init:
+        condition: service_completed_successfully
+
+  # audit-api: failed-event list, get and replay (admin JWT only). No Postgres.
+  # Needs Redis (token freshness), the JWT key, the Kafka brokers (replay
+  # produces to retry.<consumer>) and MongoDB. It does not talk to the registry.
+  audit-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.audit-api
+    profiles: *profiles-core
+    restart: *restart-dev
+    environment:
+      <<: [*env-base, *env-redis, *env-jwt, *env-http, *env-mongo]
+      KAFKA_BROKERS: kafka:9092
+    ports:
+      - "127.0.0.1:8093:8080"
+      - "127.0.0.1:9104:9100"
+    healthcheck: *healthcheck-internal
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  # audit-worker: the audit-archiver, one consumer of every topic and its retry
+  # topic; writes the MongoDB archive. No Postgres, no registry.
+  audit-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.audit-worker
+    profiles: *profiles-core
+    restart: *restart-dev
+    environment:
+      <<: [*env-base, *env-mongo]
+      KAFKA_BROKERS: kafka:9092
+    ports: ["127.0.0.1:9116:9100"]
+    healthcheck: *healthcheck-internal
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  # --- workflow profile ------------------------------------------------------
+
   temporal:
-    image: temporalio/auto-setup:latest
+    image: temporalio/auto-setup:1.29.3
     profiles: *profiles-workflow
+    restart: unless-stopped
     environment:
       DB: postgres12
       DB_PORT: 5432
@@ -261,7 +564,7 @@ services:
         condition: service_healthy
 
   temporal-ui:
-    image: temporalio/ui:latest
+    image: temporalio/ui:2.58.1
     profiles: *profiles-workflow
     environment:
       TEMPORAL_ADDRESS: temporal:7233
@@ -269,53 +572,52 @@ services:
     ports: ["127.0.0.1:8088:8080"]
     depends_on: [temporal]
 
-  kafka:
-    image: apache/kafka:3.7.0
-    profiles: *profiles-events
+  # publishing-worker: the deterministic publish workflow on the workflow queue.
+  # No Postgres, Redis or Kafka; it only talks to Temporal (dialled with retry,
+  # an unreachable Temporal shows as degraded readiness). It is NOT in `core`:
+  # without the `workflow` profile a course cannot be published.
+  publishing-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.publishing-worker
+    profiles: *profiles-workflow
+    restart: *restart-dev
     environment:
-      KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-    ports: ["127.0.0.1:29092:29092"]
+      <<: [*env-base, *env-temporal]
+    ports: ["127.0.0.1:9115:9100"]
+    healthcheck: *healthcheck-internal
+    depends_on:
+      temporal:
+        condition: service_started
 
-  schema-registry:
-    image: confluentinc/cp-schema-registry:7.6.0
-    profiles: *profiles-events
-    environment:
-      SCHEMA_REGISTRY_HOST_NAME: schema-registry
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:9092
-      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
-    ports: ["127.0.0.1:8081:8081"]
-    depends_on: [kafka]
+  # --- observability profile ---------------------------------------------------
 
-  mongodb:
-    image: mongo:7
-    profiles: *profiles-events
-    ports: ["127.0.0.1:27017:27017"]
-
+  # Config is repo-provisioned from ./observability (see observability/README.md).
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.16.0
     profiles: *profiles-observability
     volumes:
-      - ./deploy/prometheus:/etc/prometheus
+      - ./observability/prometheus:/etc/prometheus:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports: ["127.0.0.1:9090:9090"]
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.3.1
     profiles: *profiles-observability
+    environment:
+      GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
-      - ./deploy/grafana:/etc/grafana/provisioning
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports: ["127.0.0.1:3001:3000"]
+    depends_on: [prometheus]
 
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    image: jaegertracing/all-in-one:1.76.0
     profiles: *profiles-observability
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true" # OTLP gRPC :4317, HTTP :4318
     ports:
       - "127.0.0.1:16686:16686" # UI
       - "127.0.0.1:4317:4317"   # OTLP gRPC
@@ -324,3 +626,4 @@ services:
 volumes:
   pgdata:
   miniodata:
+

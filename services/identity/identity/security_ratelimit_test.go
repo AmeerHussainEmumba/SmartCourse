@@ -16,8 +16,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-
-	"github.com/AmeerHussainEmumba/SmartCourse/libs/testenv"
 )
 
 func TestSecurity_RateLimit_RegisterPerIP_BlocksSixth_AndRoutesDoNotShareBuckets(t *testing.T) {
@@ -132,7 +130,7 @@ func TestSecurity_RateLimit_AccountLimit_StopsDistributedStuffing(t *testing.T) 
 // the per-IP/per-account throttles vanish when Redis is unreachable, while
 // the fresh-privilege check (RequireFreshPrivilege) fails CLOSED (503).
 func TestSecurity_RateLimit_RedisDown_LimiterFailsOpen_PrivilegeCheckFailsClosed(t *testing.T) {
-	env := testenv.Setup(t)
+	env := setupIdentity(t)
 	dead := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1, DialTimeout: 200 * time.Millisecond, ReadTimeout: 200 * time.Millisecond})
 	t.Cleanup(func() { _ = dead.Close() })
 	h := newHarnessRDB(t, env, dead, lightArgon)

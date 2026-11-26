@@ -28,6 +28,7 @@ import (
 //     that ADR-0010's blue-green is meant to rule out).
 func TestBugrepro_SearchIndexesUnpublishedCourse_BeforePromote(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
@@ -42,7 +43,7 @@ func TestBugrepro_SearchIndexesUnpublishedCourse_BeforePromote(t *testing.T) {
 		t.Fatal(err)
 	}
 	// the workflow now fails (e.g. WarmCache exhausts its retries) -> MarkPublishFailed
-	if err := svc.MarkPublishFailed(ctx, draft, "warm cache failed"); err != nil {
+	if err := svc.MarkPublishFailed(ctx, draft, "warm cache failed", "WarmCache"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -60,6 +61,7 @@ func TestBugrepro_SearchIndexesUnpublishedCourse_BeforePromote(t *testing.T) {
 
 func TestBugrepro_SearchServesNewVersionMetadata_BeforePromote(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
@@ -91,6 +93,7 @@ func TestBugrepro_SearchServesNewVersionMetadata_BeforePromote(t *testing.T) {
 // live count; the detail page keeps showing the count frozen at publish time.
 func TestBugrepro_CachedDetailServesStaleEnrollmentCount(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
@@ -128,6 +131,7 @@ func TestBugrepro_CachedDetailServesStaleEnrollmentCount(t *testing.T) {
 // after their guard read, then releases.
 func TestBugrepro_ConcurrentPromoteAndPublish_EmitsDuplicateCoursePublishedEvents(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)
@@ -168,6 +172,7 @@ func TestBugrepro_ConcurrentPromoteAndPublish_EmitsDuplicateCoursePublishedEvent
 // (analytics.course_mirror counts it as published).
 func TestBugrepro_PublishAcceptedForArchivedCourse(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	instr := seedInstructor(t, env)
 	ctx := context.Background()
 	var started int
@@ -191,6 +196,7 @@ func TestBugrepro_PublishAcceptedForArchivedCourse(t *testing.T) {
 // requires totalLessons > 0, so no student can ever complete it.
 func TestBugrepro_CourseWithEmptyModuleCanBePublished(t *testing.T) {
 	env := testenv.Setup(t)
+	env.DB = env.ServiceDB(t, "course")
 	svc := newTestService(env)
 	ctx := context.Background()
 	instr := seedInstructor(t, env)

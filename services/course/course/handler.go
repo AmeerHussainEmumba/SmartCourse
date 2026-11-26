@@ -17,8 +17,15 @@ import (
 
 type Handler struct{ svc *Service }
 
-func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig) {
+// postMW runs after authentication on the non-idempotent POST routes only
+// (create course, add module/lesson, publish, archive, upload URL); wire.go
+// passes the Idempotency-Key middleware here (RFC §15.1). PATCH and DELETE are
+// idempotent by construction and are left alone.
+func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig, postMW ...gin.HandlerFunc) {
 	h := &Handler{svc: svc}
+	post := func(fn gin.HandlerFunc) []gin.HandlerFunc {
+		return append(append([]gin.HandlerFunc{}, postMW...), fn)
+	}
 
 	// Discovery — public. /courses/search is registered before /courses/:slug
 	// so gin's router doesn't treat "search" as a slug value — RFC §7.4's
@@ -34,10 +41,10 @@ func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig) {
 	// authoring, publishing or archiving until its TTL runs out (F-11).
 	fresh := identityauth.RequireFreshPrivilege(svc.rdb)
 	instructor.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"), fresh)
-	instructor.POST("", h.createCourse)
+	instructor.POST("", post(h.createCourse)...)
 	instructor.PATCH("/:id", h.updateDraft)
-	instructor.POST("/:id/modules", h.addModule)
-	instructor.POST("/:id/publish", h.publish)
+	instructor.POST("/:id/modules", post(h.addModule)...)
+	instructor.POST("/:id/publish", post(h.publish)...)
 	// :slug, not :id: gin's router (httprouter-based) panics at startup if
 	// two routes for the same HTTP method share a path depth with
 	// different wildcard names — this GET route and the public
@@ -48,13 +55,20 @@ func RegisterRoutes(r *gin.RouterGroup, svc *Service, jwtCfg config.JWTConfig) {
 	// actually starting course-api against the real router, not by
 	// inspection — see ADR-0025.
 	instructor.GET("/:slug/publish-status", h.publishStatus)
-	instructor.POST("/:id/archive", h.archiveCourse)
+	instructor.POST("/:id/archive", post(h.archiveCourse)...)
 
 	modules := r.Group("/modules")
 	modules.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"), fresh)
-	modules.POST("/:id/lessons", h.addLesson)
+	modules.POST("/:id/lessons", post(h.addLesson)...)
 	modules.PATCH("/:id", h.updateModule)
 	modules.DELETE("/:id", h.deleteModule)
+
+	// Asset upload (RFC §7.4, §11.7): instructors only; ownership of the course
+	// named in the body is checked in service.go. Admins have no instructor
+	// write access, so RequireRole("instructor") excludes them.
+	assets := r.Group("/assets")
+	assets.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"), fresh)
+	assets.POST("/upload-url", post(h.createUploadURL)...)
 
 	lessons := r.Group("/lessons")
 	lessons.Use(identityauth.RequireAuth(jwtCfg), identityauth.RequireRole("instructor"), fresh)
@@ -155,6 +169,20 @@ func (h *Handler) deleteModule(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+func (h *Handler) createUploadURL(c *gin.Context) {
+	id, _ := identityauth.FromContext(c.Request.Context())
+	var req UploadURLRequest
+	if !httpx.BindJSON(c, &req) {
+		return
+	}
+	resp, err := h.svc.CreateUploadURL(c.Request.Context(), id.UserID, req)
+	if err != nil {
+		httpx.Fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *Handler) addLesson(c *gin.Context) {

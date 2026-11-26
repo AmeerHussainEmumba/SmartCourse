@@ -1,8 +1,8 @@
 // Package temporal builds the Temporal client. It is its own package, apart
 // from libs/infra, so that identity-api and analytics-api —
 // which never touch Temporal (ADR-0009: Temporal backs publishing and
-// nothing else) — don't link the Temporal SDK. Only services/course/cmd/course-api,
-// services/worker/cmd/worker and tools/seed import it.
+// nothing else) — don't link the Temporal SDK. Only course-api, course-worker
+// and publishing-worker (under services/) import it.
 package temporal
 
 import (
@@ -22,9 +22,14 @@ import (
 // consequence — "Temporal down means publishing unavailable — though
 // nothing else is affected."
 func Connect(cfg *config.Config) (temporalclient.Client, error) {
+	ints, err := interceptors() // none unless Observe was called (observability.go)
+	if err != nil {
+		return nil, err
+	}
 	c, err := temporalclient.NewLazyClient(temporalclient.Options{
-		HostPort:  cfg.Temporal.HostPort,
-		Namespace: cfg.Temporal.Namespace,
+		HostPort:     cfg.Temporal.HostPort,
+		Namespace:    cfg.Temporal.Namespace,
+		Interceptors: ints,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build temporal client: %w", err)

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +24,14 @@ type Config struct {
 	Redis    RedisConfig
 	MinIO    MinIOConfig
 	Temporal TemporalConfig
+	Relay    RelayConfig
+	SMTP     SMTPConfig
+	Asynq    AsynqConfig
+	Jobs     JobsConfig
+	Mongo    MongoConfig
+	Kafka    KafkaConfig
+
+	Telemetry TelemetryConfig
 
 	JWT   JWTConfig
 	Argon Argon2Config
@@ -71,6 +80,12 @@ type MinIOConfig struct {
 	SecretAccessKey string
 	UseSSL          bool
 	BucketAssets    string
+	// PublicEndpoint is the endpoint written into pre-signed URLs handed to
+	// browsers. Endpoint is what the service itself dials (inside Compose,
+	// http://minio:9000, unreachable from a client); the two differ whenever
+	// the service reaches MinIO over an internal name. Empty means "same as
+	// Endpoint". Optional (MINIO_PUBLIC_ENDPOINT).
+	PublicEndpoint string
 }
 
 // TemporalConfig is deliberately all-optional, unlike Postgres/Redis above:
@@ -84,7 +99,14 @@ type MinIOConfig struct {
 type TemporalConfig struct {
 	HostPort  string
 	Namespace string
+	// TaskQueue is TEMPORAL_TASK_QUEUE, the WORKFLOW queue (default
+	// "publish-workflows"): the queue the publish workflow is started on and
+	// the orchestrating worker polls.
 	TaskQueue string
+	// ActivityQueue is TEMPORAL_ACTIVITY_QUEUE (default "course-activities"): the
+	// queue the workflow schedules its activities on and the activity worker
+	// polls. Both defaults equal libs/contracts/publishing's constants.
+	ActivityQueue string
 }
 
 type JWTConfig struct {
@@ -100,12 +122,95 @@ type Argon2Config struct {
 	Parallelism uint8
 	SaltLength  uint32
 	KeyLength   uint32
+
+	// MaxConcurrent bounds how many argon2 hashes run at once (F-26 residue:
+	// 16 concurrent logins pinned about 1 GiB). Peak argon2 memory is about
+	// MaxConcurrent x MemoryKiB. Zero means "use DefaultArgon2MaxConcurrent"
+	// (consumers apply it), so hand-built configs in tests keep working.
+	MaxConcurrent int
+	// QueueTimeout is how long a request waits for a free slot before the
+	// caller answers 503. Zero means DefaultArgon2QueueTimeout.
+	QueueTimeout time.Duration
+}
+
+const (
+	// DefaultArgon2QueueTimeout is deliberately shorter than the default
+	// HTTP write timeout (30s) so a queued request is refused cleanly rather
+	// than cut off mid-wait.
+	DefaultArgon2QueueTimeout = 5 * time.Second
+	maxArgonConcurrent        = 1024
+	maxArgonQueueTimeout      = time.Minute
+)
+
+// DefaultArgon2MaxConcurrent derives a slot count from the CPU budget the Go
+// runtime sees (cgroup-aware): one hash uses `parallelism` threads, so
+// GOMAXPROCS/parallelism hashes saturate the CPUs. Clamped to [2, 8] so a
+// one-CPU container still overlaps a hash with request handling and a big host
+// does not pin gigabytes (8 x 64 MiB = 512 MiB with the default memory cost).
+func DefaultArgon2MaxConcurrent(gomaxprocs, parallelism int) int {
+	if parallelism < 1 {
+		parallelism = 1
+	}
+	n := gomaxprocs / parallelism
+	if n < 2 {
+		n = 2
+	}
+	if n > 8 {
+		n = 8
+	}
+	return n
 }
 
 // Load reads and validates configuration from the environment. It returns an
 // error rather than panicking so callers (including tests) can decide how to
 // fail; every cmd/* binary treats a non-nil error as fatal at boot.
-func Load() (*Config, error) {
+func Load() (*Config, error) { return LoadWith(AllRequirements()) }
+
+// Requirements declares which required-variable groups a binary needs. A group
+// that is not requested is neither required nor validated: its fields keep
+// their zero value (or documented default) and a bad value in it cannot stop
+// the binary. Optional settings (Temporal, Telemetry, SMTP, Asynq, Jobs, the
+// Kafka and Mongo tuning, HTTP limits) are always read and shape-validated, as
+// in Load; Kafka and Mongo only add the "required" rule when requested.
+type Requirements struct {
+	// Postgres requires POSTGRES_DSN and POSTGRES_SEARCH_PATH and checks the
+	// pool sizes (including the relay pool rule).
+	Postgres bool
+	// Redis requires REDIS_ADDR.
+	Redis bool
+	// MinIO requires MINIO_ENDPOINT, MINIO_ACCESS_KEY_ID and MINIO_SECRET_ACCESS_KEY.
+	MinIO bool
+	// JWT requires JWT_SIGNING_KEY (length and strength rules) and validates the TTLs.
+	JWT bool
+	// Argon validates the ARGON2_* settings.
+	Argon bool
+	// Kafka requires KAFKA_BROKERS (host:port seeds) and SCHEMA_REGISTRY_URL
+	// (http(s) URL) and validates them. The consumer/producer tuning is not part
+	// of the group: it always keeps its defaults.
+	Kafka bool
+	// KafkaBrokers requires and validates KAFKA_BROKERS only, for a binary that
+	// reads or produces records but never talks to the Schema Registry (the audit
+	// service). Kafka implies it.
+	KafkaBrokers bool
+	// Mongo requires MONGO_URI. Its shape and the timeouts are validated whenever set.
+	Mongo bool
+	// Relay says the binary runs an outbox relay, so POSTGRES_MAX_OPEN_CONNS must
+	// be at least 2 x RELAY_WORKERS (ADR-0027). A binary with no relay (an API,
+	// the identity-admin CLI) is not held to it: a small pool there is fine.
+	Relay bool
+}
+
+// AllRequirements is what Load asks for: Postgres, Redis, MinIO, JWT and Argon.
+// Kafka and Mongo stay optional there, as before (a binary that needs them asks
+// through LoadWith).
+func AllRequirements() Requirements {
+	return Requirements{Postgres: true, Redis: true, MinIO: true, JWT: true, Argon: true, Relay: true}
+}
+
+// LoadWith is Load for a binary that needs only some groups, e.g. the
+// publishing worker, which needs none: LoadWith(config.Requirements{}). Load is
+// LoadWith(AllRequirements()) and behaves exactly as before.
+func LoadWith(need Requirements) (*Config, error) {
 	var errs []string
 	req := func(key string) string {
 		v := os.Getenv(key)
@@ -113,6 +218,12 @@ func Load() (*Config, error) {
 			errs = append(errs, fmt.Sprintf("%s is required", key))
 		}
 		return v
+	}
+	reqIf := func(on bool, key string) string {
+		if on {
+			return req(key)
+		}
+		return os.Getenv(key)
 	}
 	optInt := func(key string, def int) int {
 		v := os.Getenv(key)
@@ -152,50 +263,66 @@ func Load() (*Config, error) {
 	}
 
 	// Range-validate before narrowing: uint32(-1) wraps to ~4 TiB and a zero
-	// value panics inside argon2 (F-26).
-	argonMem := optInt("ARGON2_MEMORY_KIB", 64*1024)
-	argonIter := optInt("ARGON2_ITERATIONS", 3)
-	argonPar := optInt("ARGON2_PARALLELISM", 2)
+	// value panics inside argon2 (F-26). Skipped when the binary does not hash.
+	argonMem, argonIter, argonPar := 64*1024, 3, 2
+	argonConc, argonQueue := DefaultArgon2MaxConcurrent(runtime.GOMAXPROCS(0), argonPar), DefaultArgon2QueueTimeout
 	inRange := func(key string, v, lo, hi int) {
 		if v < lo || v > hi {
 			errs = append(errs, fmt.Sprintf("%s must be between %d and %d", key, lo, hi))
 		}
 	}
-	inRange("ARGON2_MEMORY_KIB", argonMem, 8, maxArgonMemoryKiB)
-	inRange("ARGON2_ITERATIONS", argonIter, 1, maxArgonIterations)
-	inRange("ARGON2_PARALLELISM", argonPar, 1, maxArgonParallelism)
-	if argonPar >= 1 && argonPar <= maxArgonParallelism && argonMem < 8*argonPar {
-		errs = append(errs, "ARGON2_MEMORY_KIB must be at least 8 * ARGON2_PARALLELISM")
+	if need.Argon {
+		argonMem = optInt("ARGON2_MEMORY_KIB", 64*1024)
+		argonIter = optInt("ARGON2_ITERATIONS", 3)
+		argonPar = optInt("ARGON2_PARALLELISM", 2)
+		inRange("ARGON2_MEMORY_KIB", argonMem, 8, maxArgonMemoryKiB)
+		inRange("ARGON2_ITERATIONS", argonIter, 1, maxArgonIterations)
+		inRange("ARGON2_PARALLELISM", argonPar, 1, maxArgonParallelism)
+		parForDefault := argonPar
+		if parForDefault < 1 || parForDefault > maxArgonParallelism {
+			parForDefault = 1
+		}
+		argonConc = optInt("ARGON2_MAX_CONCURRENT", DefaultArgon2MaxConcurrent(runtime.GOMAXPROCS(0), parForDefault))
+		inRange("ARGON2_MAX_CONCURRENT", argonConc, 1, maxArgonConcurrent)
+		argonQueue = optDuration("ARGON2_QUEUE_TIMEOUT", DefaultArgon2QueueTimeout)
+		if argonQueue <= 0 || argonQueue > maxArgonQueueTimeout {
+			errs = append(errs, "ARGON2_QUEUE_TIMEOUT must be greater than zero and at most 1m")
+		}
+		if argonPar >= 1 && argonPar <= maxArgonParallelism && argonMem < 8*argonPar {
+			errs = append(errs, "ARGON2_MEMORY_KIB must be at least 8 * ARGON2_PARALLELISM")
+		}
 	}
 
 	cfg := &Config{
 		Env:      envOr("APP_ENV", "development"),
 		HTTPPort: optInt("HTTP_PORT", 8080),
 		Postgres: PostgresConfig{
-			DSN:          req("POSTGRES_DSN"),
+			DSN:          reqIf(need.Postgres, "POSTGRES_DSN"),
 			MaxOpenConns: optInt("POSTGRES_MAX_OPEN_CONNS", 20),
 			MaxIdleConns: optInt("POSTGRES_MAX_IDLE_CONNS", 10),
-			SearchPath:   req("POSTGRES_SEARCH_PATH"),
+			SearchPath:   reqIf(need.Postgres, "POSTGRES_SEARCH_PATH"),
 		},
 		Redis: RedisConfig{
-			Addr:     req("REDIS_ADDR"),
+			Addr:     reqIf(need.Redis, "REDIS_ADDR"),
 			Password: os.Getenv("REDIS_PASSWORD"),
 			DB:       optInt("REDIS_DB", 0),
 		},
 		MinIO: MinIOConfig{
-			Endpoint:        req("MINIO_ENDPOINT"),
-			AccessKeyID:     req("MINIO_ACCESS_KEY_ID"),
-			SecretAccessKey: req("MINIO_SECRET_ACCESS_KEY"),
+			Endpoint:        reqIf(need.MinIO, "MINIO_ENDPOINT"),
+			AccessKeyID:     reqIf(need.MinIO, "MINIO_ACCESS_KEY_ID"),
+			SecretAccessKey: reqIf(need.MinIO, "MINIO_SECRET_ACCESS_KEY"),
 			UseSSL:          optBool("MINIO_USE_SSL", false),
 			BucketAssets:    envOr("MINIO_BUCKET_ASSETS", "smartcourse-assets"),
+			PublicEndpoint:  os.Getenv("MINIO_PUBLIC_ENDPOINT"),
 		},
 		Temporal: TemporalConfig{
-			HostPort:  envOr("TEMPORAL_HOST_PORT", "temporal:7233"),
-			Namespace: envOr("TEMPORAL_NAMESPACE", "default"),
-			TaskQueue: envOr("TEMPORAL_TASK_QUEUE", "course-publish"),
+			HostPort:      envOr("TEMPORAL_HOST_PORT", "temporal:7233"),
+			Namespace:     envOr("TEMPORAL_NAMESPACE", "default"),
+			TaskQueue:     envOr("TEMPORAL_TASK_QUEUE", "publish-workflows"),
+			ActivityQueue: envOr("TEMPORAL_ACTIVITY_QUEUE", "course-activities"),
 		},
 		JWT: JWTConfig{
-			SigningKey:      req("JWT_SIGNING_KEY"),
+			SigningKey:      reqIf(need.JWT, "JWT_SIGNING_KEY"),
 			AccessTokenTTL:  optDuration("JWT_ACCESS_TTL", 15*time.Minute),
 			RefreshTokenTTL: optDuration("JWT_REFRESH_TTL", 7*24*time.Hour),
 			Issuer:          envOr("JWT_ISSUER", "smartcourse"),
@@ -206,6 +333,9 @@ func Load() (*Config, error) {
 			Parallelism: uint8(argonPar),
 			SaltLength:  16,
 			KeyLength:   32,
+
+			MaxConcurrent: argonConc,
+			QueueTimeout:  argonQueue,
 		},
 		CORSAllowedOrigins: splitAndTrim(os.Getenv("CORS_ALLOWED_ORIGINS")),
 		TrustedProxies:     splitAndTrim(os.Getenv("TRUSTED_PROXIES")),
@@ -216,20 +346,41 @@ func Load() (*Config, error) {
 		EnableHSTS:         optBool("HSTS_ENABLED", false),
 	}
 
-	if len(cfg.JWT.SigningKey) < 32 {
-		// Only enforced once the key is present; the presence check above
-		// already reported a missing key.
-		if cfg.JWT.SigningKey != "" {
-			errs = append(errs, "JWT_SIGNING_KEY must be at least 32 bytes")
+	cfg.Relay.Workers = optInt("RELAY_WORKERS", defaultRelayWorkers)
+	inRange("RELAY_WORKERS", cfg.Relay.Workers, 1, maxRelayWorkers)
+	if msg := relayPoolError(cfg.Postgres.MaxOpenConns, cfg.Relay.Workers); need.Postgres && need.Relay && msg != "" {
+		errs = append(errs, msg)
+	}
+
+	var smtpErrs []string
+	cfg.SMTP, smtpErrs = loadSMTP()
+	errs = append(errs, smtpErrs...)
+	cfg.Asynq, cfg.Jobs = loadAsynq(optInt, optDuration, &errs)
+	var mongoErrs []string
+	cfg.Mongo, mongoErrs = loadMongo(need.Mongo, os.Getenv, optDuration)
+	var telemetryErrs []string
+	cfg.Telemetry, telemetryErrs = loadTelemetry(os.Getenv, optBool)
+	errs = append(errs, telemetryErrs...)
+	errs = append(errs, mongoErrs...)
+	cfg.Kafka = loadKafka(need.Kafka || need.KafkaBrokers, need.Kafka, os.Getenv, optInt, optDuration, &errs)
+
+	if need.JWT {
+		if len(cfg.JWT.SigningKey) < 32 {
+			// Only enforced once the key is present; the presence check above
+			// already reported a missing key.
+			if cfg.JWT.SigningKey != "" {
+				errs = append(errs, "JWT_SIGNING_KEY must be at least 32 bytes")
+			}
+		}
+
+		if cfg.JWT.AccessTokenTTL <= 0 {
+			errs = append(errs, "JWT_ACCESS_TTL must be greater than zero")
+		}
+		if cfg.JWT.RefreshTokenTTL <= 0 {
+			errs = append(errs, "JWT_REFRESH_TTL must be greater than zero")
 		}
 	}
 
-	if cfg.JWT.AccessTokenTTL <= 0 {
-		errs = append(errs, "JWT_ACCESS_TTL must be greater than zero")
-	}
-	if cfg.JWT.RefreshTokenTTL <= 0 {
-		errs = append(errs, "JWT_REFRESH_TTL must be greater than zero")
-	}
 	if cfg.MaxBodyBytes <= 0 {
 		errs = append(errs, "MAX_BODY_BYTES must be greater than zero")
 	}
@@ -240,7 +391,7 @@ func Load() (*Config, error) {
 			errs = append(errs, key+" must be greater than zero")
 		}
 	}
-	if cfg.Env != "development" && len(cfg.JWT.SigningKey) >= 32 {
+	if need.JWT && cfg.Env != "development" && len(cfg.JWT.SigningKey) >= 32 {
 		if reason := weakSigningKey(cfg.JWT.SigningKey); reason != "" {
 			errs = append(errs, "JWT_SIGNING_KEY is not acceptable outside APP_ENV=development: "+reason)
 		}
