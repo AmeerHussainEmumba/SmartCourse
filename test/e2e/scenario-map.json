@@ -1,0 +1,86 @@
+{
+  "_comment": "Scenario to services map for the E2E suite. Read by scripts/ci-select.sh (which scenarios a service-only PR runs); checked by scripts/check-e2e-map.sh (every e2e-tagged Test function has an entry, no entry names a missing function). A service is listed when the scenario drives or asserts on any of its binaries; when in doubt, list it. Services: identity, course, analytics, notification, publishing, audit. See docs/guides/ci.md.",
+  "services": ["identity", "course", "analytics", "notification", "publishing", "audit"],
+  "tests": {
+    "TestE2E_E01_HappyPath": {
+      "services": ["identity", "course", "analytics", "notification", "publishing", "audit"],
+      "note": "whole pipeline: register, publish, enroll, complete, certificate, mail, audit"
+    },
+    "TestE2E_E02_OneTraceAcrossPipeline": {
+      "services": ["identity", "course", "analytics", "notification", "publishing", "audit"],
+      "note": "one trace id across every binary"
+    },
+    "TestE2E_E03_DuplicateDelivery": {
+      "services": ["identity", "course", "analytics", "notification", "audit"],
+      "note": "duplicate Kafka delivery consumed by analytics, notification, audit"
+    },
+    "TestE2E_E04_PoisonMessage": {
+      "services": ["identity", "course", "analytics", "notification", "audit"],
+      "note": "poison event parked by analytics-worker, failed_events in the audit store"
+    },
+    "TestE2E_E05_KafkaDownThenUp": {
+      "services": ["identity", "course", "analytics", "notification", "publishing", "audit"],
+      "note": "broker outage while publishes and enrollments flow"
+    },
+    "TestE2E_E06_ConsumerKilledMidFlow": {
+      "services": ["identity", "course", "analytics", "notification", "audit"],
+      "note": "consumer SIGKILL mid flow"
+    },
+    "TestE2E_E07_SMTPProviderDown": {
+      "services": ["identity", "course", "analytics", "notification"],
+      "note": "SMTP outage, notification retries"
+    },
+    "TestE2E_E08_CounterDrift": {
+      "services": ["identity", "course", "analytics", "notification"],
+      "note": "scheduled jobs repair drifted counters"
+    },
+    "TestE2E_E09_EnrollmentUnderLoad": {
+      "services": ["identity", "course", "analytics", "publishing"],
+      "note": "seat limit under concurrent enrollments"
+    },
+    "TestE2E_E10_RedisFlushWithNewServices": {
+      "services": ["identity", "course", "analytics", "notification", "audit"],
+      "note": "FLUSHALL: token versions re-seeded across the APIs"
+    },
+    "TestE2E_E11_SchemaIncompatibility": {
+      "services": ["identity", "course", "analytics", "notification", "publishing", "audit"],
+      "note": "schema registry bootstrap and incompatible schema; every binary registers subjects"
+    },
+    "TestE2E_E12_PublishUnderFault": {
+      "services": ["identity", "course", "publishing"],
+      "note": "publish workflow under Temporal and worker faults"
+    },
+    "TestE2E_E13_ArchiveAndAudit": {
+      "services": ["identity", "course", "analytics", "notification", "publishing", "audit"],
+      "note": "audit archive of every event, replay, graceful restart"
+    },
+    "TestE2E_E14_AuthAndAccessOnNewSurface": {
+      "services": ["identity", "course", "analytics", "audit"],
+      "note": "authorization matrix over audit-api, analytics, certificates, admin routes"
+    },
+    "TestE2E_InstructorAfterRedisRestart_LoginReseedsAndCourseAPIWorks": {
+      "services": ["identity", "course"],
+      "note": "F-38: token version re-seed after a Redis restart"
+    },
+    "TestE2E_DataIndependence_RolesAndOutboxes": {
+      "services": ["identity", "course", "analytics", "notification", "publishing", "audit"],
+      "note": "per-service roles and outboxes through the real stack"
+    },
+    "TestE2E_Adversarial_Surface": {
+      "services": ["identity", "course", "analytics", "notification", "publishing", "audit"],
+      "note": "security pass over every binary's surface"
+    },
+    "TestAdversarial_CertificateNeedsNameMirror_SurvivesAMirrorStall": {
+      "services": ["identity", "course"],
+      "note": "certificate issuer vs instructor-mirror consumer stall"
+    },
+    "TestAdversarial_MongoOutage_BeyondDefaultRetryBudget_NothingLost": {
+      "services": ["identity", "course", "analytics", "audit"],
+      "note": "MongoDB outage beyond the retry budget"
+    },
+    "TestAdversarial_TwoWorkerReplicas_KilledInTurn_KeepEveryInvariant": {
+      "services": ["identity", "course", "analytics", "notification", "audit"],
+      "note": "two replicas of every stateful worker killed in turn"
+    }
+  }
+}

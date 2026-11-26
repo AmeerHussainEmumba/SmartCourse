@@ -9,6 +9,7 @@
 #   scripts/check-link-graph.sh         what each binary actually links
 #   scripts/check-dockerfile-modules.sh Dockerfile COPY list vs replace closure
 #   scripts/check-pending-e2e.sh        no E1 to E14 spec skipped as pending past its phase
+#   scripts/check-e2e-map.sh            every e2e test mapped to services in test/e2e/scenario-map.json
 #   scripts/check-dev-defaults.sh       dev defaults and credentials (checks A, B, C, D, G via tools/guardcheck);
 #                                       every known bypass form of S-12 is a case below
 #   GOWORK=off go build ./...           a module must build on its own
@@ -193,6 +194,16 @@ expect_fail "pending-e2e guard fails when an allowlisted spec is implemented but
 d=$(fresh c16)
 perl -0pi -e 's/func TestE2E_E05_KafkaDownThenUp/func notASpec_E05_KafkaDownThenUp/' "$d/test/e2e/scenarios_resilience_e2e_test.go"
 expect_fail "pending-e2e guard fails when a spec is deleted" "FAIL E05: found 0 spec functions" "$d" scripts/check-pending-e2e.sh
+
+echo
+echo "== check-e2e-map: an e2e test with no map entry, a map entry with no test =="
+expect_pass "check-e2e-map on the clean tree" "$work/base" scripts/check-e2e-map.sh
+d=$(fresh m1)
+printf '\nfunc TestE2E_E99_Unmapped(t *testing.T) {}\n' >>"$d/test/e2e/scenarios_pipeline_e2e_test.go"
+expect_fail "e2e-map guard fails when an e2e test has no entry" "FAIL TestE2E_E99_Unmapped is an e2e test with no entry" "$d" scripts/check-e2e-map.sh
+d=$(fresh m2)
+perl -0pi -e 's/func TestE2E_E05_KafkaDownThenUp/func TestE2E_E05_Renamed/' "$d/test/e2e/scenarios_resilience_e2e_test.go"
+expect_fail "e2e-map guard fails when the map names a renamed or deleted test" "names TestE2E_E05_KafkaDownThenUp, which is not" "$d" scripts/check-e2e-map.sh
 
 echo
 echo "== check-dev-defaults (S-12): every bypass form of the guard must still be caught =="
