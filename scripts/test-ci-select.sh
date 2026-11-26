@@ -95,7 +95,8 @@ re=$(jq -r .e2e.run <<<"$j")
 n=$(tr '|' '\n' <<<"$re" | wc -l | tr -d ' ')
 [ "$n" -le "$n_tests" ] && ok "a subset is never wider than the $n_tests default scenarios" || bad "regexp has $n names"
 case $re in *TestAdversarial_*) bad "regexp selects a test the default 'make test-e2e' does not run" ;; *) ok "only TestE2E_ tests are selected (same set as a full run)" ;; esac
-CI_SELECT_MAP=$tmp/m.json
+mk=$(make -n test-e2e E2E_RUN="$re" 2>&1)
+case $mk in *"-run '$re' ./..."*) ok "the regexp reaches go test unchanged through make (anchored, no \$ for make to eat)" ;; *) bad "make rewrote the regexp" "$mk" ;; esac
 echo '{"tests":{"TestE2E_X":{"services":["identity"]}}}' >"$tmp/m.json"
 j=$(CI_SELECT_MAP=$tmp/m.json sel services/audit/a.go)
 check "a service no scenario exercises gets E2E none with a reason" '.e2e.run == "none" and (.e2e.reason | contains("audit"))' "$j"

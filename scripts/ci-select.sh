@@ -172,7 +172,8 @@ elif [ "$docs_only" -eq 0 ]; then
     if [ -z "$names" ]; then
       e2e_reason="no mapped scenario exercises $svcs"
     else
-      e2e_run="^($(echo "$names" | paste -sd'|' -))\$"
+      # \z, not $: make would eat a trailing $ in `make test-e2e E2E_RUN=...`.
+      e2e_run="^($(echo "$names" | paste -sd'|' -))\\z"
       e2e_reason="$(echo "$names" | wc -l | tr -d ' ') scenarios that exercise: $svcs"
     fi
   fi
