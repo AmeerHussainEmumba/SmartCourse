@@ -30,3 +30,5 @@ func TestLoadConfig_NeedsNoPostgresOrMinIO(t *testing.T) {
 		t.Error("a weak JWT_SIGNING_KEY must be refused")
 	}
 }
+
+// throwaway CI selection test, not for merge
