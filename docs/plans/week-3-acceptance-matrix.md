@@ -175,7 +175,7 @@
 
 ## 10. End-to-end scenarios (week-3.md section 5)
 
-Each spec lives in `test/e2e/scenarios_*_e2e_test.go` (E01 and E03 to E07, ported to the ten-binary harness) or is a skipped stub in `scenarios_pending_e2e_test.go` (E02 and E08 to E14, pending Wave C3b: their evidence below is from the old four-binary harness and is stale; old bodies in `test/e2e/legacy/`). The doc comment on each test is the exact procedure. Every check is mutation-checked once built: break the guarded behaviour and confirm the test fails (record the mutation and the failing output in Evidence).
+Each spec lives in `test/e2e/*_e2e_test.go` and runs on the ten-binary harness (E02 and E08 to E14 were ported in Wave C3b on 2026-11-26; each row's evidence is from that port). The doc comment on each test is the exact procedure. Every check is mutation-checked once built: break the guarded behaviour and confirm the test fails (record the mutation and the failing output in Evidence).
 
 | id | source | requirement | how it is proven | expected result | status | evidence |
 |---|---|---|---|---|---|---|

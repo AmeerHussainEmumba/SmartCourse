@@ -1,4 +1,4 @@
-//go:build e2e_legacy && bugrepro
+//go:build e2e && bugrepro
 
 package e2e_test
 
@@ -54,8 +54,11 @@ func TestAdversarial_MongoOutage_BeyondDefaultRetryBudget_LosesEvents(t *testing
 	time.Sleep(150 * time.Second) // far longer than the default retry budget plus parking tries
 	s.StartMongo(t)
 	s.WaitSettled(t, 2*time.Minute)
-	t.Logf("worker log: exhausted=%d handler_failed=%d could_not_park=%d parked=%d", s.Worker.LogCount("exhausted its retry budget"),
-		s.Worker.LogCount("handler failed"), s.Worker.LogCount("could not park"), s.Worker.LogCount("parked a record"))
+	for _, name := range []string{harness.AuditWorker, harness.AnalyticsWorker} {
+		p := s.Proc(name)
+		t.Logf("%s log: exhausted=%d handler_failed=%d could_not_park=%d parked=%d", name, p.LogCount("exhausted its retry budget"),
+			p.LogCount("handler failed"), p.LogCount("could not park"), p.LogCount("parked a record"))
+	}
 
 	t.Run("archive", func(t *testing.T) {
 		harness.Eventually(t, 90*time.Second, "the event archived or parked after MongoDB returned", func() error {
