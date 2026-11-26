@@ -1,4 +1,4 @@
-//go:build e2e_legacy
+//go:build e2e
 
 package e2e_test
 
@@ -69,13 +69,13 @@ func runMatrix(t *testing.T, rows []accessRow) int {
 // failed-events and replay, Phase 6 for most popular and failed-events metrics).
 //
 // Steps:
-//  1. Stack as E01 with one parked failed event (as in E04) and one published
+//  1. Stack as E01 (ten binaries) with one parked failed event (as in E04) and one published
 //     course with an enrolled student who completed it (so a certificate exists).
 //  2. Tokens for: no token, a student enrolled in the course, a student not
 //     enrolled, an instructor who owns the course, an instructor who does not
 //     own it, an admin, and an admin token made stale by a role change.
 //  3. Each new endpoint is called with each token, through the real binaries:
-//     the worker's failed-events list, get and replay; the analytics platform,
+//     audit-api's failed-events list, get and replay; the analytics platform,
 //     popular-courses, issues, per-course and daily-enrollment routes;
 //     certificates (list, by id, public verify); the admin role route; and the
 //     Idempotency-Key behaviour on POST /courses and POST /enrollments.
@@ -102,13 +102,12 @@ func runMatrix(t *testing.T, rows []accessRow) int {
 //     idempotency_key_reused; an invalid key is 400; another user's identical
 //     key is independent; a refused request (4xx) does not store the key.
 //   - A token made stale by a role change is refused as token_stale on the
-//     instructor's course write, the admin role route and the worker admin API
+//     instructor's course write, the admin role route and the audit-api failed-events API
 //     (never accepted, never a 5xx).
 //   - Every error uses the standard {code, message} shape and none is a 5xx.
 //
-// Observed, not asserted: GET /analytics/issues has no token-version check, so
-// a stale admin token still reads it (200); the spec only requires the failed-
-// events routes and replay to refuse it.
+// Also checked: GET /analytics/issues refuses a stale admin token (401; it used
+// to answer 200, the route now fails closed).
 func TestE2E_E14_AuthAndAccessOnNewSurface(t *testing.T) {
 	const budget = 3
 	s := harness.Start(t, harness.Options{WorkerEnv: map[string]string{
@@ -164,7 +163,7 @@ func TestE2E_E14_AuthAndAccessOnNewSurface(t *testing.T) {
 		}
 	}
 
-	W := s.WorkerAdminURL + "/api/v1/admin/failed-events"
+	W := s.AuditURL + "/api/v1/admin/failed-events"
 	A := s.AnalyticsURL + "/api/v1/analytics"
 	C := s.CourseURL + "/api/v1"
 	I := s.IdentityURL + "/api/v1"
@@ -277,7 +276,10 @@ func TestE2E_E14_AuthAndAccessOnNewSurface(t *testing.T) {
 		}
 		// Observation: a stale admin token on the issues route.
 		if resp, err := harness.DoFull("GET", A+"/issues", staleAdmin.Token, nil, nil); err == nil {
-			t.Logf("OBSERVED: GET /analytics/issues with a stale admin token answers HTTP %d (the route has no token-version check)", resp.Status)
+			t.Logf("OBSERVED: GET /analytics/issues with a stale admin token answers HTTP %d", resp.Status)
+			if resp.Status == 200 {
+				t.Errorf("a stale admin token reads GET /analytics/issues (200): the route must fail closed like the failed-events routes")
+			}
 		}
 		// Popular courses lists the course with ids and counts only.
 		if items := s.PopularCourses(t, outsider); len(items) == 0 {

@@ -415,19 +415,19 @@ run_e2e() {
   fi
 }
 check_E01() { run_e2e '^TestE2E_E01_'; }
-check_E02() { pending "Wave C3b: TestE2E_E02_ is not ported to the ten-binary harness yet (test/e2e/legacy)"; }
+check_E02() { run_e2e '^TestE2E_E02_'; }
 check_E03() { run_e2e '^TestE2E_E03_'; }
 check_E04() { run_e2e '^TestE2E_E04_'; }
 check_E05() { run_e2e '^TestE2E_E05_'; }
 check_E06() { run_e2e '^TestE2E_E06_'; }
 check_E07() { run_e2e '^TestE2E_E07_'; }
-check_E08() { pending "Wave C3b: TestE2E_E08_ is not ported to the ten-binary harness yet (test/e2e/legacy)"; }
-check_E09() { pending "Wave C3b: TestE2E_E09_ is not ported to the ten-binary harness yet (test/e2e/legacy)"; }
-check_E10() { pending "Wave C3b: TestE2E_E10_ is not ported to the ten-binary harness yet (test/e2e/legacy)"; }
-check_E11() { pending "Wave C3b: TestE2E_E11_ is not ported to the ten-binary harness yet (test/e2e/legacy)"; }
-check_E12() { pending "Wave C3b: TestE2E_E12_ is not ported to the ten-binary harness yet (test/e2e/legacy)"; }
-check_E13() { pending "Wave C3b: TestE2E_E13_ is not ported to the ten-binary harness yet (test/e2e/legacy)"; }
-check_E14() { pending "Wave C3b: TestE2E_E14_ is not ported to the ten-binary harness yet (test/e2e/legacy)"; }
+check_E08() { run_e2e '^TestE2E_E08_'; }
+check_E09() { run_e2e '^TestE2E_E09_'; }
+check_E10() { run_e2e '^TestE2E_E10_'; }
+check_E11() { run_e2e '^TestE2E_E11_'; }
+check_E12() { run_e2e '^TestE2E_E12_'; }
+check_E13() { run_e2e '^TestE2E_E13_'; }
+check_E14() { run_e2e '^TestE2E_E14_'; }
 
 # ---------------------------------------------------------------- registry
 # id|name|function. Order here is run order; ids match the matrix.

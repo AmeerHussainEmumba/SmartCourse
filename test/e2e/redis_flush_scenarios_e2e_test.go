@@ -1,4 +1,4 @@
-//go:build e2e_legacy
+//go:build e2e
 
 package e2e_test
 
@@ -21,7 +21,7 @@ import (
 //
 // The existing test TestE2E_InstructorAfterRedisRestart_LoginReseedsAndCourseAPIWorks
 // (redis_flush_e2e_test.go, tag integration) stays as it is and keeps running.
-// This scenario re-runs its steps against the four real binaries with the Week
+// This scenario re-runs its steps against the ten real binaries with the Week
 // 3 pipeline (Kafka, consumers, Asynq, Temporal) running over the same Redis.
 //
 // Steps:
@@ -34,7 +34,7 @@ import (
 //     are collected: none may be a 5xx.
 //  3. FLUSHALL. The pre-flush instructor token is refused with token_stale on
 //     a course write (never a 5xx, never accepted); the same flush with the
-//     second admin's token on the worker's admin API gives token_stale; the
+//     second admin's token on audit-api gives token_stale; the
 //     analytics read and the public routes keep working.
 //  4. Log in again: both tokens work (course write 201, worker admin 200) and
 //     the cached version is re-seeded. FLUSHALL again, refresh instead of
@@ -93,13 +93,13 @@ func TestE2E_E10_RedisFlushWithNewServices(t *testing.T) {
 		}, nil)
 	}
 	workerAdmin := func(token string) *harness.Response {
-		return call("GET", s.WorkerAdminURL+"/api/v1/admin/failed-events", token, nil, nil)
+		return call("GET", s.AuditURL+"/api/v1/admin/failed-events", token, nil, nil)
 	}
 	if r := createCourse(inst.Token); r.Status != 201 {
 		t.Fatalf("instructor creates a course before any flush: HTTP %d %s", r.Status, r.Body)
 	}
 	if r := workerAdmin(admin2.Token); r.Status != 200 {
-		t.Fatalf("second admin on the worker admin API before any flush: HTTP %d %s", r.Status, r.Body)
+		t.Fatalf("second admin on the audit-api failed-events API before any flush: HTTP %d %s", r.Status, r.Body)
 	}
 	if v, err := s.Env.RDB.Get(ctx, auth.TokenVersionRedisKey(inst.ID.String())).Result(); err != nil || v != "2" {
 		t.Fatalf("cached token version of the instructor before the flush: %q (err %v), want 2", v, err)
@@ -147,7 +147,7 @@ func TestE2E_E10_RedisFlushWithNewServices(t *testing.T) {
 		t.Fatalf("after a flush the pre-flush instructor token must be refused as token_stale on a course write: HTTP %d %s", r.Status, r.Body)
 	}
 	if r := workerAdmin(admin2.Token); !stale(r) {
-		t.Fatalf("after a flush the pre-flush admin token must be refused as token_stale by the worker admin API: HTTP %d %s", r.Status, r.Body)
+		t.Fatalf("after a flush the pre-flush admin token must be refused as token_stale by the audit-api failed-events API: HTTP %d %s", r.Status, r.Body)
 	}
 	if r := call("GET", s.AnalyticsURL+"/api/v1/analytics/platform", inst.Token, nil, nil); r.Status != 200 {
 		t.Errorf("analytics platform read with the pre-flush token after the flush: HTTP %d %s, want 200 (it has no token-version check)", r.Status, r.Body)
@@ -208,12 +208,12 @@ func TestE2E_E10_RedisFlushWithNewServices(t *testing.T) {
 		t.Fatalf("demote the bootstrap admin: HTTP %d %s", r.Status, r.Body)
 	}
 	if r := workerAdmin(bootstrap.Token); !stale(r) {
-		t.Fatalf("the demoted admin's token on the worker admin API before any flush: HTTP %d %s, want token_stale", r.Status, r.Body)
+		t.Fatalf("the demoted admin's token on the audit-api failed-events API before any flush: HTTP %d %s, want token_stale", r.Status, r.Body)
 	}
 	flush()
-	t.Run("a demoted admin's token stays refused by the worker admin API after a flush", func(t *testing.T) {
+	t.Run("a demoted admin's token stays refused by the audit-api failed-events API after a flush", func(t *testing.T) {
 		if r := workerAdmin(bootstrap.Token); r.Status == 200 {
-			t.Errorf("PRODUCT DEFECT: after FLUSHALL the worker admin API (RequireFreshPrivilege without a Postgres source, services/worker/admin/admin.go) accepts the old token of an admin demoted from token version 1 to 2: a cache miss reads as version 1. The demoted admin can list failed events and replay them until they log in. HTTP %d", r.Status)
+			t.Errorf("PRODUCT DEFECT: after FLUSHALL the audit-api failed-events API (a token-version cache miss reads as version 1) accepts the old token of an admin demoted from token version 1 to 2: a cache miss reads as version 1. The demoted admin can list failed events and replay them until they log in. HTTP %d", r.Status)
 		} else if !stale(r) {
 			t.Errorf("worker admin API with the demoted admin's token after a flush: HTTP %d %s, want 401 token_stale", r.Status, r.Body)
 		}
@@ -248,8 +248,10 @@ func TestE2E_E10_RedisFlushWithNewServices(t *testing.T) {
 	last := students[13]
 	s.Enroll(t, last, course)
 	enrolled.Store(last.Email, struct{}{})
-	if !s.Worker.Running() {
-		t.Fatalf("the worker process exited during the flushes")
+	for _, name := range harness.Binaries {
+		if !s.Proc(name).Running() {
+			t.Fatalf("%s exited during the flushes", name)
+		}
 	}
 	harness.Eventually(t, 2*time.Minute, "the enrollment mail of a student who enrolled after the flushes", func() error {
 		msgs, err := s.Mailpit.MessagesToWithSubject(last.Email, "enrolled")
@@ -279,13 +281,13 @@ func TestE2E_E10_RedisFlushWithNewServices(t *testing.T) {
 		if cs := s.CourseStatsFor(t, s.Login(t, admin2.Email), course); cs.TotalEnrollments != want {
 			return harness.Errf("course stats %+v, want %d enrollments", cs, want)
 		}
-		var ids []string
-		if err := s.DB().Raw(`SELECT event_id::text FROM platform.outbox`).Scan(&ids).Error; err != nil {
+		rows, err := s.OutboxRows()
+		if err != nil {
 			return err
 		}
-		for _, id := range ids {
-			if n, err := s.Mongo.ArchivedEvents(id); err != nil || n != 1 {
-				return harness.Errf("event %s archived %d times (err %v), want 1", id, n, err)
+		for _, r := range rows {
+			if n, err := s.Mongo.ArchivedEvents(r.EventID); err != nil || n != 1 {
+				return harness.Errf("event %s archived %d times (err %v), want 1", r.EventID, n, err)
 			}
 		}
 		total := 0

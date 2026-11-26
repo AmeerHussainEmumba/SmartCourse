@@ -29,6 +29,4 @@ package e2e_test
 // E1 (TestE2E_E01_HappyPath) and E3 (TestE2E_E03_DuplicateDelivery) are implemented in
 // scenarios_pipeline_e2e_test.go (build tag e2e).
 
-// E2 (TestE2E_E02_OneTraceAcrossPipeline) is pending on the ten-binary harness
-// (Wave C3b): a skipped stub in scenarios_pending_e2e_test.go, the spec and the
-// old body in legacy/scenarios_trace_e2e_test.go.
+// E2 (TestE2E_E02_OneTraceAcrossPipeline) is in scenarios_trace_e2e_test.go (Wave C3b).

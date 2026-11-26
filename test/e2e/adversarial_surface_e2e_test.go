@@ -1,4 +1,4 @@
-//go:build e2e_legacy && bugrepro
+//go:build e2e
 
 package e2e_test
 
@@ -20,11 +20,12 @@ import (
 
 // TestE2E_Adversarial_Surface is the security tester's whole-stack pass over
 // the Week 3 surface (metrics endpoints, header and trace-context handling,
-// error bodies, worker admin exposure). One stack, several attacks; subtests
-// named Bugrepro_* fail today and reproduce a finding in
-// docs/plans/week-3-findings-security.md, Held_* passed when written.
+// error bodies, admin exposure), on the ten binaries. One stack, several
+// attacks. In the four-binary build the first subtest (S-11) reproduced a
+// finding of docs/plans/week-3-findings-security.md; the split binaries serve
+// /metrics only on their internal listener, so it is now a guard like the others.
 //
-//	cd test/e2e && go test -tags='e2e bugrepro' -run TestE2E_Adversarial_Surface ./
+//	cd test/e2e && GOWORK=off go test -tags=e2e -count=1 -run TestE2E_Adversarial_Surface ./
 func TestE2E_Adversarial_Surface(t *testing.T) {
 	s := harness.Start(t, harness.Options{})
 	student := s.NewStudent(t)
@@ -32,14 +33,12 @@ func TestE2E_Adversarial_Surface(t *testing.T) {
 	course := s.PublishedCourse(t, inst, 1)
 	s.WaitSettled(t, time.Minute)
 
-	// S-11: /metrics is served unauthenticated on the SAME port as the public
-	// API of identity, course and analytics (libs/infra RegisterMetricsRoute: "it
-	// should not face the internet", but the API port is the one that does).
-	// Anything that routes the API publicly (an ingress, a port-forward, the
-	// compose port) exposes route templates, traffic counts, DB pool state, Go
-	// runtime and process statistics to anyone.
-	t.Run("Bugrepro_MetricsUnauthenticatedOnPublicAPIPort", func(t *testing.T) {
-		for name, base := range map[string]string{"identity": s.IdentityURL, "course": s.CourseURL, "analytics": s.AnalyticsURL} {
+	// S-11: /metrics must not be served on the port of a public API (anything
+	// that routes the API publicly would expose route templates, traffic counts,
+	// DB pool state and process statistics to anyone); it lives on the internal
+	// listener (METRICS_HTTP_ADDR), which a scenario can still scrape.
+	t.Run("Guard_MetricsNotOnPublicAPIPort", func(t *testing.T) {
+		for name, base := range map[string]string{"identity": s.IdentityURL, "course": s.CourseURL, "analytics": s.AnalyticsURL, "audit": s.AuditURL} {
 			resp, err := harness.DoFull("GET", base+"/metrics", "", nil, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -52,15 +51,16 @@ func TestE2E_Adversarial_Surface(t *testing.T) {
 
 	// HELD: scraped metrics never carry request data: emails, ids, tokens,
 	// request ids or raw paths from hostile requests (label cardinality guard).
-	t.Run("Held_MetricsCarryNoRequestData", func(t *testing.T) {
+	t.Run("Guard_MetricsCarryNoRequestData", func(t *testing.T) {
 		secretEmail := "victim-" + uuid.NewString()[:8] + "@example.com"
 		secretID := uuid.NewString()
 		rid := "rid-" + uuid.NewString()
 		_, _, _ = harness.Do("POST", s.IdentityURL+"/api/v1/auth/login", "", map[string]string{"email": secretEmail, "password": "x"})
 		_, _ = harness.DoFull("GET", s.CourseURL+"/api/v1/courses/"+secretID+"/zzz", student.Token, nil, map[string]string{"X-Request-Id": rid})
 		_, _, _ = harness.Do("GET", s.AnalyticsURL+"/api/v1/analytics/courses/"+secretID, student.Token, nil)
-		_, _, _ = harness.Do("GET", s.WorkerAdminURL+"/api/v1/admin/failed-events/"+secretID, student.Token, nil)
-		for name, u := range map[string]string{"identity": s.IdentityURL, "course": s.CourseURL, "analytics": s.AnalyticsURL, "worker": s.WorkerMetricsURL} {
+		_, _, _ = harness.Do("GET", s.AuditURL+"/api/v1/admin/failed-events/"+secretID, student.Token, nil)
+		for _, name := range harness.Binaries {
+			u := s.MetricsURL(name)
 			resp, err := harness.DoFull("GET", u+"/metrics", "", nil, nil)
 			if err != nil || resp.Status != 200 {
 				t.Errorf("%s metrics: %v %v", name, err, resp)
@@ -78,7 +78,7 @@ func TestE2E_Adversarial_Surface(t *testing.T) {
 	// HELD: hostile X-Request-Id / traceparent / tracestate values (control
 	// characters, obs-fold, oversized, duplicated, malformed) never produce a 5xx,
 	// are never echoed back, and never create a forged log line.
-	t.Run("Held_TraceAndRequestIDHeadersCannotInjectOrCrash", func(t *testing.T) {
+	t.Run("Guard_TraceAndRequestIDHeadersCannotInjectOrCrash", func(t *testing.T) {
 		hostile := []string{
 			"X-Request-Id: ok\r\n X-Folded: yes",
 			"X-Request-Id: " + strings.Repeat("a", 100000),
@@ -110,10 +110,11 @@ func TestE2E_Adversarial_Surface(t *testing.T) {
 				t.Errorf("%.50q: hostile value echoed in response headers", h)
 			}
 		}
-		for _, p := range []*harness.Proc{s.Course, s.Identity, s.Analytics, s.Worker} {
+		for _, name := range harness.Binaries {
+			p := s.Proc(name)
 			for _, line := range strings.Split(p.Logs(), "\n") {
 				if strings.HasPrefix(line, "FORGED-LOG-LINE") || strings.HasPrefix(line, "\x01") {
-					t.Errorf("%s: forged log line: %.100q", p.Name, line)
+					t.Errorf("%s: forged log line: %.100q", name, line)
 				}
 			}
 		}
@@ -121,7 +122,7 @@ func TestE2E_Adversarial_Surface(t *testing.T) {
 
 	// HELD: malformed input never yields an error body with SQL, DSNs, stack
 	// traces, file paths or driver names, on any service.
-	t.Run("Held_ErrorBodiesLeakNothing", func(t *testing.T) {
+	t.Run("Guard_ErrorBodiesLeakNothing", func(t *testing.T) {
 		admin := s.AdminToken(t)
 		cid := course.ID.String()
 		type req struct{ method, url, tok, body string }
@@ -137,9 +138,9 @@ func TestE2E_Adversarial_Surface(t *testing.T) {
 			{"POST", s.CourseURL + "/api/v1/assets/upload-url", inst.Token, `{"course_id":"` + cid + `","content_type":"application/pdf","size_bytes":1e999}`},
 			{"GET", s.AnalyticsURL + "/api/v1/analytics/popular-courses?limit=-1", student.Token, ""},
 			{"GET", s.AnalyticsURL + "/api/v1/analytics/courses/%00", admin, ""},
-			{"GET", s.WorkerAdminURL + "/api/v1/admin/failed-events?cursor=%00&limit=1e9&status[$ne]=x", admin, ""},
-			{"POST", s.WorkerAdminURL + "/api/v1/admin/failed-events/%00/replay", admin, ""},
-			{"GET", s.WorkerAdminURL + "/health/ready", "", ""},
+			{"GET", s.AuditURL + "/api/v1/admin/failed-events?cursor=%00&limit=1e9&status[$ne]=x", admin, ""},
+			{"POST", s.AuditURL + "/api/v1/admin/failed-events/%00/replay", admin, ""},
+			{"GET", s.AuditURL + "/health/ready", "", ""},
 		}
 		banned := []string{"SQLSTATE", "pq:", "pgx", "gorm", "postgres://", "mongodb://", "redis://", "goroutine ", "panic:", "runtime error", ".go:", "/Users/", "/home/", "bson", "ERROR:  ", "JWT_SIGNING_KEY", "e2e-signing-key"}
 		for _, r := range reqs {
@@ -163,24 +164,28 @@ func TestE2E_Adversarial_Surface(t *testing.T) {
 		}
 	})
 
-	// HELD: the worker admin surface and its metrics listener are separate
-	// ports; admin routes need a fresh admin token; a student or instructor
-	// token, a token with the wrong key and /metrics-on-admin-port all fail.
-	t.Run("Held_WorkerAdminPortSeparationAndRoles", func(t *testing.T) {
+	// The failed-events surface (audit-api) and the internal metrics listener
+	// are separate ports; admin routes need a fresh admin token; a student or
+	// instructor token, a garbage token and /metrics on the API port all fail.
+	t.Run("Guard_AuditAPIPortSeparationAndRoles", func(t *testing.T) {
 		for _, tok := range []string{"", student.Token, inst.Token, "garbage"} {
-			code, _, err := harness.Do("GET", s.WorkerAdminURL+"/api/v1/admin/failed-events", tok, nil)
+			code, _, err := harness.Do("GET", s.AuditURL+"/api/v1/admin/failed-events", tok, nil)
 			if err != nil || (code != 401 && code != 403) {
 				t.Errorf("token %.12q: %d %v", tok, code, err)
 			}
 		}
-		if code, _, _ := harness.Do("GET", s.WorkerAdminURL+"/metrics", "", nil); code == 200 {
-			t.Errorf("/metrics is served on the admin port")
+		if code, _, _ := harness.Do("GET", s.AuditURL+"/metrics", "", nil); code == 200 {
+			t.Errorf("/metrics is served on the audit-api port")
 		}
-		if code, _, _ := harness.Do("GET", s.WorkerMetricsURL+"/api/v1/admin/failed-events", s.AdminToken(t), nil); code == 200 {
-			t.Errorf("admin routes are served on the metrics port")
+		if code, _, _ := harness.Do("GET", s.MetricsURL(harness.AuditAPI)+"/api/v1/admin/failed-events", s.AdminToken(t), nil); code == 200 {
+			t.Errorf("admin routes are served on the metrics port of audit-api")
 		}
 		for _, p := range []string{"/debug/pprof/", "/debug/vars", "/swagger", "/admin", "/.env", "/actuator/env"} {
-			for _, base := range []string{s.IdentityURL, s.CourseURL, s.AnalyticsURL, s.WorkerAdminURL, s.WorkerMetricsURL} {
+			bases := []string{s.IdentityURL, s.CourseURL, s.AnalyticsURL, s.AuditURL}
+			for _, name := range harness.Binaries {
+				bases = append(bases, s.MetricsURL(name))
+			}
+			for _, base := range bases {
 				if code, _, _ := harness.Do("GET", base+p, "", nil); code == 200 {
 					t.Errorf("%s%s answers 200 (debug surface)", base, p)
 				}

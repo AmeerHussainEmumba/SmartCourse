@@ -16,8 +16,8 @@ import (
 // Kafka only. They carry the `e2e` build tag (not `integration`): they start a
 // dozen containers and ten processes and have their own CI job (make
 // test-e2e). Their specs are the doc comments of the original skipped tests,
-// kept here with the implementation. E02 and E08 to E14 are pending on the new
-// harness (scenarios_pending_e2e_test.go; their old bodies are in legacy/).
+// kept here with the implementation. E02 and E08 to E14 (Wave C3b) are in the
+// other *_e2e_test.go files of this directory.
 // Rules for all of them are in the header of scenarios_pipeline_test.go (black
 // box, real dependencies, no fixed sleeps).
 

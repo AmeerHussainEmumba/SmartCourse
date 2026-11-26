@@ -1,4 +1,4 @@
-//go:build e2e_legacy && bugrepro
+//go:build e2e
 
 package e2e_test
 
@@ -12,7 +12,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/test/e2e/harness"
 )
 
-// TestAdversarial_MongoOutage_BeyondDefaultRetryBudget_LosesEvents (B-06, B-07)
+// TestAdversarial_MongoOutage_BeyondDefaultRetryBudget_NothingLost (B-06, B-07)
 //
 // ADR-0031: "A parked event is never dropped" and "A MongoDB outage degrades
 // the archiver and the failed-events view only". E13 proves the outage case
@@ -28,8 +28,8 @@ import (
 //	park: a poison event handled while MongoDB is down is lost the same way.
 //
 // Expected: after MongoDB returns, every event is either archived or parked.
-// Run: cd test/e2e && GOWORK=off go test -tags='e2e bugrepro' -count=1 -v -run TestAdversarial_MongoOutage .
-func TestAdversarial_MongoOutage_BeyondDefaultRetryBudget_LosesEvents(t *testing.T) {
+// Run: cd test/e2e && GOWORK=off go test -count=1 -v -run TestAdversarial_MongoOutage .
+func TestAdversarial_MongoOutage_BeyondDefaultRetryBudget_NothingLost(t *testing.T) {
 	s := harness.Start(t, harness.Options{})
 	inst := s.NewInstructor(t)
 	student := s.NewStudent(t)
@@ -54,8 +54,11 @@ func TestAdversarial_MongoOutage_BeyondDefaultRetryBudget_LosesEvents(t *testing
 	time.Sleep(150 * time.Second) // far longer than the default retry budget plus parking tries
 	s.StartMongo(t)
 	s.WaitSettled(t, 2*time.Minute)
-	t.Logf("worker log: exhausted=%d handler_failed=%d could_not_park=%d parked=%d", s.Worker.LogCount("exhausted its retry budget"),
-		s.Worker.LogCount("handler failed"), s.Worker.LogCount("could not park"), s.Worker.LogCount("parked a record"))
+	for _, name := range []string{harness.AuditWorker, harness.AnalyticsWorker} {
+		p := s.Proc(name)
+		t.Logf("%s log: exhausted=%d handler_failed=%d could_not_park=%d parked=%d", name, p.LogCount("exhausted its retry budget"),
+			p.LogCount("handler failed"), p.LogCount("could not park"), p.LogCount("parked a record"))
+	}
 
 	t.Run("archive", func(t *testing.T) {
 		harness.Eventually(t, 90*time.Second, "the event archived or parked after MongoDB returned", func() error {

@@ -50,3 +50,4 @@ profile.cov
 /services/*/cmd/*/audit-api
 /services/*/cmd/*/audit-worker
 /bin/
+/tools/guardcheck/guardcheck

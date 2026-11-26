@@ -1,4 +1,4 @@
-//go:build e2e_legacy
+//go:build e2e
 
 package e2e_test
 
@@ -15,7 +15,7 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/test/e2e/harness"
 )
 
-// TestE2E_E02_OneTraceAcrossPipeline is E2, matrix row E02 (Phase 7, ADR-0032).
+// TestE2E_E02_OneTraceAcrossPipeline is E2, matrix row E02 (Phase 7, ADR-0032; ported to the ten-binary harness in Wave C3b).
 //
 // Steps:
 //  1. Same stack as E01 plus Jaeger (OTLP) with tracing enabled and sampling 1.0
@@ -74,7 +74,7 @@ func TestE2E_E02_OneTraceAcrossPipeline(t *testing.T) {
 		// The outbox row carries the trace and the HTTP span's id.
 		var outboxTrace, outboxSpan, eventID string
 		harness.Eventually(t, time.Minute, "the StudentEnrolled outbox row", func() error {
-			return s.DB().Raw(`SELECT COALESCE(trace_id, ''), COALESCE(span_id, ''), event_id::text FROM platform.outbox
+			return s.DB().Raw(`SELECT COALESCE(trace_id, ''), COALESCE(span_id, ''), event_id::text FROM course.outbox
 				WHERE event_type = 'enrollment.student_enrolled' AND convert_from(payload, 'UTF8')::jsonb ->> 'enrollment_id' = ?`,
 				enrollmentID).Row().Scan(&outboxTrace, &outboxSpan, &eventID)
 		})
@@ -145,7 +145,7 @@ func TestE2E_E02_OneTraceAcrossPipeline(t *testing.T) {
 			return nil
 		})
 		harness.Eventually(t, 90*time.Second, "the failed consume span of the poison event in Jaeger", func() error {
-			spans, err := s.Jaeger.FindErrored("worker")
+			spans, err := s.Jaeger.FindErrored(harness.AnalyticsWorker)
 			if err != nil {
 				return err
 			}
@@ -154,7 +154,7 @@ func TestE2E_E02_OneTraceAcrossPipeline(t *testing.T) {
 					return nil
 				}
 			}
-			return harness.Errf("%d errored worker spans, none for event %s", len(spans), poisonID)
+			return harness.Errf("%d errored analytics-worker spans, none for event %s", len(spans), poisonID)
 		})
 	})
 }
@@ -200,7 +200,7 @@ func checkPipelineTrace(spans []harness.Span, traceID, eventID, outboxSpanID, up
 	if !ok {
 		return append(bad, "no HTTP server span for POST /api/v1/enrollments")
 	}
-	if httpSpan.Service != "course-api" {
+	if httpSpan.Service != harness.CourseAPI {
 		bad = append(bad, "the HTTP span is exported by "+httpSpan.Service+", want course-api")
 	}
 	if httpSpan.SpanID != outboxSpanID {
@@ -223,8 +223,8 @@ func checkPipelineTrace(spans []harness.Span, traceID, eventID, outboxSpanID, up
 		return append(bad, "no outbox relay publish span for the event")
 	case relay.ParentID != httpSpan.SpanID:
 		bad = append(bad, "the relay span's parent is not the HTTP span")
-	case relay.Service != "worker":
-		bad = append(bad, "the relay span is exported by "+relay.Service+", want worker")
+	case relay.Service != harness.CourseWorker:
+		bad = append(bad, "the relay span is exported by "+relay.Service+", want "+harness.CourseWorker)
 	}
 
 	produce, ok := find(func(sp harness.Span) bool {
@@ -235,7 +235,12 @@ func checkPipelineTrace(spans []harness.Span, traceID, eventID, outboxSpanID, up
 	}
 
 	var notifyConsume harness.Span
+	// Each group runs in the process of its owning binary. The archiver has no
+	// Postgres: it writes to MongoDB, which no library instruments (no otelmongo
+	// in libs/), so there is no handler child span to require for it. Reported
+	// as an observability gap, not asserted.
 	for _, group := range []string{"analytics-aggregator", "notification-dispatcher", "audit-archiver"} {
+		wantDB := "postgresql"
 		consume, ok := find(func(sp harness.Span) bool {
 			return sp.Kind() == "consumer" && sp.Tag("messaging.system") == "kafka" &&
 				sp.Tag("messaging.consumer.group.name") == group && sp.Tag("smartcourse.event.id") == eventID
@@ -244,13 +249,18 @@ func checkPipelineTrace(spans []harness.Span, traceID, eventID, outboxSpanID, up
 			bad = append(bad, "no consume span for group "+group)
 			continue
 		}
+		if consume.Service != harness.ConsumerOwner[group] {
+			bad = append(bad, fmt.Sprintf("the consume span of %s is exported by %s, want %s", group, consume.Service, harness.ConsumerOwner[group]))
+		}
 		if consume.ParentID != produce.SpanID {
 			bad = append(bad, "the consume span of "+group+" is not a child of the produce span")
 		}
-		if _, ok := find(func(sp harness.Span) bool {
-			return sp.Tag("db.system.name") == "postgresql" && sp.ParentID == consume.SpanID
-		}); !ok {
-			bad = append(bad, "no handler database span under the consume span of "+group)
+		if group != "audit-archiver" {
+			if _, ok := find(func(sp harness.Span) bool {
+				return sp.Tag("db.system.name") == wantDB && sp.ParentID == consume.SpanID
+			}); !ok {
+				bad = append(bad, "no handler "+wantDB+" span under the consume span of "+group)
+			}
 		}
 		if group == "notification-dispatcher" {
 			notifyConsume = consume

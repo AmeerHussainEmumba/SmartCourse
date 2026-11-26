@@ -1,9 +1,8 @@
-//go:build e2e_legacy
+//go:build e2e
 
 package e2e_test
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
@@ -14,10 +13,12 @@ import (
 
 // TestAdversarial_TwoWorkerReplicas_KilledInTurn_KeepEveryInvariant
 //
-// Every Week 3 E2E scenario runs ONE worker. This one runs two replicas (the
-// harness worker and a second process on the same Postgres, Kafka, Redis and
-// MongoDB: two relays on one outbox, two members of each consumer group, two
-// Asynq servers, two schedulers, two notification sweepers), kills each with
+// Every other E2E scenario runs ONE process of each binary. This one runs two
+// replicas of every worker that holds state or a consumer group (identity-,
+// course-, analytics-, notification- and audit-worker: the harness's process
+// and a second one of each on the same Postgres, Kafka, Redis and MongoDB: two
+// relays on one outbox, two members of each consumer group, two Asynq servers,
+// two schedulers, two notification sweepers), kills each replica set with
 // SIGKILL in turn while enrollments and lesson completions are flowing, and
 // then checks the invariants the ADRs claim:
 //
@@ -34,16 +35,8 @@ import (
 func TestAdversarial_TwoWorkerReplicas_KilledInTurn_KeepEveryInvariant(t *testing.T) {
 	const students = 18
 	s := harness.Start(t, harness.Options{})
-	b := s.NewWorkerProc(t, nil)
-	if err := b.Start(); err != nil {
-		t.Fatal(err)
-	}
-	harness.Eventually(t, 2*time.Minute, "replica B started its publish worker", func() error {
-		if b.LogCount("publish worker started") == 0 {
-			return harness.Errf("not started")
-		}
-		return nil
-	})
+	b := newReplicaSet(t, s)
+	b.start(t)
 
 	inst := s.NewInstructor(t)
 	course := s.PublishedCourse(t, inst, 2)
@@ -55,26 +48,20 @@ func TestAdversarial_TwoWorkerReplicas_KilledInTurn_KeepEveryInvariant(t *testin
 		enrollments[i] = s.Enroll(t, u, course)
 		switch i {
 		case 5:
-			s.KillWorker() // replica A dies with events in flight
+			killWorkers(s) // replica A dies with events in flight
 		case 11:
-			if err := s.Worker.Start(); err != nil { // A returns, B dies
-				t.Fatal(err)
-			}
-			b.Kill()
+			startWorkers(t, s) // A returns, B dies
+			b.kill()
 		}
 	}
 	for i, u := range users {
 		s.CompleteAll(t, u, enrollments[i])
 		if i == 8 {
-			if err := b.Start(); err != nil { // B returns, A dies again
-				t.Fatal(err)
-			}
-			s.KillWorker()
+			b.start(t) // B returns, A dies again
+			killWorkers(s)
 		}
 		if i == 14 {
-			if err := s.Worker.Start(); err != nil {
-				t.Fatal(err)
-			}
+			startWorkers(t, s)
 		}
 	}
 
@@ -109,18 +96,13 @@ func TestAdversarial_TwoWorkerReplicas_KilledInTurn_KeepEveryInvariant(t *testin
 	})
 	t.Run("archive has every event once and nothing is parked", func(t *testing.T) {
 		harness.Eventually(t, 2*time.Minute, "archive complete", func() error {
-			rows, err := s.DB().Raw(`SELECT event_id::text FROM platform.outbox`).Rows()
+			rows, err := s.OutboxRows()
 			if err != nil {
 				return err
 			}
-			defer func() { _ = rows.Close() }()
 			missing, doubled := 0, 0
-			for rows.Next() {
-				var id string
-				if err := rows.Scan(&id); err != nil {
-					return err
-				}
-				n, err := s.Mongo.ArchivedEvents(id)
+			for _, r := range rows {
+				n, err := s.Mongo.ArchivedEvents(r.EventID)
 				if err != nil {
 					return err
 				}
@@ -171,10 +153,75 @@ func TestAdversarial_TwoWorkerReplicas_KilledInTurn_KeepEveryInvariant(t *testin
 		})
 	})
 	t.Run("processed_events has one row per consumer and event", func(t *testing.T) {
-		n := s.MustCount(t, `SELECT count(*) FROM (SELECT consumer_name, event_id FROM platform.processed_events GROUP BY 1,2 HAVING count(*) > 1) d`)
+		var n int64
+		for _, schema := range []string{"course", "analytics", "notification"} {
+			n += s.MustCount(t, `SELECT count(*) FROM (SELECT consumer_name, event_id FROM `+schema+`.processed_events GROUP BY 1,2 HAVING count(*) > 1) d`)
+		}
 		if n != 0 {
 			t.Errorf("%d (consumer, event) pairs have more than one processed_events row", n)
 		}
 	})
-	_ = fmt.Sprint
+}
+
+// replicaWorkers are the binaries that have a second replica in this scenario.
+var replicaWorkers = []string{
+	harness.IdentityWorker, harness.CourseWorker, harness.AnalyticsWorker,
+	harness.NotificationWorker, harness.AuditWorker,
+}
+
+// killWorkers is kill -9 of the harness's own replica of every one of them.
+func killWorkers(s *harness.Stack) {
+	for _, name := range replicaWorkers {
+		s.Kill(name)
+	}
+}
+
+// startWorkers starts the harness's own replicas again and waits for them.
+func startWorkers(t *testing.T, s *harness.Stack) {
+	t.Helper()
+	for _, name := range replicaWorkers {
+		s.Start(t, name)
+	}
+}
+
+// replicaSet is the second replica of each worker: separate processes on the
+// same infrastructure, with ports of their own.
+type replicaSet []*harness.Proc
+
+func newReplicaSet(t *testing.T, s *harness.Stack) replicaSet {
+	t.Helper()
+	var r replicaSet
+	for _, name := range replicaWorkers {
+		r = append(r, s.NewProc(t, name, nil))
+	}
+	return r
+}
+
+// start starts every process of the set and waits until each logged "running".
+func (r replicaSet) start(t *testing.T) {
+	t.Helper()
+	before := make([]int, len(r))
+	for i, p := range r {
+		before[i] = p.LogCount(`"msg":"running"`)
+		if err := p.Start(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	harness.Eventually(t, 2*time.Minute, "the replica set to be running", func() error {
+		for i, p := range r {
+			if !p.Running() {
+				t.Fatalf("a replica exited during start-up:\n%s", p.Logs())
+			}
+			if p.LogCount(`"msg":"running"`) <= before[i] {
+				return harness.Errf("replica %d not running yet", i)
+			}
+		}
+		return nil
+	})
+}
+
+func (r replicaSet) kill() {
+	for _, p := range r {
+		p.Kill()
+	}
 }

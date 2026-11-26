@@ -26,19 +26,10 @@ cd "$(dirname "$0")/.."
 dir=${1:-test/e2e}
 
 # <id> <owning phase>: the specs allowed to be pending, and who builds them.
-# E02 and E08 to E14 were implemented on the old four-binary harness and are
-# pending again until Wave C3b ports them to the ten-binary harness (their old
-# bodies are in test/e2e/legacy/, the skipped stubs in
-# test/e2e/scenarios_pending_e2e_test.go). Remove a line when its spec is ported.
+# Empty since Wave C3b ported E02 and E08 to E14 to the ten-binary harness: all
+# fourteen specs run. A spec that has to go back to a skip needs a line here,
+# with its owner, and is removed when it is implemented again.
 ALLOWED="
-E02 Wave-C3b
-E08 Wave-C3b
-E09 Wave-C3b
-E10 Wave-C3b
-E11 Wave-C3b
-E12 Wave-C3b
-E13 Wave-C3b
-E14 Wave-C3b
 "
 
 files=$(find "$dir" -maxdepth 1 -name '*_test.go' | sort)

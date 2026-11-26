@@ -1,4 +1,4 @@
-//go:build e2e_legacy
+//go:build e2e
 
 package e2e_test
 
@@ -36,23 +36,24 @@ func asMap(v any) map[string]any {
 // TestE2E_E13_ArchiveAndAudit is E13, matrix row E13 (Phase 4).
 //
 // Steps:
-//  1. Stack as E01 including MongoDB and the audit-archiver consumer, with a
+//  1. Stack as E01 including MongoDB and the audit-archiver (audit-worker), with a
 //     retry budget of 12 attempts and 200 ms to 2 s backoff (about 19 s, long
 //     enough to outlast the MongoDB outage in step 6 and short enough to park
 //     the poison event of step 4 quickly).
-//  2. Drive one example of every event type the services emit: UserRegistered,
-//     UserProfileUpdated, UserRoleChanged, CoursePublished, CourseArchived,
-//     StudentEnrolled, StudentWithdrawn, CourseCompleted. (The spec's other
-//     types (CourseCreated, CourseVersionCreated, CoursePublishRequested,
-//     CoursePublishFailed, LessonCompleted, CertificateIssued) are not in the
-//     catalogue of libs/events and no service emits them: the subtest "types
-//     the spec lists that no service emits" records that and asserts nothing.)
+//  2. Drive one example of every event type of the catalogue (events.Types(),
+//     eleven): UserRegistered, UserProfileUpdated, UserRoleChanged,
+//     CoursePublished, CourseArchived, CoursePublishFailed (a version 2 draft
+//     without lessons, so the publish workflow fails), StudentEnrolled,
+//     StudentWithdrawn, LessonCompleted, CourseCompleted, CertificateIssued.
+//     (CourseCreated, CourseVersionCreated and CoursePublishRequested are in the
+//     RFC but no service emits them yet: not in the catalogue, nothing to
+//     assert.)
 //  3. Wait for every consumer group's lag to reach 0 and note the document
 //     count of the events collection.
 //  4. Replay by id (admin) a handled event (not parked: 404, nothing changes)
 //     and a parked one (a poison event fixed and replayed: 200), and
 //     re-produce one record twice.
-//  5. Restart the worker gracefully (SIGTERM) and drive one more event.
+//  5. Restart audit-worker gracefully (SIGTERM) and drive one more event.
 //  6. Stop MongoDB, enroll a student, start MongoDB.
 //
 // Assertions:
@@ -62,11 +63,15 @@ func asMap(v any) map[string]any {
 //     RFC 6.8), the aggregate id, the schema subject, and the actor id when the
 //     event had one. The topic, key, partition and offset of the record are
 //     asserted in their own subtest.
-//   - audit_log has an entry, with the acting admin, for the role change, the
-//     publish and the archive; and one for the admin replay (own subtest).
+//   - audit_log follows the RFC 4.6 table ("archive + audit"): the five audited
+//     types are role change, publish, publish failure, archive and certificate
+//     issuance (audit-archiver's auditSpec). Each driven one has an entry (the
+//     role change with the acting admin), nothing else is audited from the
+//     events, and the admin replay has its own entry (own subtest).
 //   - After step 4 the events document count is unchanged (replay and duplicate
 //     delivery do not duplicate the archive).
-//   - After the restart the archive is complete and holds the new event once.
+//   - After a graceful restart of audit-worker the archive is complete and holds
+//     the new event once.
 //   - With MongoDB stopped, the enrollment is 201, analytics counts it, its
 //     mail is delivered and only the audit-archiver's lag grows; after MongoDB
 //     returns the archive catches up and holds the event once.
@@ -85,6 +90,18 @@ func TestE2E_E13_ArchiveAndAudit(t *testing.T) {
 	}
 	course1 := s.PublishedCourse(t, inst, 1) // course_published
 	course2 := s.PublishedCourse(t, inst, 1)
+	// CoursePublishFailed: a published course gets a version 2 draft with no
+	// lessons (the API cannot create one, see E12), and publishing it fails in
+	// the validation activity.
+	course3 := s.PublishedCourse(t, inst, 1)
+	makeDraftV2(t, s, course3, "Failing")
+	s.StartPublish(t, inst, course3)
+	harness.Eventually(t, 2*time.Minute, "publish-status publish_failed for the draft without lessons", func() error {
+		if st := s.PublishState(t, inst, course3); st != "publish_failed" {
+			return harness.Errf("publish-status %q", st)
+		}
+		return nil
+	})
 	s.WaitSettled(t, time.Minute)
 	enrA := s.Enroll(t, a, course1)
 	s.CompleteAll(t, a, enrA) // course_completed
@@ -111,7 +128,11 @@ func TestE2E_E13_ArchiveAndAudit(t *testing.T) {
 	}
 	readOutbox := func() []outboxRow {
 		var rows []outboxRow
-		if err := s.DB().Raw(`SELECT event_id::text AS event_id, event_type, aggregate_id::text AS aggregate_id, actor_id::text AS actor_id FROM platform.outbox ORDER BY id`).Scan(&rows).Error; err != nil {
+		if err := s.DB().Raw(`SELECT event_id, event_type, aggregate_id, actor_id FROM (
+			SELECT event_id::text AS event_id, event_type, aggregate_id::text AS aggregate_id, actor_id::text AS actor_id, occurred_at, id FROM identity.outbox
+			UNION ALL
+			SELECT event_id::text, event_type, aggregate_id::text, actor_id::text, occurred_at, id FROM course.outbox
+		) o ORDER BY occurred_at, id`).Scan(&rows).Error; err != nil {
 			t.Fatal(err)
 		}
 		return rows
@@ -167,17 +188,8 @@ func TestE2E_E13_ArchiveAndAudit(t *testing.T) {
 			}
 		}
 		for _, ty := range events.Types() {
-			if _, emitted := types[ty.EventType]; !emitted {
-				t.Logf("the catalogue has %s but this scenario did not drive it", ty.EventType)
-			}
-		}
-		for _, want := range []string{
-			"identity.user_registered", "identity.user_profile_updated", "identity.user_role_changed",
-			"course.course_published", "course.course_archived",
-			"enrollment.student_enrolled", "enrollment.student_withdrawn", "progress.course_completed",
-		} {
-			if types[want] == 0 {
-				t.Errorf("no %s event was driven or archived", want)
+			if types[ty.EventType] == 0 {
+				t.Errorf("the catalogue type %s was not driven or not found in the outboxes", ty.EventType)
 			}
 		}
 	})
@@ -197,54 +209,54 @@ func TestE2E_E13_ArchiveAndAudit(t *testing.T) {
 			}
 		}
 		if len(missing) > 0 {
-			t.Errorf("PRODUCT DEFECT: the archive document has no %s of the Kafka record (services/worker/archive/archive.go eventDoc stores only the event envelope fields and the headers payload_encoding, schema_subject, span_id, actor_id, outbox_id); E13's spec and RFC 6.8 ask for the topic, key, partition and offset. Document keys: %v, headers: %v", strings.Join(missing, ", "), keysOf(docs[0]), keysOf(h))
+			t.Errorf("PRODUCT DEFECT: the archive document has no %s of the Kafka record (services/audit/archive eventDoc); E13's spec and RFC 6.8 ask for the topic, key, partition and offset. Document keys: %v, headers: %v", strings.Join(missing, ", "), keysOf(docs[0]), keysOf(h))
 		}
 	})
 
 	t.Run("audit_log", func(t *testing.T) {
-		for _, want := range []struct{ action, resource string }{
-			{"identity.user_role_changed", inst.ID.String()},
-			{"course.course_published", course1.ID.String()},
-			{"course.course_archived", course2.ID.String()},
-		} {
-			harness.Eventually(t, 30*time.Second, "an audit_log entry for "+want.action, func() error {
-				docs, err := s.Mongo.Find("audit_log", bson.M{"action": want.action, "resource_id": want.resource})
-				if err != nil || len(docs) != 1 {
-					return harness.Errf("%d audit entries (err %v), want 1", len(docs), err)
+		// The five audited types of RFC 4.6.
+		audited := []string{
+			"identity.user_role_changed", "course.course_published", "course.course_archived",
+			"course.publish_failed", "progress.certificate_issued",
+		}
+		var auditable int64
+		for _, action := range audited {
+			var want int64
+			for _, r := range rows {
+				if r.EventType == action {
+					want++
 				}
-				if got := docs[0]["actor_id"]; want.action == "identity.user_role_changed" && got != admin.ID.String() {
-					return harness.Errf("role change audited with actor %v, want the admin %s", got, admin.ID)
+			}
+			if want == 0 {
+				t.Errorf("the scenario drove no %s event", action)
+			}
+			auditable += want
+			harness.Eventually(t, 30*time.Second, "audit_log entries for "+action, func() error {
+				docs, err := s.Mongo.Find("audit_log", bson.M{"action": action})
+				if err != nil || int64(len(docs)) != want {
+					return harness.Errf("%d audit entries for %s (err %v), want %d", len(docs), action, err, want)
 				}
 				return nil
 			})
 		}
-		// Each administrative event has exactly one audit entry.
-		auditable := 0
-		for _, r := range rows {
-			switch r.EventType {
-			case "identity.user_role_changed", "course.course_published", "course.course_archived":
-				auditable++
-			}
+		if docs, err := s.Mongo.Find("audit_log", bson.M{"action": "identity.user_role_changed", "resource_id": inst.ID.String()}); err != nil || len(docs) != 1 {
+			t.Errorf("%d audit entries for the instructor's role change (err %v), want 1", len(docs), err)
+		} else if got := docs[0]["actor_id"]; got != admin.ID.String() {
+			t.Errorf("role change audited with actor %v, want the admin %s", got, admin.ID)
 		}
-		if n, err := s.Mongo.Count("audit_log", nil); err != nil || n != int64(auditable) {
-			t.Errorf("audit_log holds %d entries (err %v), want %d (one per role change, publish and archive)", n, err, auditable)
-		}
-	})
-
-	t.Run("types the spec lists that no service emits", func(t *testing.T) {
-		var missing []string
-		for _, name := range []string{
-			"CourseCreated", "CourseVersionCreated", "CoursePublishRequested", "CoursePublishFailed", "LessonCompleted", "CertificateIssued",
+		for _, want := range []struct{ action, resource string }{
+			{"course.course_published", course1.ID.String()},
+			{"course.course_archived", course2.ID.String()},
+			{"course.publish_failed", course3.ID.String()},
 		} {
-			found := false
-			for _, ty := range events.Types() {
-				found = found || strings.HasSuffix(ty.Subject(), "."+name)
-			}
-			if !found {
-				missing = append(missing, name)
+			if docs, err := s.Mongo.Find("audit_log", bson.M{"action": want.action, "resource_id": want.resource}); err != nil || len(docs) != 1 {
+				t.Errorf("%d audit entries for %s of %s (err %v), want 1", len(docs), want.action, want.resource, err)
 			}
 		}
-		t.Skipf("known gap: %s are not in the libs/events catalogue (the spec lists thirteen types, the services emit eight); another change is adding some of them, so nothing is asserted here", strings.Join(missing, ", "))
+		// Every other event type is archived only: nothing else is audited.
+		if n, err := s.Mongo.Count("audit_log", nil); err != nil || n != auditable {
+			t.Errorf("audit_log holds %d entries (err %v), want %d (one per role change, publish, publish failure, archive and certificate)", n, err, auditable)
+		}
 	})
 
 	// Step 4: replay and duplicate delivery change nothing in the archive.
@@ -294,24 +306,24 @@ func TestE2E_E13_ArchiveAndAudit(t *testing.T) {
 		return nil
 	})
 	t.Run("the admin replay is audited", func(t *testing.T) {
-		docs, err := s.Mongo.Find("audit_log", bson.M{"action": bson.M{"$regex": "replay", "$options": "i"}})
+		docs, err := s.Mongo.Find("audit_log", bson.M{"action": "failed_event_replayed", "resource_id": poisonID})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if len(docs) == 0 {
-			t.Errorf("PRODUCT DEFECT: the admin replay of %s left no audit_log entry (the archiver audits only domain events, services/worker/archive/archive.go auditSpec; services/worker/admin does not call AppendAudit). E13 asks for an entry for each administrative action driven, role change and replay", poisonID)
+			t.Errorf("PRODUCT DEFECT: the admin replay of %s left no audit_log entry (audit-api writes failed_event_replayed per attempt and consumer); E13 asks for an entry for each administrative action driven, role change and replay", poisonID)
 		}
 	})
 
 	// Step 5: a graceful restart, then one more event.
-	s.Worker.Stop(30 * time.Second)
-	if s.Worker.Running() {
-		t.Fatal("the worker did not stop on SIGTERM")
+	s.Stop(harness.AuditWorker)
+	if s.Proc(harness.AuditWorker).Running() {
+		t.Fatal("audit-worker did not stop on SIGTERM")
 	}
-	s.StartWorker(t)
+	s.Start(t, harness.AuditWorker)
 	d := s.NewStudentNamed(t, "Dora")
 	enrD := s.Enroll(t, d, course1)
-	harness.Eventually(t, 5*time.Minute, "the restarted worker to archive the new events", func() error {
+	harness.Eventually(t, 5*time.Minute, "the restarted audit-worker to archive the new events", func() error {
 		return archiveCompleteWith(s, outboxIDs, poisonID)()
 	})
 	evD, err := s.EventIDFor("enrollment.student_enrolled", "enrollment_id", enrD.String())

@@ -1,4 +1,4 @@
-//go:build e2e_legacy
+//go:build e2e
 
 package e2e_test
 
@@ -17,8 +17,10 @@ import (
 	"github.com/AmeerHussainEmumba/SmartCourse/test/e2e/harness"
 )
 
-// Correctness and contract scenarios: E8 to E11, on the full stack of
-// test/e2e/harness. See the header of scenarios_pipeline_e2e_test.go.
+// Correctness scenarios E08 and E09 on the ten-binary harness. E08's jobs run
+// in analytics-worker (platform and course-stats reconcile, popular ranking)
+// and course-worker (enrollment_count); both read the JOBS_* variables, which
+// WorkerEnv gives to every worker.
 
 // TestE2E_E08_CounterDrift is E8, matrix row E08 (Phase 5 job, Phase 6 metrics).
 //
@@ -46,7 +48,7 @@ import (
 //     direct SQL recompute from the mirrors and the enrollment rows gives, and
 //     not the corrupted ones.
 //   - The jobs ran as scheduled Asynq tasks: completed cron ticks of both job
-//     types are in the low queue's completed set in Redis, and the worker logged the
+//     types are in the low queue's completed set in Redis, and course-worker logged the
 //     enrollment-count repair (stored 77, actual 1). The analytics reconciler
 //     logs nothing when it repairs (observed; not asserted).
 //
@@ -157,13 +159,13 @@ func TestE2E_E08_CounterDrift(t *testing.T) {
 	t.Logf("every corrupted value was repaired %s after the corruption", time.Since(corrupted).Round(time.Second))
 
 	// The repairs came from scheduled Asynq tasks.
-	harness.Eventually(t, 30*time.Second, "the worker to log the enrollment_count repair", func() error {
-		if !s.Worker.LogContains("enrollment_count drift repaired") {
-			return harness.Errf("no enrollment_count drift repaired line in the worker log")
+	harness.Eventually(t, 30*time.Second, "course-worker to log the enrollment_count repair", func() error {
+		if !s.Proc(harness.CourseWorker).LogContains("enrollment_count drift repaired") {
+			return harness.Errf("no enrollment_count drift repaired line in the course-worker log")
 		}
 		return nil
 	})
-	if log := s.Worker.Logs(); !strings.Contains(log, `"stored":77`) || !strings.Contains(log, `"actual":1`) {
+	if log := s.Proc(harness.CourseWorker).Logs(); !strings.Contains(log, `"stored":77`) || !strings.Contains(log, `"actual":1`) {
 		t.Errorf("the repair log line does not say stored 77 and actual 1")
 	}
 	ticks := completedTicks(t, s)
@@ -200,31 +202,22 @@ func TestE2E_E08_CounterDrift(t *testing.T) {
 //   - Retrying a winner's request with the same Idempotency-Key replays the
 //     201 (Idempotent-Replayed: true) and takes no second seat; a loser's retry
 //     is refused again (4xx responses are not stored).
-//   - The same test runs with the in-process transport (week-3.md D2): the
-//     same counts, except that nothing is archived (the audit archiver is
-//     registered only in Kafka mode, ADR-0029) and there is no consumer lag.
+//
+// Ported to the ten-binary harness: Kafka only (the in-process transport and
+// its subtest are gone); the outbox is course.outbox; the delivery-queue and
+// lag gauges are read from notification-worker and the consumer workers.
 func TestE2E_E09_EnrollmentUnderLoad(t *testing.T) {
-	for _, transport := range []string{"kafka", "inprocess"} {
-		t.Run(transport, func(t *testing.T) { enrollmentUnderLoad(t, transport) })
-	}
-}
-
-func enrollmentUnderLoad(t *testing.T, transport string) {
 	const (
 		students = 150
 		seats    = 25
 	)
-	s := harness.Start(t, harness.Options{EventTransport: transport})
+	s := harness.Start(t, harness.Options{})
 	inst := s.NewInstructor(t)
 	course := s.NewCourse(t, inst, 1, seats)
 	s.StartPublish(t, inst, course)
 	s.WaitPublished(t, inst, course)
 	users := s.NewStudents(t, students, 16)
-	if transport == "kafka" {
-		s.WaitSettled(t, 2*time.Minute)
-	} else {
-		s.WaitOutboxDrained(t, 2*time.Minute)
-	}
+	s.WaitSettled(t, 2*time.Minute)
 	// The welcome mails of the 150 registrations are not part of the burst:
 	// wait until every delivery so far is sent, so the queue the sampler sees
 	// is the burst's.
@@ -255,11 +248,9 @@ func enrollmentUnderLoad(t *testing.T, transport string) {
 			backlog, _ := s.OutboxUnpublished()
 			queue, _ := s.Count(`SELECT count(*) FROM notification.deliveries WHERE status <> 'sent'`)
 			var lag int64
-			if transport == "kafka" {
-				for _, g := range harness.ConsumerGroups {
-					if l, err := s.ConsumerLag(g); err == nil {
-						lag += l
-					}
+			for _, g := range harness.ConsumerGroups {
+				if l, err := s.ConsumerLag(g); err == nil {
+					lag += l
 				}
 			}
 			peak.Lock()
@@ -321,8 +312,8 @@ func enrollmentUnderLoad(t *testing.T, transport string) {
 		}
 	}
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
-	t.Logf("%s: %d requests in %s: %d created, %d course_full, %d other; latency p50 %s p95 %s max %s",
-		transport, students, burst.Round(time.Millisecond), created, full, other,
+	t.Logf("%d requests in %s: %d created, %d course_full, %d other; latency p50 %s p95 %s max %s",
+		students, burst.Round(time.Millisecond), created, full, other,
 		latencies[len(latencies)/2].Round(time.Millisecond), latencies[len(latencies)*95/100].Round(time.Millisecond), latencies[len(latencies)-1].Round(time.Millisecond))
 	if created != seats || full != students-seats {
 		t.Errorf("%d created and %d course_full, want exactly %d and %d", created, full, seats, students-seats)
@@ -361,7 +352,7 @@ func enrollmentUnderLoad(t *testing.T, transport string) {
 	var eventIDs []string
 	harness.Eventually(t, time.Minute, "25 StudentEnrolled events in the outbox", func() error {
 		eventIDs = nil
-		if err := s.DB().Raw(`SELECT event_id::text FROM platform.outbox WHERE event_type = 'enrollment.student_enrolled'
+		if err := s.DB().Raw(`SELECT event_id::text FROM course.outbox WHERE event_type = 'enrollment.student_enrolled'
 			AND convert_from(payload, 'UTF8')::jsonb ->> 'course_id' = ?`, course.ID.String()).Scan(&eventIDs).Error; err != nil {
 			return err
 		}
@@ -375,12 +366,7 @@ func enrollmentUnderLoad(t *testing.T, transport string) {
 		if cs := s.CourseStatsFor(t, inst, course); cs.TotalEnrollments != seats || cs.ActiveEnrollments != seats {
 			return harness.Errf("course stats %+v, want total %d active %d", cs, seats, seats)
 		}
-		// The audit archiver is registered only in Kafka mode (ADR-0029): the
-		// in-process transport has no archive by design.
 		wantArchived := int64(seats)
-		if transport != "kafka" {
-			wantArchived = 0
-		}
 		archived, err := s.Mongo.Count("events", bson.M{"_id": bson.M{"$in": eventIDs}})
 		if err != nil || archived != wantArchived {
 			return harness.Errf("archived StudentEnrolled events for the course: %d (err %v), want %d", archived, err, wantArchived)
@@ -393,9 +379,7 @@ func enrollmentUnderLoad(t *testing.T, transport string) {
 		}
 		return nil
 	})
-	if transport == "kafka" {
-		s.WaitSettled(t, 2*time.Minute)
-	}
+	s.WaitSettled(t, 2*time.Minute)
 	harness.Never(t, 3*time.Second, "exactly 25 of each after the drain", func() error {
 		if cs := s.CourseStatsFor(t, inst, course); cs.TotalEnrollments != seats {
 			return harness.Errf("course stats %+v", cs)
@@ -429,7 +413,7 @@ func enrollmentUnderLoad(t *testing.T, transport string) {
 	close(stopSampling)
 	sampling.Wait()
 	peak.Lock()
-	t.Logf("%s: peak outbox backlog %d, peak notification queue (unsent deliveries) %d, peak consumer lag %d", transport, peak.backlog, peak.queue, peak.lag)
+	t.Logf("peak outbox backlog %d, peak notification queue (unsent deliveries) %d, peak consumer lag %d", peak.backlog, peak.queue, peak.lag)
 	if peak.backlog == 0 && peak.queue == 0 && peak.lag == 0 {
 		t.Errorf("no backpressure was visible during the burst: the outbox backlog, the delivery queue and the consumer lag never rose above 0 in 20 ms samples")
 	}
@@ -437,13 +421,17 @@ func enrollmentUnderLoad(t *testing.T, transport string) {
 	if backlog, _ := s.OutboxUnpublished(); backlog != 0 {
 		t.Errorf("outbox backlog %d after the drain, want 0", backlog)
 	}
-	harness.Eventually(t, time.Minute, "the worker's lag and queue gauges to read 0", func() error {
-		m, err := s.WorkerMetrics()
-		if err != nil {
-			return err
+	harness.Eventually(t, time.Minute, "the workers' lag and queue gauges to read 0", func() error {
+		var got float64
+		for _, name := range []string{harness.CourseWorker, harness.AnalyticsWorker, harness.NotificationWorker, harness.AuditWorker} {
+			m, err := s.Metrics(name)
+			if err != nil {
+				return err
+			}
+			got += m.Sum("kafka_consumer_lag") + m.Sum("asynq_queue_depth") + m.Sum("asynq_retry_count")
 		}
-		if got := m.Sum("kafka_consumer_lag") + m.Sum("asynq_queue_depth") + m.Sum("asynq_retry_count"); got != 0 {
-			return harness.Errf("kafka_consumer_lag + asynq_queue_depth + asynq_retry_count = %v, want 0", got)
+		if got != 0 {
+			return harness.Errf("kafka_consumer_lag + asynq_queue_depth + asynq_retry_count over the workers = %v, want 0", got)
 		}
 		return nil
 	})

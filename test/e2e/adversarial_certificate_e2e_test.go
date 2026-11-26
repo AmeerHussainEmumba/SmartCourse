@@ -1,4 +1,4 @@
-//go:build e2e_legacy
+//go:build e2e
 
 package e2e_test
 
@@ -16,7 +16,7 @@ import (
 //
 // The certificate-issuer needs the student's display name from
 // course.instructor_mirror, which a DIFFERENT consumer group
-// (course-instructor-mirror) fills from identity.events. The two groups read
+// (course-instructor-mirror, same course-worker process) fills from identity.events. The two groups read
 // different topics with no ordering between them (ADR-0029 "Known gaps" (2)).
 // After any worker downtime every group replays its backlog at once, so the
 // issuer can reach course_completed before the mirror has the student.
@@ -38,14 +38,14 @@ func TestAdversarial_CertificateNeedsNameMirror_SurvivesAMirrorStall(t *testing.
 	course := s.PublishedCourse(t, inst, 1)
 	s.WaitSettled(t, time.Minute)
 
-	s.KillWorker() // downtime: events pile up in the outbox
+	s.Kill(harness.CourseWorker) // downtime: course events pile up in the outbox (course-worker relays it and runs the mirror and the issuer)
 	student := s.NewStudent(t)
 	enrollment := s.Enroll(t, student, course)
 	s.CompleteAll(t, student, enrollment)
 
 	// The mirror's insert for this student will wait on this uncommitted row.
 	lock := s.HoldRowLock(t, `INSERT INTO course.instructor_mirror (user_id, full_name, last_event_id) VALUES (?, 'held', 0) RETURNING 1`, student.ID)
-	s.StartWorker(t)
+	s.Start(t, harness.CourseWorker)
 	time.Sleep(90 * time.Second)
 	lock.Release() // the mirror catches up now
 
